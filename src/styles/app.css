@@ -7,7 +7,6 @@
 
 @theme {
     --color-primary: #D1C49F;
-    --color-primary-hover: #b8a98a;
 }
 
 @utility no-scrollbar {
