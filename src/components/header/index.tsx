@@ -31,7 +31,7 @@ const Header = () => {
               <span className="text-xl font-semibold whitespace-nowrap">
                 TITLE
               </span>
-              <div className="rounded-full px-2 py-1 bg-[#f7f5eb]">
+              <div className="rounded-full px-2 py-1 bg-primary/30">
                 <span className="text-xs">
                   ADMIN
                 </span>

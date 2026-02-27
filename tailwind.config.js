@@ -7,11 +7,6 @@ export default {
       fontFamily: {
         inter: ['Inter', 'sans-serif'],
       },
-      colors: {
-        primary: 'var(--primary)',
-        'primary-alt': 'var(--primary-alt)',
-        secondary: 'var(--secondary)',
-      },
       fontSize: {
         xxs: ['0.625rem', { lineHeight: '1rem' }],
         xs: ['0.75rem', { lineHeight: '1.125rem' }],
