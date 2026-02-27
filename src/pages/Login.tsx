@@ -4,31 +4,25 @@ import { useNavigate } from 'react-router-dom';
 import { login } from '@/hooks/auth';
 import Button from '@/components/ui/button';
 
-// temp login page
+// temporary login page
 
 function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
     setError('');
 
-    setTimeout(() => {
-      const success = login(email, password);
+    const success = login(email, password);
 
-      if (success) {
-        navigate('/home');
-      } else {
-        setError('Invalid credentials');
-      }
-
-      setIsLoading(false);
-    }, 1000);
+    if (success) {
+      navigate('/home');
+    } else {
+      setError('Invalid credentials');
+    }
   };
 
   return (
@@ -72,10 +66,8 @@ function Login() {
           <Button
             type="submit"
             className="w-full"
-            loading={isLoading}
-            disabled={isLoading}
           >
-            {isLoading ? 'Logging in...' : 'Login'}
+            Login
           </Button>
         </form>
 

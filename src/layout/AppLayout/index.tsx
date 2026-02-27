@@ -1,6 +1,5 @@
 import React from 'react';
 import Header from '@/components/header';
-import Modal from '@/components/ui/modal';
 import Sidebar from '@/components/sidebar';
 
 const AppLayout = (props: { children?: React.ReactNode }) => {
@@ -11,7 +10,6 @@ const AppLayout = (props: { children?: React.ReactNode }) => {
         <Sidebar />
         <main className="flex-1 p-6 overflow-y-auto no-scrollbar">{props.children}</main>
       </div>
-      <Modal />
     </div>
   );
 };
