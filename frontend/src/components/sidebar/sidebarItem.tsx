@@ -18,7 +18,7 @@ const SidebarItem = ({ icon: Icon, text, href = "#", onClick, badge }: SidebarEl
         <Component
             href={href}
             onClick={onClick}
-            className={`flex items-center justify-between px-4 py-3 text-text-primary cursor-pointer transition-colors hover:bg-gray-100! ${isActive ? 'bg-primary/10! border-b border-gray-200' : ''
+            className={`flex items-center justify-between px-4 py-3 text-text-primary cursor-pointer transition-colors hover:bg-background-main/80! ${isActive ? 'bg-primary/10! border-b border-gray-200' : ''
                 }`}
         >
             <div className="flex items-center">

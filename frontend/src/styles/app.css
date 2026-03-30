@@ -7,17 +7,19 @@
 
 @theme {
     /* #D1C49F  /  #EE6983 */
-    --color-primary: #D1C49F;
-    --color-background: white;
-    --color-background-main: #f9fafb;
+    --color-primary: #F55036;
+    /*white*/
+    --color-background: #1C1E22;
+    /*#f9fafb*/
+    --color-background-main: #121418;
 
-    /* Text colors - matching current usage */
-    --color-text-primary: #111827;
-    /* text-gray-900 */
-    --color-text-secondary: #6B7280;
-    /* text-gray-500/600 */
+    /*#111827*/
+    --color-text: #E0E0E0;
+    /* text-gray-900 #6B7280*/
+    --color-text-secondary: #A0A09C;
+    /* text-gray-500/600 #9CA3AF*/
     --color-text-muted: #9CA3AF;
-    /* text-gray-400 */
+    /* text-gray-400 white*/
     --color-text-inverse: white;
 }
 
