@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+/*If the hex color text is red in color its cause your IDE doesnt recognize Tailwind v4's @theme at-rule.
+  download Tailwind CSS IntelliSense extension to get rid of the error.
+  everything works fine even if you dont install the extension tho, just the hex color text looks red.
+*/
+
+@theme {
+    /* #D1C49F  /  #EE6983 */
+    --color-primary: #D1C49F;
+    --color-background: white;
+    --color-background-main: #f9fafb;
+
+    /* Text colors - matching current usage */
+    --color-text-primary: #111827;
+    /* text-gray-900 */
+    --color-text-secondary: #6B7280;
+    /* text-gray-500/600 */
+    --color-text-muted: #9CA3AF;
+    /* text-gray-400 */
+    --color-text-inverse: white;
+}
+
+@utility no-scrollbar {
+    @apply [scrollbar-width:none] [&::-webkit-scrollbar]:hidden;
+}
+
+@import './base/normalize.css';
+@import './base/base.css';
