@@ -6,13 +6,12 @@ import { fetchUsers } from '@/api/userApi';
 const UserTable = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedRole, setSelectedRole] = useState<string>('all');
+    const [currentPage, setCurrentPage] = useState(1);
+    const usersPerPage = 10;
 
     const { data: users = [], isLoading, error } = useQuery({
         queryKey: ['users'],
-        queryFn: () => {
-            console.log('API call made at', new Date().toLocaleTimeString());
-            return fetchUsers();
-        },
+        queryFn: () => fetchUsers(),
         staleTime: 5 * 60 * 1000
     });
 
@@ -32,6 +31,21 @@ const UserTable = () => {
 
         return filtered;
     }, [searchTerm, selectedRole, users]);
+
+    const totalPages = Math.ceil(filteredUsers.length / usersPerPage);
+    const startIndex = (currentPage - 1) * usersPerPage;
+    const endIndex = startIndex + usersPerPage;
+    const currentUsers = filteredUsers.slice(startIndex, endIndex);
+
+    const maxVisiblePages = 5;
+    let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+    let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+
+    if (endPage - startPage + 1 < maxVisiblePages) {
+        startPage = Math.max(1, endPage - maxVisiblePages + 1);
+    }
+
+    const visiblePages = Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i);
 
     if (isLoading) {
         return (
@@ -80,7 +94,10 @@ const UserTable = () => {
                             type="text"
                             placeholder="Search users..."
                             value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
+                            onChange={(e) => {
+                                setSearchTerm(e.target.value);
+                                setCurrentPage(1);
+                            }}
                             className="w-full md:w-64 pl-10 pr-4 py-2 border rounded-lg bg-background-main focus:outline-none focus:ring-2 focus:ring-primary/50"
                         />
                     </div>
@@ -88,7 +105,10 @@ const UserTable = () => {
                         <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
                         <select
                             value={selectedRole}
-                            onChange={(e) => setSelectedRole(e.target.value)}
+                            onChange={(e) => {
+                                setSelectedRole(e.target.value);
+                                setCurrentPage(1);
+                            }}
                             className="pl-10 pr-8 py-2 border rounded-lg bg-background-main focus:outline-none focus:ring-2 focus:ring-primary/50 appearance-none"
                         >
                             <option value="all">All Roles</option>
@@ -110,7 +130,7 @@ const UserTable = () => {
                         </tr>
                     </thead>
                     <tbody>
-                        {Array.isArray(filteredUsers) && filteredUsers.map((user) => (
+                        {Array.isArray(currentUsers) && currentUsers.map((user) => (
                             <tr key={user._id} className="border-b hover:bg-background-main/50 transition-colors">
                                 <td className="py-3 px-4">
                                     <div className="flex items-center gap-3">
@@ -143,6 +163,55 @@ const UserTable = () => {
                     </tbody>
                 </table>
             </div>
+
+            {totalPages > 1 && (
+                <div className="flex justify-center items-center mt-4 gap-1">
+                    <button
+                        onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                        disabled={currentPage === 1}
+                        className="rounded-full border py-2 px-3 text-center text-sm transition-all shadow-sm hover:shadow-lg text-text-muted hover:text-text hover:bg-background-main hover:border-background-main focus:text-text focus:bg-background-main focus:border-background-main active:border-background-main active:text-text active:bg-background-main disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none"
+                    >
+                        Prev
+                    </button>
+
+                    {startPage > 1 && (
+                        <button
+                            onClick={() => setCurrentPage(startPage - 1)}
+                            className="rounded-full border py-2 px-3 text-center text-sm transition-all shadow-sm hover:shadow-lg text-text-muted hover:text-text hover:bg-background-main hover:border-background-main focus:text-text focus:bg-background-main focus:border-background-main active:border-background-main active:text-text active:bg-background-main disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none"
+                        >
+                            ...
+                        </button>
+                    )}
+                    {visiblePages.map(pageNum => (
+                        <button
+                            key={pageNum}
+                            onClick={() => setCurrentPage(pageNum)}
+                            className={`min-w-9 rounded-full py-2 px-3.5 text-center text-sm transition-all shadow-md hover:shadow-lg focus:shadow-none active:shadow-none disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none ${currentPage === pageNum
+                                ? 'bg-primary text-text border-transparent'
+                                : 'border text-text-secondary hover:text-text hover:bg-background-main hover:border-background-main focus:text-text focus:bg-background-main focus:border-background-main active:border-background-main active:text-text active:bg-background-main'
+                                }`}
+                        >
+                            {pageNum}
+                        </button>
+                    ))}
+                    {endPage < totalPages && (
+                        <button
+                            onClick={() => setCurrentPage(endPage + 1)}
+                            className="rounded-full border py-2 px-3 text-center text-sm transition-all shadow-sm hover:shadow-lg text-text-secondary hover:text-text hover:bg-background-main hover:border-background-main focus:text-text focus:bg-background-main focus:border-background-main active:border-background-main active:text-text active:bg-background-main disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none"
+                        >
+                            ...
+                        </button>
+                    )}
+
+                    <button
+                        onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                        disabled={currentPage === totalPages}
+                        className="rounded-full border py-2 px-3 text-center text-sm transition-all shadow-sm hover:shadow-lg text-text-secondary hover:text-text hover:bg-background-main hover:border-background-main focus:text-text focus:bg-background-main focus:border-background-main active:border-background-main active:text-text active:bg-background-main disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none"
+                    >
+                        Next
+                    </button>
+                </div>
+            )}
         </section>
     )
 }
