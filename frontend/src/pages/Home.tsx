@@ -10,13 +10,13 @@ function HomePage() {
   const testDatabaseConnection = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/ping');
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/ping`);
       const data = await response.json();
 
       if (data.success) {
-        setMessage(data.message);
+        setMessage('Successfully connected to database!');
       } else {
-        setMessage(`Error: ${data.message}`);
+        setMessage(`Error: ${data.message || 'Unknown error'}`);
       }
     } catch (error) {
       setMessage(`Connection failed: ${error}`);
@@ -39,7 +39,7 @@ function HomePage() {
         </Button>
 
         {message && (
-          <div className="p-4 border rounded bg-gray-50 max-w-md">
+          <div className="p-4 border rounded bg-background max-w-md">
             <p className="text-sm">{message}</p>
           </div>
         )}

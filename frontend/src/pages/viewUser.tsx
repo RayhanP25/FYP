@@ -1,10 +1,10 @@
-import ViewUserTable from "../components/Users/viewUser/viewUserTable";
+import UserTable from "../components/Users/viewUser/userTable";
 import AppLayout from "@/layout/AppLayout";
 
 const ViewUserPage = () => {
     return (
         <AppLayout>
-            <ViewUserTable />
+            <UserTable />
         </AppLayout>
     );
 };

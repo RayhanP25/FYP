@@ -1,8 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import client, database_name
+from routes import users
+from routes import ping
 
-# cd backend/.venv/Scripts
+# cd .venv/Scripts
 # .\Activate.ps1
 # uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 
@@ -18,32 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/ping")
-def ping_database():
-    try:
-        client.admin.command('ping')
-        return {
-            "success": True,
-            "message": "Pinged your deployment. Successfully connected to MongoDB"
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "message": str(e)
-        }
+app.include_router(ping.router, prefix="/api")
+app.include_router(users.router, prefix="/api")
 
-@app.get("/api/users")
-def get_users():
-    try:
-        users_collection = db["users"]
-        
-        users_list = list(users_collection.find({}))
-        
-        result = []
-        for user in users_list:
-            user['_id'] = str(user['_id'])
-            result.append(user)
-        return result
-    
-    except Exception as e:
-        return {"success": False, "message": str(e)}
