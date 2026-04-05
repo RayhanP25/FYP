@@ -5,7 +5,7 @@ import HomePage from '../pages/Home';
 import Login from '../pages/Login';
 import NotFound from '../pages/notFound';
 import ViewUserPage from '../pages/viewUser';
-import AddUserPage from '../pages/addUser';
+import UserProfilePage from '../pages/userProfile';
 import VideoTest from '../pages/videoTest';
 import type { JSX } from 'react';
 
@@ -35,8 +35,8 @@ const allRoutes: RouteObject[] = [
     element: <PrivateRoute element={<ViewUserPage />} />,
   },
   {
-    path: '/add-user',
-    element: <PrivateRoute element={<AddUserPage />} />,
+    path: '/user-profile',
+    element: <PrivateRoute element={<UserProfilePage />} />,
   },
   {
     path: '/video-test',

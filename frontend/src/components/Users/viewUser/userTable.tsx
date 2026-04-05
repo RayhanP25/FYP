@@ -1,12 +1,15 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Search, Filter } from 'lucide-react';
+import { Search, Filter, Trash2 } from 'lucide-react';
 import { fetchUsers } from '@/api/userApi';
+import AddUserButton from './addUser';
+import DeleteUserButton from './deleteUser';
 
 const UserTable = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedRole, setSelectedRole] = useState<string>('all');
     const [currentPage, setCurrentPage] = useState(1);
+    const [deleteModalOpen, setDeleteModalOpen] = useState<{ open: boolean; userId: string; userName: string }>({ open: false, userId: '', userName: '' });
     const usersPerPage = 10;
 
     const { data: users = [], isLoading, error } = useQuery({
@@ -84,8 +87,7 @@ const UserTable = () => {
         <section className="bg-background rounded-xl shadow-sm border p-5 flex flex-col">
             <div className="flex justify-between items-center mb-4">
                 <div>
-                    <h2 className="text-xl font-semibold mb-2">Users</h2>
-                    <p className="text-secondary text-sm">Total users: {filteredUsers.length}</p>
+                    <AddUserButton />
                 </div>
                 <div className="flex gap-2">
                     <div className="relative">
@@ -158,6 +160,15 @@ const UserTable = () => {
                                         {user.role}
                                     </span>
                                 </td>
+                                <td className="py-3 px-4">
+                                    <button
+                                        onClick={() => setDeleteModalOpen({ open: true, userId: user._id, userName: user.full_name })}
+                                        className="p-2 hover:bg-red-500/20 rounded-lg transition-colors text-red-500 hover:text-red-400"
+                                        title="Delete user"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </td>
                             </tr>
                         ))}
                     </tbody>
@@ -212,6 +223,13 @@ const UserTable = () => {
                     </button>
                 </div>
             )}
+
+            <DeleteUserButton
+                userId={deleteModalOpen.userId}
+                userName={deleteModalOpen.userName}
+                isOpen={deleteModalOpen.open}
+                onOpenChange={(open) => setDeleteModalOpen({ ...deleteModalOpen, open })}
+            />
         </section>
     )
 }

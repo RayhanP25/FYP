@@ -11,7 +11,7 @@ const Sidebar = () => {
                 <SidebarItem icon={Home} text="Dashboard" href="/home" />
 
                 <SectionTitle title="Users" />
-                <SidebarItem icon={User2} text="Add user" href="/add-user" />
+                <SidebarItem icon={User2} text="User Profile" href="/user-profile" />
                 <SidebarItem icon={Users} text="View users" href="/view-users" />
 
                 <SectionTitle title="Video Management" />

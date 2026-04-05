@@ -21,7 +21,13 @@ export const fetchUsers = async (): Promise<User[]> => {
     }
 };
 
-export const createUser = async (userData: Omit<User, '_id'>): Promise<User> => {
+export const createUser = async (userData: {
+    full_name: string;
+    email: string;
+    password: string;
+    role: string;
+    profile_picture?: string;
+}): Promise<Omit<User, 'password_hash'>> => {
     try {
         const response = await axios.post(`${API_URL}/api/users`, userData);
         return response.data;
@@ -39,9 +45,10 @@ export const updateUser = async (id: string, userData: Partial<User>): Promise<U
     }
 };
 
-export const deleteUser = async (id: string): Promise<void> => {
+export const deleteUser = async (id: string): Promise<{ message: string }> => {
     try {
-        await axios.delete(`${API_URL}/api/users/${id}`);
+        const response = await axios.delete(`${API_URL}/api/users/${id}`);
+        return response.data;
     } catch (error) {
         throw new Error('Failed to delete user');
     }
