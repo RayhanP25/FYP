@@ -1,6 +1,4 @@
-import axios from 'axios';
-
-const API_URL = import.meta.env.VITE_API_URL;
+import { api } from './axiosInstance';
 
 export interface User {
     _id: string;
@@ -14,7 +12,7 @@ export interface User {
 
 export const fetchUsers = async (): Promise<User[]> => {
     try {
-        const response = await axios.get(`${API_URL}/api/users`);
+        const response = await api.get('/api/users');
         return response.data;
     } catch (error) {
         throw new Error('Failed to fetch users');
@@ -29,7 +27,7 @@ export const createUser = async (userData: {
     profile_picture?: string;
 }): Promise<Omit<User, 'password_hash'>> => {
     try {
-        const response = await axios.post(`${API_URL}/api/users`, userData);
+        const response = await api.post('/api/users', userData);
         return response.data;
     } catch (error) {
         throw new Error('Failed to create user');
@@ -38,7 +36,7 @@ export const createUser = async (userData: {
 
 export const updateUser = async (id: string, userData: Partial<User>): Promise<User> => {
     try {
-        const response = await axios.put(`${API_URL}/api/users/${id}`, userData);
+        const response = await api.put(`/api/users/${id}`, userData);
         return response.data;
     } catch (error) {
         throw new Error('Failed to update user');
@@ -47,7 +45,7 @@ export const updateUser = async (id: string, userData: Partial<User>): Promise<U
 
 export const deleteUser = async (id: string): Promise<{ message: string }> => {
     try {
-        const response = await axios.delete(`${API_URL}/api/users/${id}`);
+        const response = await api.delete(`/api/users/${id}`);
         return response.data;
     } catch (error) {
         throw new Error('Failed to delete user');

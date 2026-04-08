@@ -6,6 +6,7 @@ from routes import ping
 
 # cd .venv/Scripts
 # .\Activate.ps1
+# cd ../..
 # uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 
 app = FastAPI()
