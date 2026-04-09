@@ -4,3 +4,4 @@ uvicorn==0.41.0
 bcrypt==4.2.0
 PyJWT==2.9.0
 python-multipart==0.0.9
+minio==7.2.20

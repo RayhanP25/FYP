@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import HeaderSearchbar from './headerSearchbar';
-import { Brain, HelpCircle, User, ChevronDown, Bell } from 'lucide-react';
+import { Brain, HelpCircle, ChevronDown, Bell } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/dropdown/dropdown';
 
 // temp header

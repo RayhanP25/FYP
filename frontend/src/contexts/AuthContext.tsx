@@ -35,7 +35,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
             try {
                 const currentUser = await getCurrentUser();
                 setUser(currentUser);
-                setToken(''); // Token is in HttpOnly cookie, not accessible
+                setToken('');
             } catch (error) {
                 setUser(null);
                 setToken(null);

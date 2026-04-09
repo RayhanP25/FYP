@@ -1,4 +1,3 @@
-# routes/ping.py
 from fastapi import APIRouter
 from database import client
 
