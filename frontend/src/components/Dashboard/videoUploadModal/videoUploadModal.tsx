@@ -71,7 +71,7 @@ const VideoUploadModal = () => {
                                     onChange={handleFileSelect}
                                 />
                             </p>
-                            <p className="text-sm text-text-muted">MP4, MOV, or AVI (Max 100MB)</p>
+                            <p className="text-sm text-text-muted">MP4, MOV, or AVI</p>
                             {selectedFile && (
                                 <div className="mt-2 p-2 bg-primary/10 rounded-md border border-primary/20">
                                     <p className="text-sm text-primary font-medium">

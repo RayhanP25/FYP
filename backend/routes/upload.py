@@ -10,8 +10,25 @@ router = APIRouter()
 
 @router.post("/upload-video")
 async def upload_video(video: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    # Validate file type
+    allowed_extensions = {"mp4", "mov", "avi"}
+    file_ext = video.filename.split(".")[-1].lower()
+    
+    if file_ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid file format. Allowed formats: {', '.join(allowed_extensions)}"
+        )
+    
+    # Validate file size (100mb)
+    max_size = 100 * 1024 * 1024
+    if video.size and video.size > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail="File too large. Maximum size is {max_size}"
+        )
+    
     # Generate unique filename
-    file_ext = video.filename.split(".")[-1]
     object_name = f"{uuid.uuid4()}.{file_ext}"
     
     # Upload to MinIO

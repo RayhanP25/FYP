@@ -3,10 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import client, database_name
 from routes import users, ping, upload
 
-# cd .venv/Scripts
-# .\Activate.ps1
-# cd ../..
-# uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+'''cd .venv/Scripts
+ .\Activate.ps1
+ cd ../..
+ uvicorn app:app --host 0.0.0.0 --port 8000 --reload'''
 
 app = FastAPI()
 
