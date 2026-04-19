@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
-import { login } from '@/api/authApi';
-import { useAuth } from '@/contexts/AuthContext';
+import { login } from '../api/authApi';
+import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'react-toastify';
 import "react-toastify/dist/ReactToastify.css";
 

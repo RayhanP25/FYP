@@ -1,8 +1,8 @@
-import Button from "@/components/ui/button";
+import Button from "../ui/button";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Upload, X } from "lucide-react";
 import { useState } from "react";
-import { uploadVideo } from "@/api/videoApi";
+import { uploadVideo } from "../../api/videoApi";
 import { toast } from "react-toastify";
 
 //temporary video upload modal to test radix dialog

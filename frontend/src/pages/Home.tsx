@@ -1,7 +1,7 @@
-import AppLayout from '@/layout/AppLayout';
-import VideoUploadModal from '@/components/Dashboard/videoUploadModal/videoUploadModal';
+import AppLayout from '../layout/AppLayout';
+import VideoUploadModal from '../components/Video/videoUploadModal';
 import { useState } from 'react';
-import Button from '@/components/ui/button';
+import Button from '../components/ui/button';
 
 function HomePage() {
   const [message, setMessage] = useState('');
