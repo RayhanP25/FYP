@@ -22,7 +22,7 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": [
-        "frontend/src/*d/src/*"
+        "./src/*"
       ]
     },
     /* Linting */
@@ -34,6 +34,6 @@
     "noUncheckedSideEffectImports": true
   },
   "include": [
-    "frontend/srcntend/src"
+    "src"
   ]
 }

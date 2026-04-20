@@ -1,6 +1,6 @@
 import { useRoutes, Navigate } from 'react-router-dom';
 import type { RouteObject } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../hooks/useAuth';
 import HomePage from '../pages/Home';
 import Login from '../pages/Login';
 import NotFound from '../pages/notFound';
