@@ -4,6 +4,7 @@ import 'plyr/dist/plyr.css';
 import { getVideoUrl } from '@/api/videoApi';
 import { api } from '@/api/axiosInstance';
 import { toast } from 'react-toastify';
+import Button from '../ui/button';
 
 interface VideoPlayerProps {
     videoId: string;
@@ -102,27 +103,17 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
     return (
         <div className="flex-1 flex items-center justify-center p-6">
             <div className="w-full max-w-2xl">
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-lg font-medium text-text-primary">Video Analysis</h3>
-                    <button
-                        onClick={analyzePose}
-                        disabled={isAnalyzing}
-                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 transition-colors font-medium"
-                    >
-                        {isAnalyzing ? 'Analyzing Pose...' : 'Analyze Pose'}
-                    </button>
-                </div>
-
                 {error && (
                     <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
                         <p className="text-red-600 text-sm mb-2">{error}</p>
-                        <button
+                        <Button
                             onClick={refreshVideoUrl}
                             disabled={isLoading}
-                            className="px-3 py-1.5 bg-red-500 text-white text-sm rounded hover:bg-red-600 disabled:opacity-50 transition-colors"
+                            size="sm"
+                            variant="secondary"
                         >
                             {isLoading ? 'Refreshing...' : 'Refresh Video'}
-                        </button>
+                        </Button>
                     </div>
                 )}
 
@@ -130,9 +121,19 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                     <video
                         ref={videoRef}
                         src={currentVideoUrl}
-                        className="w-full h-full object-contain"
+                        className="w-full h-full object-cover"
                         controls
                     />
+                </div>
+
+                <div className="flex justify-end mt-4">
+                    <Button
+                        onClick={analyzePose}
+                        disabled={isAnalyzing}
+                        size="md"
+                    >
+                        {isAnalyzing ? 'Analyzing Pose...' : 'Analyze Pose'}
+                    </Button>
                 </div>
             </div>
         </div>

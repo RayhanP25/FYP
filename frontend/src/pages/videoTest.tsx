@@ -2,6 +2,7 @@ import AppLayout from "../layout/AppLayout"
 import VideoUpload from "../components/Video/videoUpload"
 import PastVideos from "../components/Video/pastVideos"
 import VideoPlayer from "../components/Video/videoPlayer"
+import Button from "../components/ui/button"
 import { useState } from 'react'
 // should have blank canva with keypoints on top of video 
 
@@ -30,12 +31,13 @@ const VideoTest = () => {
                 <div className="h-full flex flex-col">
                     <div className="flex items-center justify-between mb-6">
                         <h2 className="text-2xl font-semibold text-text-primary">Video Analysis</h2>
-                        <button
+                        <Button
                             onClick={handleBackToUpload}
-                            className="px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors font-medium"
+                            variant="secondary"
+                            size="md"
                         >
                             ← Back to Upload
-                        </button>
+                        </Button>
                     </div>
                     <div className="flex-1">
                         <VideoPlayer videoId={currentVideo.id} videoUrl={currentVideo.url} />
