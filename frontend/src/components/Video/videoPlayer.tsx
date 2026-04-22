@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import Plyr from 'plyr';
 import 'plyr/dist/plyr.css';
 import { getVideoUrl } from '@/api/videoApi';
+import { api } from '@/api/axiosInstance';
+import { toast } from 'react-toastify';
 
 interface VideoPlayerProps {
     videoId: string;
@@ -14,6 +16,26 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
     const [currentVideoUrl, setCurrentVideoUrl] = useState(videoUrl);
     const [error, setError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+    const analyzePose = useCallback(async () => {
+        try {
+            setIsAnalyzing(true);
+            setError(null);
+
+            const response = await api.post(`/api/process-video/${videoId}`);
+
+            toast.success('Pose analysis completed successfully!');
+            console.log('Analysis result:', response.data);
+
+        } catch (err) {
+            setError('Failed to analyze pose. Please try again.');
+            toast.error('Pose analysis failed');
+            console.error('Error analyzing pose:', err);
+        } finally {
+            setIsAnalyzing(false);
+        }
+    }, [videoId]);
 
     const refreshVideoUrl = useCallback(async () => {
         try {
@@ -80,6 +102,17 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
     return (
         <div className="flex-1 flex items-center justify-center p-6">
             <div className="w-full max-w-2xl">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-lg font-medium text-text-primary">Video Analysis</h3>
+                    <button
+                        onClick={analyzePose}
+                        disabled={isAnalyzing}
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 transition-colors font-medium"
+                    >
+                        {isAnalyzing ? 'Analyzing Pose...' : 'Analyze Pose'}
+                    </button>
+                </div>
+
                 {error && (
                     <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
                         <p className="text-red-600 text-sm mb-2">{error}</p>
@@ -92,6 +125,7 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                         </button>
                     </div>
                 )}
+
                 <div className="aspect-video bg-gray-900 rounded-lg shadow-lg overflow-hidden min-h-96">
                     <video
                         ref={videoRef}

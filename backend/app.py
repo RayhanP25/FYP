@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import client, database_name
-from routes import users, ping, upload
+from routes import users, ping, upload, pose
 
 '''cd .venv/Scripts
  .\Activate.ps1
@@ -23,4 +23,5 @@ app.add_middleware(
 app.include_router(ping.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
+app.include_router(pose.router, prefix="/api")
 
