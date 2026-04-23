@@ -58,7 +58,7 @@ interface PastVideosProps {
 const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
-    const videosPerPage = 10;
+    const videosPerPage = 8;
 
     const { data: videosData, isLoading, error } = useQuery({
         queryKey: ['my-videos'],

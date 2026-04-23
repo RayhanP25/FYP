@@ -26,6 +26,8 @@ def extract_18_keypoints(video_path: str) -> dict:
         raise ValueError(f"Cannot open video: {video_path}")
 
     fps = cap.get(cv2.CAP_PROP_FPS)
+    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_data = []
     frame_idx = 0
 
@@ -72,5 +74,7 @@ def extract_18_keypoints(video_path: str) -> dict:
     return {
         "fps": fps,
         "total_frames": frame_idx,
+        "video_width": video_width,
+        "video_height": video_height,
         "frames": frame_data
     }
