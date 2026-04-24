@@ -63,7 +63,7 @@ const AddUserButton = () => {
         }
     });
 
-    // Convert image to base64 for API submission. Need to store in cloudinary later instead.
+    // Convert image to base64 for API submission. Need to store in MinIO later instead.
     const handleProfilePicChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {

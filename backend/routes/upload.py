@@ -116,3 +116,45 @@ async def get_my_videos(current_user: dict = Depends(get_current_user)):
         })
     
     return {"videos": result}
+
+@router.delete("/delete-video/{video_id}")
+async def delete_video(video_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a video from MinIO storage and MongoDB metadata."""
+    videos_collection = client[database_name]["videos"]
+    analysis_collection = client[database_name]["pose_analysis"]
+
+    # Find video metadata in MongoDB
+    try:
+        video_doc = videos_collection.find_one({"_id": ObjectId(video_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid video ID format")
+
+    if not video_doc:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Verify user ownership
+    if video_doc["user_id"] != str(current_user["_id"]):
+        raise HTTPException(status_code=403, detail="Access denied: You don't own this video")
+
+    # Delete from MinIO
+    try:
+        minio_client.remove_object(
+            bucket_name=video_doc["bucket_name"],
+            object_name=video_doc["object_name"]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete video from storage: {str(e)}")
+
+    # Delete from MongoDB
+    try:
+        videos_collection.delete_one({"_id": ObjectId(video_id)})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete video metadata: {str(e)}")
+
+    # Delete associated pose analysis if exists
+    try:
+        analysis_collection.delete_one({"video_id": video_id})
+    except Exception:
+        raise HTTPException(status_code=500, detail=f"Failed to delete associated pose analysis: {str(e)}")
+
+    return {"message": "Video deleted successfully"}

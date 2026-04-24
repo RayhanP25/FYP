@@ -56,3 +56,12 @@ export const getMyVideos = async (): Promise<MyVideosResponse> => {
     }
 };
 
+export const deleteVideo = async (videoId: string): Promise<{ message: string }> => {
+    try {
+        const response = await api.delete(`/api/delete-video/${videoId}`);
+        return response.data;
+    } catch (error) {
+        throw new Error('Failed to delete video');
+    }
+};
+

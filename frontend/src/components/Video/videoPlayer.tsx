@@ -116,54 +116,56 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
 
         if (frameIndex >= 0 && frameIndex < keypointsData.frames.length) {
             const frame = keypointsData.frames[frameIndex];
-            // Calculate scaling and offset for coordinate mapping
-            let scaleX, scaleY;
 
-            // Use video dimensions if available, otherwise use canvas dimensions
+            // Calculate scaling using the video element's actual rendered dimensions
+            let videoDisplayWidth, videoDisplayHeight, videoOffsetX = 0, videoOffsetY = 0;
+
             if (video && video.videoWidth && video.videoHeight) {
-                const videoAspectRatio = video.videoWidth / video.videoHeight;
+                // Calculate how the video is being displayed with object-fit: cover
+                // This matches the browser's exact calculation for object-fit: cover
+                const videoIntrinsicWidth = video.videoWidth;
+                const videoIntrinsicHeight = video.videoHeight;
+                const containerWidth = canvas.width;
+                const containerHeight = canvas.height;
+
+                const videoAspectRatio = videoIntrinsicWidth / videoIntrinsicHeight;
+                const containerAspectRatio = containerWidth / containerHeight;
+
+                let scale;
+                if (videoAspectRatio > containerAspectRatio) {
+                    // Video is wider than container - scale to height
+                    scale = containerHeight / videoIntrinsicHeight;
+                    videoDisplayHeight = containerHeight;
+                    videoDisplayWidth = videoIntrinsicWidth * scale;
+                    videoOffsetX = (containerWidth - videoDisplayWidth) / 2;
+                    videoOffsetY = 0;
+                } else {
+                    // Video is taller than container - scale to width
+                    scale = containerWidth / videoIntrinsicWidth;
+                    videoDisplayWidth = containerWidth;
+                    videoDisplayHeight = videoIntrinsicHeight * scale;
+                    videoOffsetX = 0;
+                    videoOffsetY = (containerHeight - videoDisplayHeight) / 2;
+                }
+            } else {
+                // Fallback to backend metadata
+                const videoAspectRatio = keypointsData.video_width / keypointsData.video_height;
                 const canvasAspectRatio = canvas.width / canvas.height;
 
                 if (videoAspectRatio > canvasAspectRatio) {
-                    scaleX = canvas.width / video.videoWidth;
-                    scaleY = scaleX;
+                    videoDisplayHeight = canvas.height;
+                    videoDisplayWidth = videoDisplayHeight * videoAspectRatio;
+                    videoOffsetX = (canvas.width - videoDisplayWidth) / 2;
                 } else {
-                    scaleY = canvas.height / video.videoHeight;
-                    scaleX = scaleY;
+                    videoDisplayWidth = canvas.width;
+                    videoDisplayHeight = videoDisplayWidth / videoAspectRatio;
+                    videoOffsetY = (canvas.height - videoDisplayHeight) / 2;
                 }
-            } else {
-                // Fallback: assume keypoints are already scaled to canvas dimensions
-                // or use a reasonable default scaling
-                scaleX = canvas.width / 640; // assuming 640px width as base
-                scaleY = canvas.height / 480; // assuming 480px height as base
-            }
-
-            // Calculate scaling once for both keypoints and skeleton
-            let videoDisplayWidth, videoDisplayHeight, videoOffsetX = 0, videoOffsetY = 0;
-
-            // Calculate proper scaling for object-fit: cover
-            // The video is cropped to fill the container, so we need to find the visible area
-
-            // Use actual video dimensions from backend for proper scaling
-            const videoAspectRatio = keypointsData.video_width / keypointsData.video_height;
-            const canvasAspectRatio = canvas.width / canvas.height;
-
-            if (videoAspectRatio > canvasAspectRatio) {
-                // Video is wider than container - height fills, width is cropped
-                videoDisplayHeight = canvas.height;
-                videoDisplayWidth = videoDisplayHeight * videoAspectRatio;
-                videoOffsetX = (canvas.width - videoDisplayWidth) / 2; // Center the cropped area
-            } else {
-                // Video is taller than container - width fills, height is cropped
-                videoDisplayWidth = canvas.width;
-                videoDisplayHeight = videoDisplayWidth / videoAspectRatio;
-                videoOffsetY = (canvas.height - videoDisplayHeight) / 2; // Center the cropped area
             }
 
             // Draw keypoints
-            ctx.fillStyle = '#00ff00';
-            ctx.strokeStyle = '#00ff00';
-            ctx.lineWidth = 2;
+            ctx.fillStyle = '#ff0000';
+            ctx.lineWidth = 1;
 
             if (frame.keypoints && Array.isArray(frame.keypoints)) {
                 frame.keypoints.forEach((keypoint: any, index: number) => {
@@ -187,14 +189,8 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
 
                         // Draw keypoint
                         ctx.beginPath();
-                        ctx.arc(scaledX, scaledY, 4, 0, 2 * Math.PI);
+                        ctx.arc(scaledX, scaledY, 1.5, 0, 2 * Math.PI);
                         ctx.fill();
-
-                        // Draw keypoint number
-                        ctx.fillStyle = '#ffffff';
-                        ctx.font = '10px Arial';
-                        ctx.fillText(index.toString(), scaledX + 6, scaledY - 6);
-                        ctx.fillStyle = '#00ff00';
                     } else {
                         console.log(`Skipping keypoint ${index} - presence too low or missing coords`);
                     }
@@ -215,8 +211,8 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                 [11, 13], [13, 15], [15, 17]  // Right Leg
             ];
 
-            ctx.strokeStyle = '#ff0000';
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 1;
 
             connections.forEach(([start, end]) => {
                 if (!frame.keypoints || !Array.isArray(frame.keypoints)) {
@@ -317,10 +313,19 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
             canvas.height = video.offsetHeight;
         };
 
+        // Resize when video metadata loads
+        const handleLoadedMetadata = () => {
+            resizeCanvas();
+        };
+
+        video.addEventListener('loadedmetadata', handleLoadedMetadata);
         resizeCanvas();
         window.addEventListener('resize', resizeCanvas);
 
-        return () => window.removeEventListener('resize', resizeCanvas);
+        return () => {
+            video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+            window.removeEventListener('resize', resizeCanvas);
+        };
     }, []);
 
     useEffect(() => {
@@ -381,7 +386,7 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
 
                 <motion.div
                     className="aspect-video bg-gray-900 rounded-lg shadow-lg overflow-hidden min-h-96 relative"
-                    initial={{ opacity: 0, scale: 0.9 }}
+                    initial={{ opacity: 0, scale: 1 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ duration: 0.6, delay: 0.3, ease: "easeOut" }}
                     whileHover={{ boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)" }}
@@ -397,10 +402,6 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                             <motion.canvas
                                 ref={canvasRef}
                                 className="absolute inset-0 w-full h-full pointer-events-none z-10"
-                                style={{
-                                    mixBlendMode: 'normal',
-                                    objectFit: 'cover'
-                                }}
                                 initial={{ opacity: 0 }}
                                 animate={{ opacity: 1 }}
                                 exit={{ opacity: 0 }}

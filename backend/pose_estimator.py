@@ -31,10 +31,6 @@ def extract_18_keypoints(video_path: str) -> dict:
     frame_data = []
     frame_idx = 0
 
-    # Optimization: Skip frames to speed up processing
-    # Skip 2 frames, process 1 (processes 1/3 of frames for 30fps video)
-    FRAME_SKIP = 2
-
     # Optimization: Resize frames to smaller resolution for faster processing
     PROCESS_WIDTH = 480  # Process at 480p width
 
@@ -42,23 +38,10 @@ def extract_18_keypoints(video_path: str) -> dict:
     # 0: nose, 1: neck (computed), then 16 selected landmarks
     mapping = [0, 11, 12, 13, 14, 15, 16, 19, 20, 23, 24, 25, 26, 27, 28, 31, 32]
 
-    # Store last known keypoints for interpolation
-    last_known_keypoints = None
-
     while True:
         success, frame = cap.read()
         if not success:
             break
-
-        # Optimization: Skip frames to speed up processing
-        if frame_idx % (FRAME_SKIP + 1) != 0:
-            # Use last known keypoints for skipped frames
-            frame_data.append({
-                "frame_index": frame_idx,
-                "keypoints": last_known_keypoints
-            })
-            frame_idx += 1
-            continue
 
         # Optimization: Resize frame to smaller resolution for faster processing
         original_height = frame.shape[0]
@@ -86,7 +69,6 @@ def extract_18_keypoints(video_path: str) -> dict:
 
             # Build 18 keypoints
             custom_18 = [kp[0], neck] + [kp[i] for i in mapping[1:]]
-            last_known_keypoints = custom_18  # Update last known keypoints
         else:
             custom_18 = None  # no person detected
 
