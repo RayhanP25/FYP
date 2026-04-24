@@ -1,5 +1,4 @@
 import AppLayout from '../layout/AppLayout';
-import VideoUploadModal from '../components/Video/videoUploadModal';
 import { useState } from 'react';
 import Button from '../components/ui/button';
 
@@ -29,8 +28,6 @@ function HomePage() {
     <AppLayout>
       <h1 className="text-center">Home Page</h1>
       <div className="flex flex-col items-center justify-center gap-4 p-8">
-        <VideoUploadModal />
-
         <Button
           onClick={testDatabaseConnection}
           disabled={isLoading}

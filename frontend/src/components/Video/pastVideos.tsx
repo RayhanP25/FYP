@@ -146,7 +146,7 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
 
     return (
         <>
-            <section className="bg-background rounded-xl shadow-sm border p-5 flex flex-col">
+            <section className="bg-background rounded-xl shadow-sm border p-5 flex flex-col min-w-[300px] max-w-[500px]">
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
                     <div className="flex items-center gap-2">
                         <FileVideo className="w-5 h-5 text-primary" />
