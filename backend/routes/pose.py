@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from database import client, database_name
 from minio_client import minio_client
 from routes.users import get_current_user
-from pose_estimator import extract_18_keypoints
+from pose_estimator import process_video_with_overlays
 from bson import ObjectId
 import os
 import tempfile
+import uuid
 from datetime import datetime
 
 router = APIRouter()
@@ -13,8 +14,8 @@ router = APIRouter()
 @router.post("/process-video/{video_id}")
 async def process_video(video_id: str, current_user: dict = Depends(get_current_user)):
     """
-    Synchronously process a video: download from MinIO, run pose estimation,
-    store results in MongoDB.
+    Synchronously process a video: download from MinIO, run pose estimation with overlays,
+    save processed video to MinIO, and update video metadata.
     """
     # 1. Verify video exists and belongs to user
     videos_collection = client[database_name]["videos"]
@@ -27,10 +28,8 @@ async def process_video(video_id: str, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=404, detail="Video not found or access denied")
     
     # 2. Check if already processed
-    analysis_collection = client[database_name]["pose_analysis"]
-    existing = analysis_collection.find_one({"video_id": video_id})
-    if existing and existing.get("status") == "completed":
-        return {"status": "already_processed", "analysis_id": str(existing["_id"])}
+    if video_doc.get("processed_object_name"):
+        return {"status": "already_processed", "processed_object_name": video_doc["processed_object_name"]}
     
     # 3. Download video from MinIO to a temporary file
     try:
@@ -38,22 +37,51 @@ async def process_video(video_id: str, current_user: dict = Depends(get_current_
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
             for chunk in response.stream(amt=1024*1024):
                 tmp_file.write(chunk)
-            temp_path = tmp_file.name
+            temp_input_path = tmp_file.name
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to download video: {str(e)}")
     
-    # 4. Run pose estimation (synchronous)
+    # 4. Process video with overlays
     try:
-        result = extract_18_keypoints(temp_path)
+        temp_output_path = tempfile.mktemp(suffix="_processed.mp4")
+        result = process_video_with_overlays(temp_input_path, temp_output_path)
     except Exception as e:
-        # Clean up temp file
-        os.unlink(temp_path)
+        # Clean up temp files
+        os.unlink(temp_input_path)
+        if os.path.exists(temp_output_path):
+            os.unlink(temp_output_path)
         raise HTTPException(status_code=500, detail=f"Pose estimation failed: {str(e)}")
     
-    # 5. Delete temp file
-    os.unlink(temp_path)
+    # 5. Delete input temp file
+    os.unlink(temp_input_path)
     
-    # 6. Store analysis in MongoDB
+    # 6. Upload processed video to MinIO
+    try:
+        processed_object_name = f"processed_{uuid.uuid4()}.mp4"
+        with open(temp_output_path, 'rb') as f:
+            minio_client.put_object(
+                bucket_name="sport-pose-videos",
+                object_name=processed_object_name,
+                data=f,
+                length=-1,
+                part_size=10*1024*1024,
+                content_type="video/mp4"
+            )
+    except Exception as e:
+        os.unlink(temp_output_path)
+        raise HTTPException(status_code=500, detail=f"Failed to upload processed video: {str(e)}")
+    
+    # 7. Delete output temp file
+    os.unlink(temp_output_path)
+    
+    # 8. Update video metadata with processed video info
+    videos_collection.update_one(
+        {"_id": ObjectId(video_id)},
+        {"$set": {"processed_object_name": processed_object_name}}
+    )
+
+    # 9. Store keypoint analysis in MongoDB
+    analysis_collection = client[database_name]["pose_analysis"]
     analysis_doc = {
         "video_id": video_id,
         "user_id": str(current_user["_id"]),
@@ -61,17 +89,15 @@ async def process_video(video_id: str, current_user: dict = Depends(get_current_
         "result": result,  # contains fps, total_frames, frames with keypoints
         "created_at": datetime.now()
     }
-    if existing:
-        # Update existing record
-        analysis_collection.update_one({"_id": existing["_id"]}, {"$set": analysis_doc})
-        analysis_id = str(existing["_id"])
+    existing_analysis = analysis_collection.find_one({"video_id": video_id})
+    if existing_analysis:
+        analysis_collection.update_one({"_id": existing_analysis["_id"]}, {"$set": analysis_doc})
     else:
-        insert_result = analysis_collection.insert_one(analysis_doc)
-        analysis_id = str(insert_result.inserted_id)
-    
+        analysis_collection.insert_one(analysis_doc)
+
     return {
         "status": "completed",
-        "analysis_id": analysis_id,
+        "processed_object_name": processed_object_name,
         "total_frames": result["total_frames"],
         "fps": result["fps"]
     }

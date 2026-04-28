@@ -12,65 +12,10 @@ interface VideoPlayerProps {
 
 const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
     const videoRef = useRef<HTMLVideoElement>(null);
-    const canvasRef = useRef<HTMLCanvasElement>(null);
     const [currentVideoUrl, setCurrentVideoUrl] = useState(videoUrl);
     const [error, setError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [keypointsData, setKeypointsData] = useState<any>(null);
-    const [showOverlay, setShowOverlay] = useState(false);
-
-    const analyzePose = useCallback(async () => {
-        try {
-            setIsAnalyzing(true);
-            setError(null);
-
-            // Start playing video when analysis begins
-            if (videoRef.current) {
-                videoRef.current.play().catch(e => {
-                    console.log('Video play failed:', e);
-                });
-            }
-
-            const response = await api.post(`/api/process-video/${videoId}`);
-
-            toast.success('Pose analysis completed successfully!');
-
-            // Get the full analysis data and show overlay
-            if (response.data.status === 'completed' || response.data.status === 'already_processed') {
-                try {
-                    const analysisResponse = await api.get(`/api/get-analysis/${videoId}`);
-                    if (analysisResponse.data.result) {
-                        setKeypointsData(analysisResponse.data.result);
-                        setShowOverlay(true);
-
-                        // Force video to play after analysis completion
-                        setTimeout(() => {
-                            if (videoRef.current) {
-                                videoRef.current.play();
-                            }
-                        }, 500);
-                    } else {
-                        console.log('No result field in analysis response');
-                    }
-                } catch (err: any) {
-                    console.error('ERROR fetching analysis data:', {
-                        error: err,
-                        message: err.message,
-                        stack: err.stack,
-                        videoId
-                    });
-                }
-            }
-
-        } catch (err: any) {
-            setError('Failed to analyze pose. Please try again.');
-            toast.error('Pose analysis failed');
-            console.error('Error analyzing pose:', err);
-        } finally {
-            setIsAnalyzing(false);
-        }
-    }, [videoId]);
 
     const refreshVideoUrl = useCallback(async () => {
         try {
@@ -91,248 +36,33 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
         }
     }, [videoId]);
 
-    const drawKeypoints = useCallback((currentTime: number, canvas: HTMLCanvasElement, video: HTMLVideoElement | null, keypointsData: any) => {
+    const analyzePose = useCallback(async () => {
+        try {
+            setIsAnalyzing(true);
+            setError(null);
 
-        if (!canvas || !keypointsData) {
-            console.error('drawKeypoints FAILED - missing parameters:', {
-                hasCanvas: !!canvas,
-                hasKeypointsData: !!keypointsData
-            });
-            return;
+            const response = await api.post(`/api/process-video/${videoId}`);
+
+            toast.success('Pose analysis completed successfully!');
+
+            // Refresh video URL to get the processed version
+            if (response.data.status === 'completed' || response.data.status === 'already_processed') {
+                await refreshVideoUrl();
+            }
+
+        } catch (err: any) {
+            setError('Failed to analyze pose. Please try again.');
+            toast.error('Pose analysis failed');
+            console.error('Error analyzing pose:', err);
+        } finally {
+            setIsAnalyzing(false);
         }
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-            console.error('drawKeypoints FAILED - no canvas context');
-            return;
-        }
-
-        // Clear canvas
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Calculate frame index based on current time
-        const fps = keypointsData.fps || 30;
-        const frameIndex = Math.floor(currentTime * fps);
-
-        if (frameIndex >= 0 && frameIndex < keypointsData.frames.length) {
-            const frame = keypointsData.frames[frameIndex];
-
-            // Calculate scaling using the video element's actual rendered dimensions
-            let videoDisplayWidth, videoDisplayHeight, videoOffsetX = 0, videoOffsetY = 0;
-
-            if (video && video.videoWidth && video.videoHeight) {
-                // Calculate how the video is being displayed with object-fit: cover
-                // This matches the browser's exact calculation for object-fit: cover
-                const videoIntrinsicWidth = video.videoWidth;
-                const videoIntrinsicHeight = video.videoHeight;
-                const containerWidth = canvas.width;
-                const containerHeight = canvas.height;
-
-                const videoAspectRatio = videoIntrinsicWidth / videoIntrinsicHeight;
-                const containerAspectRatio = containerWidth / containerHeight;
-
-                let scale;
-                if (videoAspectRatio > containerAspectRatio) {
-                    // Video is wider than container - scale to height
-                    scale = containerHeight / videoIntrinsicHeight;
-                    videoDisplayHeight = containerHeight;
-                    videoDisplayWidth = videoIntrinsicWidth * scale;
-                    videoOffsetX = (containerWidth - videoDisplayWidth) / 2;
-                    videoOffsetY = 0;
-                } else {
-                    // Video is taller than container - scale to width
-                    scale = containerWidth / videoIntrinsicWidth;
-                    videoDisplayWidth = containerWidth;
-                    videoDisplayHeight = videoIntrinsicHeight * scale;
-                    videoOffsetX = 0;
-                    videoOffsetY = (containerHeight - videoDisplayHeight) / 2;
-                }
-            } else {
-                // Fallback to backend metadata
-                const videoAspectRatio = keypointsData.video_width / keypointsData.video_height;
-                const canvasAspectRatio = canvas.width / canvas.height;
-
-                if (videoAspectRatio > canvasAspectRatio) {
-                    videoDisplayHeight = canvas.height;
-                    videoDisplayWidth = videoDisplayHeight * videoAspectRatio;
-                    videoOffsetX = (canvas.width - videoDisplayWidth) / 2;
-                } else {
-                    videoDisplayWidth = canvas.width;
-                    videoDisplayHeight = videoDisplayWidth / videoAspectRatio;
-                    videoOffsetY = (canvas.height - videoDisplayHeight) / 2;
-                }
-            }
-
-            // Draw keypoints
-            ctx.fillStyle = '#ff0000';
-            ctx.lineWidth = 1;
-
-            if (frame.keypoints && Array.isArray(frame.keypoints)) {
-                frame.keypoints.forEach((keypoint: any, index: number) => {
-
-                    let x, y, presence;
-
-                    if (Array.isArray(keypoint)) {
-                        // Keypoints are arrays: [x, y, presence]
-                        [x, y, presence] = keypoint;
-                    } else if (typeof keypoint === 'object') {
-                        // Keypoints are objects: {x, y, presence} or similar
-                        x = keypoint.x || keypoint.x_coord || keypoint.x_pos;
-                        y = keypoint.y || keypoint.y_coord || keypoint.y_pos;
-                        presence = keypoint.presence || keypoint.confidence || keypoint.score || 1;
-                    }
-
-                    if (presence > 0.5 && x !== undefined && y !== undefined) {
-                        // Scale keypoints to actual video display area
-                        const scaledX = x * videoDisplayWidth + videoOffsetX;
-                        const scaledY = y * videoDisplayHeight + videoOffsetY;
-
-                        // Draw keypoint
-                        ctx.beginPath();
-                        ctx.arc(scaledX, scaledY, 1.5, 0, 2 * Math.PI);
-                        ctx.fill();
-                    } else {
-                        console.log(`Skipping keypoint ${index} - presence too low or missing coords`);
-                    }
-                });
-            } else {
-                console.log('No keypoints array found in frame');
-            }
-
-            // Draw connections (skeleton)
-            const connections = [
-                [0, 1],           // Nose to Neck
-                [1, 2], [1, 3],   // Neck to Shoulders
-                [2, 4], [4, 6], [6, 8],   // Left Arm
-                [3, 5], [5, 7], [7, 9],   // Right Arm
-                [2, 10], [3, 11],         // Shoulders to Hips
-                [10, 11],                 // Pelvis
-                [10, 12], [12, 14], [14, 16], // Left Leg
-                [11, 13], [13, 15], [15, 17]  // Right Leg
-            ];
-
-            ctx.strokeStyle = '#00ff00';
-            ctx.lineWidth = 1;
-
-            connections.forEach(([start, end]) => {
-                if (!frame.keypoints || !Array.isArray(frame.keypoints)) {
-                    return;
-                }
-
-                const startKeypoint = frame.keypoints[start];
-                const endKeypoint = frame.keypoints[end];
-
-                if (startKeypoint && endKeypoint && Array.isArray(startKeypoint) && Array.isArray(endKeypoint)) {
-                    const [startX, startY, startPresence] = startKeypoint;
-                    const [endX, endY, endPresence] = endKeypoint;
-
-                    if (startPresence > 0.5 && endPresence > 0.5) {
-                        // Use the same scaling as keypoints
-                        const scaledStartX = startX * videoDisplayWidth + videoOffsetX;
-                        const scaledStartY = startY * videoDisplayHeight + videoOffsetY;
-                        const scaledEndX = endX * videoDisplayWidth + videoOffsetX;
-                        const scaledEndY = endY * videoDisplayHeight + videoOffsetY;
-
-                        ctx.beginPath();
-                        ctx.moveTo(scaledStartX, scaledStartY);
-                        ctx.lineTo(scaledEndX, scaledEndY);
-                        ctx.stroke();
-                    }
-                }
-            });
-        }
-    }, []);
-
-    // Check for existing analysis on load
-    useEffect(() => {
-        const checkExistingAnalysis = async () => {
-            try {
-                const response = await api.get(`/api/get-analysis/${videoId}`);
-                if (response.data.result) {
-                    setKeypointsData(response.data.result);
-                    setShowOverlay(true);
-
-                    // Force video to play after loading existing analysis
-                    setTimeout(() => {
-                        if (videoRef.current) {
-                            videoRef.current.play();
-                        }
-                    }, 500);
-                }
-            } catch (err: any) {
-                console.error('ERROR checking existing analysis:', {
-                    error: err,
-                    message: err.message,
-                    videoId
-                });
-                // No existing analysis, that's fine
-                console.log('No existing analysis found');
-            }
-        };
-
-        checkExistingAnalysis();
-    }, [videoId]);
-
-    // Setup requestAnimationFrame for animation sync
-    useEffect(() => {
-        const canvas = canvasRef.current;
-
-        if (!canvas || !showOverlay || !keypointsData) {
-            return;
-        }
-
-        let animationId: number;
-
-        const animate = () => {
-            if (canvas && keypointsData && videoRef.current) {
-                // Sync with actual video time
-                const currentTime = videoRef.current.currentTime;
-                drawKeypoints(currentTime, canvas, videoRef.current, keypointsData);
-            }
-            animationId = requestAnimationFrame(animate);
-        };
-
-        animate();
-
-        return () => {
-            if (animationId) {
-                cancelAnimationFrame(animationId);
-            }
-        };
-    }, [showOverlay, keypointsData, drawKeypoints]);
-
-    // Setup canvas dimensions
-    useEffect(() => {
-        if (!canvasRef.current || !videoRef.current) return;
-
-        const canvas = canvasRef.current;
-        const video = videoRef.current;
-
-        const resizeCanvas = () => {
-            canvas.width = video.offsetWidth;
-            canvas.height = video.offsetHeight;
-        };
-
-        // Resize when video metadata loads
-        const handleLoadedMetadata = () => {
-            resizeCanvas();
-        };
-
-        video.addEventListener('loadedmetadata', handleLoadedMetadata);
-        resizeCanvas();
-        window.addEventListener('resize', resizeCanvas);
-
-        return () => {
-            video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-            window.removeEventListener('resize', resizeCanvas);
-        };
-    }, []);
+    }, [videoId, refreshVideoUrl]);
 
     useEffect(() => {
         if (videoRef.current) {
-            videoRef.current.addEventListener('error', (e) => {
-                console.error('Video error:', e);
-                setError('Video failed to load. The URL may have expired.');
+            videoRef.current.addEventListener('error', () => {
+                setError('Failed to load video. Please try refreshing.');
             });
 
             // Auto-refresh URL every 50 minutes (before 1-hour expiration)
@@ -394,21 +124,9 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                     <video
                         ref={videoRef}
                         src={currentVideoUrl}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-contain"
                         controls
                     />
-                    <AnimatePresence>
-                        {showOverlay && (
-                            <motion.canvas
-                                ref={canvasRef}
-                                className="absolute inset-0 w-full h-full pointer-events-none z-10"
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0 }}
-                                transition={{ duration: 0.4 }}
-                            />
-                        )}
-                    </AnimatePresence>
                 </motion.div>
 
                 <motion.div
@@ -433,7 +151,7 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                 </motion.div>
             </motion.div>
         </motion.div>
-    )
-}
+    );
+};
 
-export default VideoPlayer
+export default VideoPlayer;
