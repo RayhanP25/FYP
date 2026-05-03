@@ -16,6 +16,7 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
     const [error, setError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isAnalyzed, setIsAnalyzed] = useState(false);
 
     const refreshVideoUrl = useCallback(async () => {
         try {
@@ -44,6 +45,7 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
             const response = await api.post(`/api/process-video/${videoId}`);
 
             toast.success('Pose analysis completed successfully!');
+            setIsAnalyzed(true);
 
             // Refresh video URL to get the processed version
             if (response.data.status === 'completed' || response.data.status === 'already_processed') {
@@ -76,7 +78,7 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
 
     return (
         <motion.div
-            className="flex-1 flex items-center justify-center p-6"
+            className="flex items-start justify-start p-6"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, ease: "easeOut" }}
@@ -124,31 +126,33 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                     <video
                         ref={videoRef}
                         src={currentVideoUrl}
-                        className="w-full h-full object-contain"
+                        className="w-full h-full object-cover"
                         controls
                     />
                 </motion.div>
 
-                <motion.div
-                    className="flex justify-end mt-4"
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5, delay: 0.4 }}
-                >
+                {!isAnalyzed && (
                     <motion.div
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
-                        transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                        className="flex justify-start mt-4"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.5, delay: 0.4 }}
                     >
-                        <Button
-                            onClick={analyzePose}
-                            disabled={isAnalyzing}
-                            size="md"
+                        <motion.div
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            transition={{ type: "spring", stiffness: 400, damping: 17 }}
                         >
-                            {isAnalyzing ? 'Analyzing Pose...' : 'Analyze Pose'}
-                        </Button>
+                            <Button
+                                onClick={analyzePose}
+                                disabled={isAnalyzing}
+                                size="md"
+                            >
+                                {isAnalyzing ? 'Analyzing Pose...' : 'Analyze Pose'}
+                            </Button>
+                        </motion.div>
                     </motion.div>
-                </motion.div>
+                )}
             </motion.div>
         </motion.div>
     );

@@ -3,6 +3,7 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import numpy as np
+import math
 
 # Skeleton connections for 18 keypoints
 CONNECTIONS = [
@@ -15,6 +16,88 @@ CONNECTIONS = [
     [10, 12], [12, 14], [14, 16], # Left Leg
     [11, 13], [13, 15], [15, 17]  # Right Leg
 ]
+
+def calculate_angle(p1: list, p2: list, p3: list) -> dict:
+    """
+    Calculate angle between three points (p1-p2-p3).
+    Returns dictionary with angle in degrees and confidence.
+    """
+    # Check if all points exist and have confidence
+    if not p1 or not p2 or not p3 or len(p1) < 3 or len(p2) < 3 or len(p3) < 3:
+        return {"angle": None, "confidence": 0.0}
+    
+    # Extract coordinates and confidences
+    x1, y1, conf1 = p1
+    x2, y2, conf2 = p2
+    x3, y3, conf3 = p3
+    
+    # Vector from p2 to p1: v1 = p1 - p2
+    # Vector from p2 to p3: v2 = p3 - p2
+    v1 = [x1 - x2, y1 - y2]
+    v2 = [x3 - x2, y3 - y2]
+    
+    # Calculate dot product and magnitudes
+    dot_product = v1[0] * v2[0] + v1[1] * v2[1]
+    mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
+    mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
+    
+    # Avoid division by zero
+    if mag1 == 0 or mag2 == 0:
+        return {"angle": None, "confidence": 0.0}
+    
+    # Calculate angle in radians and convert to degrees
+    cos_angle = dot_product / (mag1 * mag2)
+    # Clamp to avoid numerical errors
+    cos_angle = max(-1.0, min(1.0, cos_angle))
+    angle_rad = math.acos(cos_angle)
+    angle_deg = math.degrees(angle_rad)
+    
+    # Calculate confidence as product of individual confidences
+    angle_confidence = conf1 * conf2 * conf3
+    
+    return {"angle": angle_deg, "confidence": angle_confidence}
+
+def calculate_frame_angles(keypoints: list) -> dict:
+    """
+    Calculate all relevant angles for a frame.
+    Returns dictionary with angle names as keys and angle/confidence as values.
+    """
+    if not keypoints:
+        return {}
+    
+    angles = {}
+    
+    # Left knee: angle between left hip, left knee, and left ankle
+    if len(keypoints) > 12:
+        left_knee = calculate_angle(keypoints[8], keypoints[10], keypoints[12])
+        angles["left_knee"] = left_knee
+    
+    # Right knee: angle between right hip, right knee, and right ankle
+    if len(keypoints) > 13:
+        right_knee = calculate_angle(keypoints[9], keypoints[11], keypoints[13])
+        angles["right_knee"] = right_knee
+    
+    # Left hip: angle between left shoulder, left hip, and left knee
+    if len(keypoints) > 10:
+        left_hip = calculate_angle(keypoints[2], keypoints[8], keypoints[10])
+        angles["left_hip"] = left_hip
+    
+    # Right hip: angle between right shoulder, right hip, and right knee
+    if len(keypoints) > 11:
+        right_hip = calculate_angle(keypoints[3], keypoints[9], keypoints[11])
+        angles["right_hip"] = right_hip
+    
+    # Left elbow: angle between left shoulder, left elbow, and left wrist
+    if len(keypoints) > 6:
+        left_elbow = calculate_angle(keypoints[2], keypoints[4], keypoints[6])
+        angles["left_elbow"] = left_elbow
+    
+    # Right elbow: angle between right shoulder, right elbow, and right wrist
+    if len(keypoints) > 7:
+        right_elbow = calculate_angle(keypoints[3], keypoints[5], keypoints[7])
+        angles["right_elbow"] = right_elbow
+    
+    return angles
 
 def draw_keypoints_on_frame(frame, keypoints):
     """Draw keypoints and skeleton on a frame using OpenCV."""
@@ -109,10 +192,12 @@ def process_video_with_overlays(video_path: str, output_path: str) -> dict:
         else:
             custom_18 = None
 
-        # Store keypoint data
+        # Store keypoint data with angles
+        frame_angles = calculate_frame_angles(custom_18) if custom_18 else {}
         frame_data.append({
             "frame_index": frame_idx,
-            "keypoints": custom_18
+            "keypoints": custom_18,
+            "angles": frame_angles
         })
 
         # Draw overlays on frame
