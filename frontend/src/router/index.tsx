@@ -16,7 +16,7 @@ const PrivateRoute = ({ element }: { element: JSX.Element }) => {
 
 const PublicRoute = ({ element }: { element: JSX.Element }) => {
   const { isAuthenticated } = useAuth();
-  return isAuthenticated() ? <Navigate to="/home" /> : element;
+  return isAuthenticated() ? <Navigate to="/video-test" /> : element;
 };
 
 const AppRoutes = () => {

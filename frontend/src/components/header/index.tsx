@@ -25,15 +25,9 @@ const Header = () => {
         <div className="flex flex-wrap justify-between items-center mx-auto max-w-full px-4 lg:px-6">
           <div className="flex items-center">
             <div className="flex flex-row gap-2">
-              <Brain className="w-6 h-6 text-text-primary" />
-              <span className="text-xl font-semibold text-text-primary whitespace-nowrap">
+              <span className="text-2xl font-semibold text-text-primary whitespace-nowrap" style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif' }}>
                 SPORTPOSE
               </span>
-              <div className="rounded-full px-2 py-1 bg-primary/30">
-                <span className="text-xs text-text-primary">
-                  {user?.role?.toUpperCase() || 'USER'}
-                </span>
-              </div>
             </div>
           </div>
 

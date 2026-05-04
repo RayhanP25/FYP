@@ -180,7 +180,7 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                                 <thead>
                                     <tr className="border-b">
                                         <th className="text-left py-3 px-4 font-medium text-secondary">Video Name</th>
-                                        <th className="text-right py-3 px-4 font-medium text-secondary">Actions</th>
+                                        {/* <th className="text-right py-3 px-4 font-medium text-secondary">Delete</th> */}
                                     </tr>
                                 </thead>
                                 <tbody>

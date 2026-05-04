@@ -52,6 +52,9 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                 await refreshVideoUrl();
             }
 
+            // Trigger event to notify kinematic analysis component
+            window.dispatchEvent(new CustomEvent('analysis-complete', { detail: { videoId } }));
+
         } catch (err: any) {
             setError('Failed to analyze pose. Please try again.');
             toast.error('Pose analysis failed');

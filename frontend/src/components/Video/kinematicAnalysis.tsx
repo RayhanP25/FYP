@@ -1,6 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/axiosInstance';
 import * as echarts from 'echarts';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem } from '@/components/dropdown/dropdown';
+import { ChevronDown, Clock, Frame } from 'lucide-react';
 
 interface KinematicAnalysisProps {
     videoId: string;
@@ -24,14 +27,6 @@ interface FrameData {
     };
 }
 
-interface PoseAnalysis {
-    fps: number;
-    total_frames: number;
-    video_width: number;
-    video_height: number;
-    frames: FrameData[];
-}
-
 const ANGLE_NAMES: Record<string, string> = {
     left_knee: 'Left Knee',
     right_knee: 'Right Knee',
@@ -51,34 +46,35 @@ const ANGLE_COLORS: Record<string, string> = {
 };
 
 const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
-    const [analysisData, setAnalysisData] = useState<PoseAnalysis | null>(null);
-    const [selectedAngles, setSelectedAngles] = useState<string[]>(['left_knee', 'right_knee']);
+    const [selectedAngles, setSelectedAngles] = useState<string[]>(['left_knee']);
     const [xAxisMode, setXAxisMode] = useState<'frame' | 'time'>('time');
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
     const chartRef = useRef<HTMLDivElement>(null);
     const chartInstance = useRef<echarts.ECharts | null>(null);
+    const queryClient = useQueryClient();
 
     // Fetch analysis data
+    const { data: analysisData, isLoading, error } = useQuery({
+        queryKey: ['analysis', videoId],
+        queryFn: async () => {
+            const response = await api.get(`/api/get-analysis/${videoId}`);
+            return response.data.result;
+        },
+        enabled: !!videoId,
+        retry: false
+    });
+
+    // Listen for analysis completion and invalidate query
     useEffect(() => {
-        const fetchAnalysisData = async () => {
-            try {
-                setIsLoading(true);
-                setError(null);
-                const response = await api.get(`/api/get-analysis/${videoId}`);
-                setAnalysisData(response.data.result);
-            } catch (err) {
-                setError('Failed to load analysis data. Please analyze the video first.');
-                console.error('Error fetching analysis data:', err);
-            } finally {
-                setIsLoading(false);
-            }
+        const handleAnalysisComplete = () => {
+            queryClient.invalidateQueries({ queryKey: ['analysis', videoId] });
         };
 
-        if (videoId) {
-            fetchAnalysisData();
-        }
-    }, [videoId]);
+        window.addEventListener('analysis-complete', handleAnalysisComplete);
+
+        return () => {
+            window.removeEventListener('analysis-complete', handleAnalysisComplete);
+        };
+    }, [videoId, queryClient]);
 
     // Update chart when data or settings change
     useEffect(() => {
@@ -91,7 +87,7 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
         const series = selectedAngles.map(angleName => {
             const data: [number, number][] = [];
 
-            frames.forEach((frame) => {
+            frames.forEach((frame: FrameData) => {
                 const angleData = frame.angles?.[angleName as keyof typeof frame.angles];
                 if (angleData && angleData.angle !== null && angleData.confidence > 0.5) {
                     const xValue = xAxisMode === 'time'
@@ -199,14 +195,6 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
         };
     }, []);
 
-    const toggleAngle = (angleName: string) => {
-        setSelectedAngles(prev =>
-            prev.includes(angleName)
-                ? prev.filter(a => a !== angleName)
-                : [...prev, angleName]
-        );
-    };
-
     if (isLoading) {
         return (
             <div className="bg-background rounded-xl shadow-sm border p-5 flex flex-col items-center justify-center min-h-[400px]">
@@ -217,8 +205,7 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
 
     if (error) {
         return (
-            <div className="bg-background rounded-xl shadow-sm border p-5 flex flex-col items-center justify-center min-h-[400px]">
-                <p className="text-red-600 mb-2">{error}</p>
+            <div className="bg-background rounded-xl shadow-sm border p-5 flex flex-col items-center justify-center min-h-[500px] min-w-[500px]">
                 <p className="text-sm text-text-muted">Please analyze the video first.</p>
             </div>
         );
@@ -233,55 +220,55 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
     }
 
     return (
-        <div className="bg-background rounded-xl shadow-sm border p-5 flex flex-col">
-            <div className="flex mb-4 bg-gray-100 p-1 rounded-lg w-fit border border-gray-200">
-                <button
-                    onClick={() => setXAxisMode('time')}
-                    className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-all ${xAxisMode === 'time'
-                        ? 'bg-gray-700 text-white shadow-md'
-                        : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                >
-                    Time
-                </button>
-                <button
-                    onClick={() => setXAxisMode('frame')}
-                    className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-all ${xAxisMode === 'frame'
-                        ? 'bg-gray-700 text-white shadow-md'
-                        : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                >
-                    Frame
-                </button>
-            </div>
+        <div className="bg-background rounded-xl shadow-sm border p-6 flex flex-col min-w-135">
+            <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                    <span className="text-sm font-medium text-text-primary/70">Select Angles:</span>
+                    <DropdownMenu>
+                        <DropdownMenuTrigger className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-background-main border border-border rounded-md hover:bg-border transition-colors focus:outline-none focus:ring-2 focus:ring-border">
+                            <span className="text-text-primary/70">{selectedAngles.length === 0 ? 'Select angles...' : selectedAngles.length === 1 ? ANGLE_NAMES[selectedAngles[0]] : `${selectedAngles.length} angles selected`}</span>
+                            <ChevronDown className="w-4 h-4 text-text-primary/50" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="w-64 bg-background border border-border">
+                            {Object.entries(ANGLE_NAMES).map(([angleKey, angleName]) => (
+                                <DropdownMenuCheckboxItem
+                                    key={angleKey}
+                                    checked={selectedAngles.includes(angleKey)}
+                                    onCheckedChange={(checked) => {
+                                        if (checked) {
+                                            setSelectedAngles(prev => [...prev, angleKey]);
+                                        } else {
+                                            setSelectedAngles(prev => prev.filter(a => a !== angleKey));
+                                        }
+                                    }}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <div
+                                            className="w-3 h-3 rounded-full"
+                                            style={{ backgroundColor: ANGLE_COLORS[angleKey] }}
+                                        />
+                                        <span className="text-text-primary/70">{angleName}</span>
+                                    </div>
+                                </DropdownMenuCheckboxItem>
+                            ))}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                </div>
 
-            <div className="flex flex-wrap gap-2 mb-4">
-                {Object.keys(ANGLE_NAMES).map((angleName) => (
+                <div className="flex items-center gap-2">
+                    <Clock className={`w-4 h-4 transition-colors ${xAxisMode === 'time' ? 'text-primary' : 'text-text-primary/30'}`} />
                     <button
-                        key={angleName}
-                        onClick={() => toggleAngle(angleName)}
-                        className={`px-3 py-1 rounded-md text-sm font-medium transition-colors border ${selectedAngles.includes(angleName)
-                            ? 'bg-opacity-20 border-opacity-100'
-                            : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
-                            }`}
-                        style={{
-                            backgroundColor: selectedAngles.includes(angleName)
-                                ? `${ANGLE_COLORS[angleName]}20`
-                                : undefined,
-                            borderColor: selectedAngles.includes(angleName)
-                                ? ANGLE_COLORS[angleName]
-                                : undefined,
-                            color: selectedAngles.includes(angleName)
-                                ? ANGLE_COLORS[angleName]
-                                : undefined
-                        }}
+                        onClick={() => setXAxisMode(xAxisMode === 'time' ? 'frame' : 'time')}
+                        className="relative inline-flex h-6 w-11 items-center rounded-full bg-border transition-colors focus:outline-none focus:ring-2 focus:ring-border focus:ring-offset-2 focus:ring-offset-background"
                     >
-                        {ANGLE_NAMES[angleName]}
+                        <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-background transition-transform ${xAxisMode === 'time' ? 'translate-x-1' : 'translate-x-6'}`}
+                        />
                     </button>
-                ))}
+                    <Frame className={`w-4 h-4 transition-colors ${xAxisMode === 'frame' ? 'text-primary' : 'text-text-primary/30'}`} />
+                </div>
             </div>
-
-            <div ref={chartRef} className="h-80 w-full"></div>
+            <div ref={chartRef} className="h-96 w-full"></div>
         </div>
     );
 };

@@ -6,7 +6,7 @@ import { Home, Video, Camera, Database, Settings, BarChart3, User2, Users } from
 
 const Sidebar = () => {
     return (
-        <aside className="w-64 bg-background border-r border-gray-200 overflow-y-auto h-full no-scrollbar">
+        <aside className="w-64 bg-background overflow-y-auto h-full no-scrollbar">
             <ul className="flex flex-col gap-2 ml-4">
                 <SidebarItem icon={Home} text="Dashboard" href="/home" />
 
@@ -22,7 +22,6 @@ const Sidebar = () => {
                 <SidebarItem icon={BarChart3} text="Kinematic Analysis" href="/kinematic-analysis" />
 
                 <SectionTitle title="System" />
-                <SidebarItem icon={Database} text="Database" href="/database" badge="5679" />
                 <SidebarItem icon={Settings} text="Settings" href="/settings" />
             </ul>
         </aside>
