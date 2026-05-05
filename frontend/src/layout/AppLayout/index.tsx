@@ -5,9 +5,9 @@ import Sidebar from '@/components/sidebar';
 const AppLayout = (props: { children?: React.ReactNode }) => {
   return (
     <div className="main min-h-screen">
-      <Header />
-      <div className="flex h-[calc(100vh-64px)]">
-        <Sidebar />
+      <Sidebar />
+      <div className="ml-64 flex flex-col min-h-screen">
+        <Header />
         <main className="flex-1 p-6 bg-background-main overflow-y-auto no-scrollbar">{props.children}</main>
       </div>
     </div>

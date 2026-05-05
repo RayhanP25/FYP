@@ -1,68 +1,40 @@
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../hooks/useAuth';
-import HeaderSearchbar from './headerSearchbar';
-import { Brain, HelpCircle, ChevronDown, Bell } from 'lucide-react';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../dropdown/dropdown';
-
-// temp header
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Settings, Menu } from 'lucide-react';
 
 const Header = () => {
-  const { user, logout, isAuthenticated } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
 
-  const handleLogout = async () => {
-    try {
-      await logout();
-      navigate('/login');
-    } catch (error) {
-      console.error('Logout failed:', error);
-    }
+  const BREADCRUMB_MAP: Record<string, string> = {
+    '/home': 'Dashboard',
+    '/video-test': 'Videos',
+    '/camera-capture': 'Camera',
+    '/kinematic-analysis': 'Analysis',
+    '/view-users': 'Users',
+    '/user-profile': 'Profile',
+    '/settings': 'Settings',
   };
 
-  return (
-    <header className="border-b border-gray-200">
-      <nav className="bg-background border-gray-200 py-4">
-        <div className="flex flex-wrap justify-between items-center mx-auto max-w-full px-4 lg:px-6">
-          <div className="flex items-center">
-            <div className="flex flex-row gap-2">
-              <span className="text-2xl font-semibold text-text-primary whitespace-nowrap" style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif' }}>
-                SPORTPOSE
-              </span>
-            </div>
-          </div>
+  const getBreadcrumb = () => BREADCRUMB_MAP[location.pathname] || 'Dashboard';
 
-          <div className="flex items-center space-x-4">
-            <HeaderSearchbar />
-            <Bell className="w-5 h-5 text-text-secondary cursor-pointer hover:text-text-primary" />
-            <HelpCircle className="w-5 h-5 text-text-secondary cursor-pointer hover:text-text-primary" />
-            {isAuthenticated() && (
-              <div className="flex items-center space-x-2 border-l border-gray-200 pl-4">
-                <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center">
-                  <img
-                    src={user?.profile_picture || "http://dummyimage.com/123x100.png/cc0000/ffffff"}
-                    alt={user?.full_name || 'User'}
-                    className="w-8 h-8 rounded-full object-cover"
-                  />
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-text-primary">{user?.full_name || 'User'}</div>
-                  <div className="text-xs text-text-secondary">{user?.role || 'User'}</div>
-                </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger className="p-1 hover:bg-gray-100 rounded-md transition-colors">
-                    <ChevronDown className="w-4 h-4 text-text-secondary" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent>
-                    <DropdownMenuItem onClick={handleLogout}>
-                      Logout
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            )}
+  return (
+    <header className="bg-background-main border-b border-border">
+      <div className="flex items-center justify-between px-6 py-2">
+        <div className="flex items-center gap-3">
+          <Menu className="w-5 h-5 text-text-muted" />
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-text-muted">Menu</span>
+            <span className="text-text-muted">/</span>
+            <span className="text-text-primary font-medium">{getBreadcrumb()}</span>
           </div>
         </div>
-      </nav>
+
+        <div className="flex items-center gap-4">
+          <button className="p-2 text-text-muted hover:text-text-primary hover:bg-background rounded-lg transition-colors" onClick={() => navigate('/settings')}>
+            <Settings className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
     </header>
   );
 };

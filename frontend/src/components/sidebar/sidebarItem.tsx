@@ -5,30 +5,20 @@ interface SidebarElementProps {
     icon: LucideIcon;
     text: string;
     href: string;
-    onClick?: () => void;
-    badge?: string;
 }
 
-const SidebarItem = ({ icon: Icon, text, href, onClick, badge }: SidebarElementProps) => {
+const SidebarItem = ({ icon: Icon, text, href }: SidebarElementProps) => {
     const location = useLocation();
     const isActive = location.pathname === href;
 
     return (
         <Link
             to={href}
-            onClick={onClick}
-            className={`flex items-center justify-between px-4 py-3 text-text-primary cursor-pointer transition-colors hover:bg-background-main/80! ${isActive ? 'bg-primary/10! border-b border-gray-200' : ''
-                }`}
+            className={`w-full flex items-center gap-3 px-4 py-4 rounded-lg text-sm transition-colors ${isActive ? 'text-primary' : 'text-text-primary hover:bg-background'}`}
         >
-            <div className="flex items-center">
-                <Icon className={`w-5 h-5 ${isActive ? 'text-primary' : 'text-text-muted'}`} />
-                <span className={`ml-3 ${isActive ? 'font-medium' : ''}`}>{text}</span>
-            </div>
-            {badge && (
-                <div className={`rounded-full px-2 py-1 ${isActive ? 'bg-primary/50' : 'bg-text-muted/20'}`}>
-                    <span className="text-xs font-light">{badge}</span>
-                </div>
-            )}
+            <Icon className={`w-5 h-5 ${isActive ? 'text-primary' : 'text-text-primary'}`} />
+            <span className="font-light">{text}</span>
+            {isActive && (<div className="ml-auto w-1 h-5 bg-white rounded-full" />)}
         </Link>
     )
 }
