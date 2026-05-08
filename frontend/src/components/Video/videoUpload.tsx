@@ -1,5 +1,6 @@
 import { Upload, X } from "lucide-react";
 import { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Button from '../ui/button';
 import { uploadVideo, getVideoUrl } from '@/api/videoApi';
 import { toast } from 'react-toastify';
@@ -14,6 +15,7 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
     const [isUploading, setIsUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
 
     const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
@@ -98,7 +100,7 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
                 {isUploading ? 'Uploading...' : 'Upload Video'}
             </Button>
             <span className="text-text-secondary text-xs">OR</span>
-            <Button className="w-4/5">Camera Capture</Button>
+            <Button className="w-4/5" onClick={() => navigate('/camera-capture')}>Camera Capture</Button>
         </div>
     )
 }
