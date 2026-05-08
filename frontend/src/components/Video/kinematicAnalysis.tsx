@@ -24,6 +24,12 @@ interface FrameData {
         right_hip?: AngleData;
         left_elbow?: AngleData;
         right_elbow?: AngleData;
+        left_wrist?: AngleData;
+        right_wrist?: AngleData;
+        left_shoulder?: AngleData;
+        right_shoulder?: AngleData;
+        left_ankle?: AngleData;
+        right_ankle?: AngleData;
     };
 }
 
@@ -33,7 +39,13 @@ const ANGLE_NAMES: Record<string, string> = {
     left_hip: 'Left Hip',
     right_hip: 'Right Hip',
     left_elbow: 'Left Elbow',
-    right_elbow: 'Right Elbow'
+    right_elbow: 'Right Elbow',
+    left_wrist: 'Left Wrist',
+    right_wrist: 'Right Wrist',
+    left_shoulder: 'Left Shoulder',
+    right_shoulder: 'Right Shoulder',
+    left_ankle: 'Left Ankle',
+    right_ankle: 'Right Ankle'
 };
 
 const ANGLE_COLORS: Record<string, string> = {
@@ -42,7 +54,13 @@ const ANGLE_COLORS: Record<string, string> = {
     left_hip: '#10b981',
     right_hip: '#8b5cf6',
     left_elbow: '#f59e0b',
-    right_elbow: '#ec4899'
+    right_elbow: '#ec4899',
+    left_wrist: '#06b6d4',
+    right_wrist: '#84cc16',
+    left_shoulder: '#14b8a6',
+    right_shoulder: '#a855f7',
+    left_ankle: '#e11d48',
+    right_ankle: '#6366f1'
 };
 
 const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {

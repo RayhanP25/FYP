@@ -57,9 +57,46 @@ def calculate_angle(p1: list, p2: list, p3: list) -> dict:
     
     return {"angle": angle_deg, "confidence": angle_confidence}
 
+def detect_facing_direction(keypoints: list) -> str:
+    """
+    Detect if person is facing left or right based on shoulder positions.
+    Returns 'left' or 'right'.
+    """
+    if len(keypoints) < 4:
+        return 'right'  # default
+    
+    left_shoulder_x = keypoints[2][0]
+    right_shoulder_x = keypoints[3][0]
+    
+    # If left shoulder is to the left in image (smaller x), person is facing camera/right
+    if left_shoulder_x < right_shoulder_x:
+        return 'right'
+    else:
+        return 'left'
+
+
+def normalize_keypoints(keypoints: list, facing: str) -> list:
+    """
+    Normalize keypoints so person always appears to face right.
+    If facing left, mirror the X coordinates (X = -X).
+    """
+    if facing == 'right' or not keypoints:
+        return keypoints
+    
+    # Mirror X coordinates: new_x = -old_x
+    normalized = []
+    for kp in keypoints:
+        if len(kp) >= 3:
+            normalized.append([-kp[0], kp[1], kp[2]])  # Flip X, keep Y and confidence
+        else:
+            normalized.append(kp)
+    return normalized
+
+
 def calculate_frame_angles(keypoints: list) -> dict:
     """
-    Calculate all relevant angles for a frame.
+    Normalizes pose direction so person always faces right, then applies
+    consistent angle formula: anatomical_angle = 180 - vector_angle.
     Returns dictionary with angle names as keys and angle/confidence as values.
     """
     if not keypoints:
@@ -67,35 +104,63 @@ def calculate_frame_angles(keypoints: list) -> dict:
     
     angles = {}
     
-    # Left knee: angle between left hip, left knee, and left ankle
-    if len(keypoints) > 12:
-        left_knee = calculate_angle(keypoints[8], keypoints[10], keypoints[12])
-        angles["left_knee"] = left_knee
+    # Detect facing direction and normalize keypoints
+    facing = detect_facing_direction(keypoints)
+    normalized_kp = normalize_keypoints(keypoints, facing)
     
-    # Right knee: angle between right hip, right knee, and right ankle
-    if len(keypoints) > 13:
-        right_knee = calculate_angle(keypoints[9], keypoints[11], keypoints[13])
-        angles["right_knee"] = right_knee
+    # Convert vector angle to anatomical angle (0° = straight, >0° = bending)
+    def to_anatomical(angle_data):
+        if angle_data["angle"] is not None:
+            angle_data["angle"] = 180 - angle_data["angle"]
+        return angle_data
     
-    # Left hip: angle between left shoulder, left hip, and left knee
-    if len(keypoints) > 10:
-        left_hip = calculate_angle(keypoints[2], keypoints[8], keypoints[10])
-        angles["left_hip"] = left_hip
+    # Left knee: angle between left hip (10), left knee (12), and left ankle (14)
+    if len(normalized_kp) > 14:
+        angles["left_knee"] = to_anatomical(calculate_angle(normalized_kp[10], normalized_kp[12], normalized_kp[14]))
     
-    # Right hip: angle between right shoulder, right hip, and right knee
-    if len(keypoints) > 11:
-        right_hip = calculate_angle(keypoints[3], keypoints[9], keypoints[11])
-        angles["right_hip"] = right_hip
+    # Right knee: angle between right hip (11), right knee (13), and right ankle (15)
+    if len(normalized_kp) > 15:
+        angles["right_knee"] = to_anatomical(calculate_angle(normalized_kp[11], normalized_kp[13], normalized_kp[15]))
     
-    # Left elbow: angle between left shoulder, left elbow, and left wrist
-    if len(keypoints) > 6:
-        left_elbow = calculate_angle(keypoints[2], keypoints[4], keypoints[6])
-        angles["left_elbow"] = left_elbow
+    # Left hip: angle between left shoulder (2), left hip (10), and left knee (12)
+    if len(normalized_kp) > 12:
+        angles["left_hip"] = to_anatomical(calculate_angle(normalized_kp[2], normalized_kp[10], normalized_kp[12]))
     
-    # Right elbow: angle between right shoulder, right elbow, and right wrist
-    if len(keypoints) > 7:
-        right_elbow = calculate_angle(keypoints[3], keypoints[5], keypoints[7])
-        angles["right_elbow"] = right_elbow
+    # Right hip: angle between right shoulder (3), right hip (11), and right knee (13)
+    if len(normalized_kp) > 13:
+        angles["right_hip"] = to_anatomical(calculate_angle(normalized_kp[3], normalized_kp[11], normalized_kp[13]))
+    
+    # Left elbow: angle between left shoulder (2), left elbow (4), and left wrist (6)
+    if len(normalized_kp) > 6:
+        angles["left_elbow"] = to_anatomical(calculate_angle(normalized_kp[2], normalized_kp[4], normalized_kp[6]))
+    
+    # Right elbow: angle between right shoulder (3), right elbow (5), and right wrist (7)
+    if len(normalized_kp) > 7:
+        angles["right_elbow"] = to_anatomical(calculate_angle(normalized_kp[3], normalized_kp[5], normalized_kp[7]))
+    
+    # Left wrist: angle between left elbow (4), left wrist (6), and left index (8)
+    if len(normalized_kp) > 8:
+        angles["left_wrist"] = to_anatomical(calculate_angle(normalized_kp[4], normalized_kp[6], normalized_kp[8]))
+    
+    # Right wrist: angle between right elbow (5), right wrist (7), and right index (9)
+    if len(normalized_kp) > 9:
+        angles["right_wrist"] = to_anatomical(calculate_angle(normalized_kp[5], normalized_kp[7], normalized_kp[9]))
+    
+    # Left shoulder: angle between neck (1), left shoulder (2), and left elbow (4)
+    if len(normalized_kp) > 4:
+        angles["left_shoulder"] = to_anatomical(calculate_angle(normalized_kp[1], normalized_kp[2], normalized_kp[4]))
+    
+    # Right shoulder: angle between neck (1), right shoulder (3), and right elbow (5)
+    if len(normalized_kp) > 5:
+        angles["right_shoulder"] = to_anatomical(calculate_angle(normalized_kp[1], normalized_kp[3], normalized_kp[5]))
+    
+    # Left ankle: angle between left knee (12), left ankle (14), and left heel (16)
+    if len(normalized_kp) > 16:
+        angles["left_ankle"] = to_anatomical(calculate_angle(normalized_kp[12], normalized_kp[14], normalized_kp[16]))
+    
+    # Right ankle: angle between right knee (13), right ankle (15), and right heel (17)
+    if len(normalized_kp) > 17:
+        angles["right_ankle"] = to_anatomical(calculate_angle(normalized_kp[13], normalized_kp[15], normalized_kp[17]))
     
     return angles
 
