@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 import cv2
 import numpy as np
 from fastapi import APIRouter, HTTPException
@@ -10,6 +13,7 @@ except ImportError:
     from ..camera_system.manager import StereoCameraManager
     from ..camera_system.web_camera import WebCamera
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/camera", tags=["Camera Integration"])
 
 camera_manager = StereoCameraManager()
@@ -60,21 +64,24 @@ def camera_status():
 
 
 @router.get("/list")
-def list_cameras():
-    return StereoCameraManager.list_available()
+async def list_cameras():
+    """Probe indices off the event loop — probing can take several seconds."""
+    return await asyncio.to_thread(StereoCameraManager.list_available)
 
 
 @router.post("/start")
-def start_cameras():
-    result = camera_manager.start()
+async def start_cameras():
+    logger.info("POST /api/camera/start received")
+    result = await asyncio.to_thread(camera_manager.start)
     if not result.get("started"):
         raise HTTPException(status_code=400, detail=result)
     return result
 
 
 @router.post("/stop")
-def stop_cameras():
-    return camera_manager.stop()
+async def stop_cameras():
+    logger.info("POST /api/camera/stop received")
+    return await asyncio.to_thread(camera_manager.stop)
 
 
 @router.get("/stream/left")

@@ -6,6 +6,8 @@ from bson import ObjectId
 import uuid
 from routes.users import get_current_user
 
+# from database.minio_config import minio_client
+
 router = APIRouter()
 
 @router.post("/upload-video")

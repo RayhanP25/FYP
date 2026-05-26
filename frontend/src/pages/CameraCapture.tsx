@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api/axiosInstance';
 import { Camera, VideoOff, Video, StopCircle } from 'lucide-react';
 import { toast } from 'react-toastify';
@@ -9,8 +9,15 @@ export default function CameraCapture() {
     const [isRecording, setIsRecording] = useState(false);
     const [isConnecting, setIsConnecting] = useState(false);
     const [streamKey, setStreamKey] = useState(0);
+    const [detectedIndices, setDetectedIndices] = useState<number[] | null>(null);
 
     const backendUrl = api.defaults.baseURL || "http://localhost:8000";
+
+    useEffect(() => {
+        api.get('/api/camera/list', { timeout: 60000 })
+            .then((res) => setDetectedIndices(res.data.available_indices ?? []))
+            .catch(() => setDetectedIndices(null));
+    }, []);
 
     const toggleStream = async () => {
         if (isStreaming) {
@@ -26,7 +33,7 @@ export default function CameraCapture() {
 
         setIsConnecting(true);
         try {
-            const { data } = await api.post('/api/camera/start');
+            const { data } = await api.post('/api/camera/start', {}, { timeout: 45000 });
             if (!data.started) {
                 const detail = data.errors
                     ? `Left: ${data.errors.left ?? 'ok'} | Right: ${data.errors.right ?? 'ok'}`
@@ -38,14 +45,30 @@ export default function CameraCapture() {
             setIsStreaming(true);
             toast.success(`Connected — Left: index ${data.left_index}, Right: index ${data.right_index}`);
         } catch (error: unknown) {
-            const detail =
-                (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
-            const message =
-                typeof detail === 'string'
-                    ? detail
-                    : detail && typeof detail === 'object' && 'errors' in detail
-                      ? JSON.stringify((detail as { errors: unknown }).errors)
-                      : 'Check that both USB webcams are plugged in.';
+            const axiosErr = error as {
+                code?: string;
+                response?: { data?: { detail?: unknown } };
+            };
+            if (axiosErr.code === 'ECONNABORTED') {
+                toast.error(
+                    'Camera start timed out. Close Zoom/Teams/OBS, then retry. ' +
+                    'If needed, set CAMERA_LEFT_INDEX and CAMERA_RIGHT_INDEX in backend/.env'
+                );
+                return;
+            }
+            const detail = axiosErr.response?.data?.detail;
+            let message = 'Check that both USB webcams are plugged in.';
+            if (typeof detail === 'string') {
+                message = detail;
+            } else if (detail && typeof detail === 'object') {
+                const d = detail as { errors?: Record<string, string>; hint?: string };
+                if (d.errors) {
+                    message = `Left: ${d.errors.left ?? 'ok'} | Right: ${d.errors.right ?? 'ok'}`;
+                }
+                if (d.hint) {
+                    message += ` — ${d.hint}`;
+                }
+            }
             toast.error(`Failed to start webcams. ${message}`);
         } finally {
             setIsConnecting(false);
@@ -191,6 +214,13 @@ export default function CameraCapture() {
                                 Plug in both USB cameras, then click &quot;Start Live Feed&quot;.
                                 Default indices are 0 (left) and 1 (right).
                             </p>
+                            {detectedIndices !== null && (
+                                <p className="text-xs text-muted mt-3 font-mono">
+                                    Detected: {detectedIndices.length
+                                        ? detectedIndices.join(', ')
+                                        : 'none — check USB connections'}
+                                </p>
+                            )}
                         </div>
                     )}
 

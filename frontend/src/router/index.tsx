@@ -7,6 +7,8 @@ import NotFound from '../pages/notFound';
 import ViewUserPage from '../pages/viewUser';
 import UserProfilePage from '../pages/userProfile';
 import VideoTest from '../pages/videoTest';
+// 1. Add the import for your new Camera Capture page
+import CameraCapture from '../pages/CameraCapture'; 
 import type { JSX } from 'react';
 
 const PrivateRoute = ({ element }: { element: JSX.Element }) => {
@@ -46,6 +48,11 @@ const AppRoutes = () => {
     {
       path: '/video-test',
       element: <PrivateRoute element={<VideoTest />} />,
+    },
+    // 2. Register the new route as a PrivateRoute
+    {
+      path: '/camera-capture',
+      element: <PrivateRoute element={<CameraCapture />} />,
     },
     {
       path: '/*',
