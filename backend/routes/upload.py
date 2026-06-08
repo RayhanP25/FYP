@@ -75,8 +75,8 @@ async def get_video(video_id: str, current_user: dict = Depends(get_current_user
     if not video_doc:
         raise HTTPException(status_code=404, detail="Video not found")
     
-    # Verify user ownership
-    if video_doc["user_id"] != str(current_user["_id"]):
+    # Verify user ownership (admin can access any video)
+    if current_user.get("role") != "admin" and video_doc["user_id"] != str(current_user["_id"]):
         raise HTTPException(status_code=403, detail="Access denied: You don't own this video")
     
     # Use processed video if available, otherwise use original
@@ -136,8 +136,8 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
     if not video_doc:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Verify user ownership
-    if video_doc["user_id"] != str(current_user["_id"]):
+    # Verify user ownership (admin can delete any video)
+    if current_user.get("role") != "admin" and video_doc["user_id"] != str(current_user["_id"]):
         raise HTTPException(status_code=403, detail="Access denied: You don't own this video")
 
     # Delete from MinIO (both original and processed if exists)

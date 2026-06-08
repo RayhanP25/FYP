@@ -8,10 +8,18 @@ import ViewUserPage from '../pages/viewUser';
 import UserProfilePage from '../pages/userProfile';
 import VideoTest from '../pages/videoTest';
 import type { JSX } from 'react';
+import CameraCapture from '../pages/CameraCapture';
 
 const PrivateRoute = ({ element }: { element: JSX.Element }) => {
   const { isAuthenticated } = useAuth();
   return isAuthenticated() ? element : <Navigate to="/login" />;
+};
+
+const AdminRoute = ({ element }: { element: JSX.Element }) => {
+  const { isAuthenticated, user } = useAuth();
+  if (!isAuthenticated()) return <Navigate to="/login" />;
+  if (user?.role !== 'admin') return <Navigate to="/home" />;
+  return element;
 };
 
 const PublicRoute = ({ element }: { element: JSX.Element }) => {
@@ -37,11 +45,15 @@ const AppRoutes = () => {
     },
     {
       path: '/view-users',
-      element: <PrivateRoute element={<ViewUserPage />} />,
+      element: <AdminRoute element={<ViewUserPage />} />,
     },
     {
       path: '/user-profile',
       element: <PrivateRoute element={<UserProfilePage />} />,
+    },
+    {
+      path: '/camera-capture',
+      element: <PrivateRoute element={<CameraCapture />} />,
     },
     {
       path: '/video-test',

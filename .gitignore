@@ -51,3 +51,6 @@ wheels/
 *.egg
 .venv/
 venv/
+
+# Batch launcher
+start-all.bat

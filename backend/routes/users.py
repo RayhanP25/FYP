@@ -110,74 +110,6 @@ def login(user_credentials: UserLogin, response: Response):
         }
     }
 
-@router.get("/users")
-def get_users():
-    users_collection = db["users"]
-    users_list = list(users_collection.find({}))
-
-    result = []
-    for user in users_list:
-        user['_id'] = str(user['_id'])
-        result.append(user)
-
-    return result
-
-@router.post("/users")
-def create_user(user_data: UserCreate):
-    users_collection = db["users"]
-    
-    # Check if email already exists
-    existing_user = users_collection.find_one({"email": user_data.email})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Hash password
-    password_hash = bcrypt.hashpw(user_data.password.encode('utf-8'), bcrypt.gensalt())
-    
-    # Get current date
-    current_date = datetime.now().strftime("%d.%m.%Y")
-    
-    # Create user document
-    new_user = {
-        "full_name": user_data.full_name,
-        "email": user_data.email,
-        "password_hash": password_hash.decode('utf-8'),
-        "role": user_data.role,
-        "profile_picture": user_data.profile_picture or "http://dummyimage.com/123x100.png/cc0000/ffffff",
-        "created_at": current_date,
-        "updated_at": current_date,
-        "last_login": None
-    }
-    
-    # Insert into database
-    result = users_collection.insert_one(new_user)
-    new_user['_id'] = str(result.inserted_id)
-    
-    # Remove password hash from response
-    response_user = new_user.copy()
-    response_user.pop('password_hash', None)
-    
-    return response_user
-
-@router.delete("/users/{user_id}")
-def delete_user(user_id: str):
-    users_collection = db["users"]
-    
-    # Check if user exists
-    user = users_collection.find_one({"_id": ObjectId(user_id)})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Delete user from database
-    users_collection.delete_one({"_id": ObjectId(user_id)})
-    
-    return {"message": "User deleted successfully"}
-
-@router.post("/logout")
-def logout(response: Response):
-    response.delete_cookie("auth_token")
-    return {"message": "Logged out successfully"}
-
 @router.get("/me")
 def get_current_user(auth_token: Optional[str] = Cookie(None)):
     # Get token from cookie
@@ -214,3 +146,79 @@ def get_current_user(auth_token: Optional[str] = Cookie(None)):
         "created_at": user.get("created_at"),
         "last_login": user.get("last_login")
     }
+
+def require_admin(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    return current_user
+
+@router.get("/users")
+def get_users(current_user: dict = Depends(require_admin)):
+    users_collection = db["users"]
+    users_list = list(users_collection.find({}))
+
+    result = []
+    for user in users_list:
+        user['_id'] = str(user['_id'])
+        result.append(user)
+
+    return result
+
+@router.post("/users")
+def create_user(user_data: UserCreate, current_user: dict = Depends(require_admin)):
+    users_collection = db["users"]
+    
+    # Check if email already exists
+    existing_user = users_collection.find_one({"email": user_data.email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Hash password
+    password_hash = bcrypt.hashpw(user_data.password.encode('utf-8'), bcrypt.gensalt())
+    
+    # Get current date
+    current_date = datetime.now().strftime("%d.%m.%Y")
+    
+    # Create user document
+    new_user = {
+        "full_name": user_data.full_name,
+        "email": user_data.email,
+        "password_hash": password_hash.decode('utf-8'),
+        "role": user_data.role,
+        "profile_picture": user_data.profile_picture or "http://dummyimage.com/123x100.png/cc0000/ffffff",
+        "created_at": current_date,
+        "updated_at": current_date,
+        "last_login": None
+    }
+    
+    # Insert into database
+    result = users_collection.insert_one(new_user)
+    new_user['_id'] = str(result.inserted_id)
+    
+    # Remove password hash from response
+    response_user = new_user.copy()
+    response_user.pop('password_hash', None)
+    
+    return response_user
+
+@router.delete("/users/{user_id}")
+def delete_user(user_id: str, current_user: dict = Depends(require_admin)):
+    users_collection = db["users"]
+    
+    # Check if user exists
+    user = users_collection.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Delete user from database
+    users_collection.delete_one({"_id": ObjectId(user_id)})
+    
+    return {"message": "User deleted successfully"}
+
+@router.post("/logout")
+def logout(response: Response):
+    response.delete_cookie("auth_token")
+    return {"message": "Logged out successfully"}
