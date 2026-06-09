@@ -41,7 +41,9 @@ const Sidebar = () => {
                         <SidebarItem icon={Video} text="Videos" href="/video-test" />
                         <SidebarItem icon={Camera} text="Camera" href="/camera-capture" />
                         <SidebarItem icon={BarChart3} text="Analysis" href="/kinematic-analysis" />
-                        <SidebarItem icon={Users} text="Users" href="/view-users" />
+                        {user?.role === 'admin' && (
+                            <SidebarItem icon={Users} text="Users" href="/view-users" />
+                        )}
                     </nav>
                 </div>
             </div>

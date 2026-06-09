@@ -43,12 +43,17 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         return !!user;
     };
 
+    const isAdmin = () => {
+        return user?.role === 'admin';
+    };
+
     const value: AuthContextType = {
         user,
         token,
         login,
         logout,
-        isAuthenticated
+        isAuthenticated,
+        isAdmin
     };
 
     return (

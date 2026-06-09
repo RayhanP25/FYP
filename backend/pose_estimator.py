@@ -63,7 +63,7 @@ def normalize_keypoints(keypoints: list, facing: str) -> list:
     normalized = []
     for kp in keypoints:
         if len(kp) >= 3:
-            normalized.append([-kp[0], kp[1], kp[2]])
+            normalized.append([-kp[0], kp[1], kp[2]])  # Flip X
         else:
             normalized.append(kp)
     return normalized

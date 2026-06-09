@@ -1,7 +1,9 @@
 const UserProfile = () => {
     return (
-        <div>
-            <h1>User Profile</h1>
+        <div className="bg-background border border-border rounded-lg p-4">
+            <div className="flex items-center gap-4">
+
+            </div>
         </div>
     )
 }
