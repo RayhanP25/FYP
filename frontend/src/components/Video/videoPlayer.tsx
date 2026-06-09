@@ -134,28 +134,23 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                     />
                 </motion.div>
 
-                {!isAnalyzed && (
-                    <motion.div
-                        className="flex justify-start mt-4"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: 0.4 }}
-                    >
-                        <motion.div
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                            transition={{ type: "spring", stiffness: 400, damping: 17 }}
+                <div className="flex justify-start gap-3 mt-4">
+                    {!isAnalyzed && (
+                        <Button
+                            onClick={analyzePose}
+                            disabled={isAnalyzing}
+                            size="md"
                         >
-                            <Button
-                                onClick={analyzePose}
-                                disabled={isAnalyzing}
-                                size="md"
-                            >
-                                {isAnalyzing ? 'Analyzing Pose...' : 'Analyze Pose'}
-                            </Button>
-                        </motion.div>
-                    </motion.div>
-                )}
+                            {isAnalyzing ? 'Analyzing Pose...' : 'Analyze Pose'}
+                        </Button>
+                    )}
+                    <Button
+                        variant="primary"
+                        size="md"
+                    >
+                        Download Video
+                    </Button>
+                </div>
             </motion.div>
         </motion.div>
     );
