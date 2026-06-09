@@ -97,9 +97,11 @@ async def get_video(video_id: str, current_user: dict = Depends(get_current_user
     return {
         "video_id": video_id,
         "presigned_url": presigned_url,
-        "original_filename": video_doc["original_filename"],
-        "content_type": video_doc["content_type"],
-        "uploaded_at": video_doc["uploaded_at"],
+        "original_filename": video_doc.get("original_filename")
+            or video_doc.get("filename")
+            or video_doc.get("object_name", "Untitled video"),
+        "content_type": video_doc.get("content_type", "video/mp4"),
+        "uploaded_at": video_doc.get("uploaded_at") or video_doc.get("created_at"),
         "is_processed": bool(video_doc.get("processed_object_name"))
     }
 
@@ -110,17 +112,22 @@ async def get_my_videos(current_user: dict = Depends(get_current_user)):
     
     videos = list(videos_collection.find({"user_id": str(current_user["_id"])}))
     
-    # Convert ObjectId to string and format response
+    # Convert ObjectId to string and format response.
+    # Use .get() with fallbacks so a document missing a field (e.g. a camera
+    # recording) can never crash the whole list.
     result = []
     for video in videos:
         result.append({
             "video_id": str(video["_id"]),
-            "original_filename": video["original_filename"],
-            "content_type": video["content_type"],
-            "file_size": video["file_size"],
-            "uploaded_at": video["uploaded_at"]
+            "original_filename": video.get("original_filename")
+                or video.get("filename")
+                or video.get("object_name", "Untitled video"),
+            "content_type": video.get("content_type", "video/mp4"),
+            "file_size": video.get("file_size", 0),
+            "uploaded_at": video.get("uploaded_at") or video.get("created_at"),
+            "source": video.get("source", "upload"),
         })
-    
+
     return {"videos": result}
 
 @router.delete("/delete-video/{video_id}")

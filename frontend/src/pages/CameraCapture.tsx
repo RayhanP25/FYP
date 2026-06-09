@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '../api/axiosInstance';
 import { Camera, VideoOff, Video, StopCircle } from 'lucide-react';
 import { toast } from 'react-toastify';
@@ -9,74 +9,58 @@ export default function CameraCapture() {
     const [isRecording, setIsRecording] = useState(false);
     const [isConnecting, setIsConnecting] = useState(false);
     const [streamKey, setStreamKey] = useState(0);
-    const [detectedIndices, setDetectedIndices] = useState<number[] | null>(null);
-    const [activeIndices, setActiveIndices] = useState<{ left: number; right: number } | null>(null);
+    const [mode, setMode] = useState<string>('IDLE');
+    const [lastVideoId, setLastVideoId] = useState<string | null>(null);
 
-    const backendUrl = api.defaults.baseURL || "http://localhost:8000";
+    const backendUrl = api.defaults.baseURL || 'http://localhost:8000';
+
+    // Reflect real backend state on mount (e.g. after a page refresh)
+    useEffect(() => {
+        api.get('/api/camera/status')
+            .then(({ data }) => {
+                setIsStreaming(!!data.live);
+                setIsRecording(!!data.recording);
+                setMode(data.mode || 'IDLE');
+                if (data.live) setStreamKey((k) => k + 1);
+            })
+            .catch(() => { /* not started yet */ });
+    }, []);
 
     const toggleStream = async () => {
         if (isStreaming) {
             try {
-                await api.post('/api/camera/stop');
+                if (isRecording) {
+                    toast.warn('Stop recording before stopping the feed.');
+                    return;
+                }
+                await api.post('/api/camera/stop-feed');
                 setIsStreaming(false);
-                setDetectedIndices(null);
-                setActiveIndices(null);
-                toast.info("Webcams disconnected.");
+                setMode('IDLE');
+                toast.info('Cameras disconnected.');
             } catch {
-                toast.error("Failed to stop cameras.");
+                toast.error('Failed to stop cameras.');
             }
             return;
         }
 
         setIsConnecting(true);
-
-        // Fetch detected indices at click time (non-blocking, just for display)
-        api.get('/api/camera/list', { timeout: 10000 })
-            .then((res) => setDetectedIndices(res.data.available_indices ?? []))
-            .catch(() => setDetectedIndices(null));
-
         try {
-            const { data } = await api.post('/api/camera/start', {}, { timeout: 90000 });
-            if (!data.started) {
-                const parts: string[] = [];
-                if (data.error) parts.push(String(data.error));
-                if (data.errors?.left) parts.push(`Left: ${data.errors.left}`);
-                if (data.errors?.right) parts.push(`Right: ${data.errors.right}`);
-                if (data.hint) parts.push(String(data.hint));
-                toast.error(parts.length ? parts.join(' — ') : 'Could not start both webcams.');
-                return;
-            }
+            const { data } = await api.post('/api/camera/start-feed', {}, { timeout: 60000 });
             setStreamKey((k) => k + 1);
             setIsStreaming(true);
-            setActiveIndices({ left: data.left_index, right: data.right_index });
-            const auto = data.auto_configured ? ' (auto-selected)' : '';
-            toast.success(`Connected — Left: index ${data.left_index}, Right: index ${data.right_index}${auto}`);
+            setMode(data.mode || 'LIVE');
+            toast.success(`Live feed started (${data.mode} mode).`);
         } catch (error: unknown) {
             const axiosErr = error as {
                 code?: string;
                 response?: { data?: { detail?: unknown } };
             };
             if (axiosErr.code === 'ECONNABORTED') {
-                toast.error(
-                    'Camera start timed out. Close Zoom/Teams/OBS, then retry. ' +
-                    'If needed, set CAMERA_LEFT_INDEX and CAMERA_RIGHT_INDEX in backend/.env'
-                );
+                toast.error('Connecting to the cameras timed out. Check that both camera apps are running and reachable.');
                 return;
             }
             const detail = axiosErr.response?.data?.detail;
-            let message = 'Check that both USB webcams are plugged in.';
-            if (typeof detail === 'string') {
-                message = detail;
-            } else if (detail && typeof detail === 'object') {
-                const d = detail as { errors?: Record<string, string>; hint?: string };
-                if (d.errors) {
-                    message = `Left: ${d.errors.left ?? 'ok'} | Right: ${d.errors.right ?? 'ok'}`;
-                }
-                if (d.hint) {
-                    message += ` — ${d.hint}`;
-                }
-            }
-            toast.error(`Failed to start webcams. ${message}`);
+            toast.error(typeof detail === 'string' ? detail : 'Failed to start the cameras.');
         } finally {
             setIsConnecting(false);
         }
@@ -84,81 +68,67 @@ export default function CameraCapture() {
 
     const handleStartRecording = async () => {
         try {
-            await api.post('/api/obs/start-recording');
+            await api.post('/api/camera/start-recording');
             setIsRecording(true);
-            toast.info("OBS Recording started... Perform your pose!");
-        } catch {
-            toast.error("Failed to start OBS recording.");
+            setLastVideoId(null);
+            toast.info('Recording started — perform your movement!');
+        } catch (error: unknown) {
+            const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+            toast.error(detail || 'Failed to start recording.');
         }
     };
 
     const handleStopRecording = async () => {
-        const id = toast.loading("Stopping OBS and saving...");
+        const id = toast.loading('Saving recording to MinIO...');
         try {
-            const response = await api.post('/api/obs/stop-recording');
+            const { data } = await api.post('/api/camera/stop-recording');
             setIsRecording(false);
-
-            if (response.data.error) {
-                toast.update(id, {
-                    render: `OBS Error: ${response.data.error}`,
-                    type: "error",
-                    isLoading: false,
-                    autoClose: 4000,
-                });
-            } else {
-                toast.update(id, {
-                    render: "Saved! Ready for upload to MinIO.",
-                    type: "success",
-                    isLoading: false,
-                    autoClose: 3000,
-                });
-            }
-        } catch {
+            setLastVideoId(data.video_id);
             toast.update(id, {
-                render: "Failed to stop recording.",
-                type: "error",
+                render: `Saved ${data.frames} frames. Find it in Videos to analyze.`,
+                type: 'success',
                 isLoading: false,
-                autoClose: 3000,
+                autoClose: 4000,
+            });
+        } catch (error: unknown) {
+            const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+            toast.update(id, {
+                render: detail || 'Failed to stop recording.',
+                type: 'error',
+                isLoading: false,
+                autoClose: 4000,
             });
         }
     };
 
-    const getCameraStatus = () => {
-        if (isStreaming) {
-            return {
-                boxClass: "border-green-500/50 bg-green-500/5 shadow-[0_0_15px_rgba(34,197,94,0.1)]",
-                badgeClass: "bg-green-500/10 text-green-500 border-green-500/20",
-                icon: <Video className="w-10 h-10 text-green-500 mb-2 opacity-80" />,
-                statusText: "LIVE",
-                dot: "bg-green-500 animate-pulse",
-            };
-        }
-        return {
-            boxClass: "border-border bg-background-main",
-            badgeClass: "bg-background text-muted border-border",
-            icon: <VideoOff className="w-10 h-10 text-muted mb-2 opacity-40" />,
-            statusText: "Standby",
-            dot: "bg-muted",
-        };
-    };
+    const status = isStreaming
+        ? {
+              boxClass: 'border-green-500/50 bg-green-500/5',
+              badgeClass: 'bg-green-500/10 text-green-500 border-green-500/20',
+              statusText: 'LIVE',
+              dot: 'bg-green-500 animate-pulse',
+          }
+        : {
+              boxClass: 'border-border bg-background-main',
+              badgeClass: 'bg-background text-text-muted border-border',
+              statusText: 'Standby',
+              dot: 'bg-text-muted',
+          };
 
-    const status = getCameraStatus();
-    const streamSrc = (side: 'left' | 'right') =>
-        `${backendUrl}/api/camera/stream/${side}?t=${streamKey}`;
+    const streamSrc = `${backendUrl}/api/camera/stream?t=${streamKey}`;
 
     return (
         <AppLayout>
             <div className="p-6 h-full flex flex-col overflow-hidden max-w-6xl mx-auto">
-
                 <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 shrink-0">
                     <div>
                         <h1 className="text-3xl font-bold text-text mb-2">3D Triangulation Capture</h1>
                         <div className="flex items-center gap-3 text-sm text-text-muted">
-                            <p>Synchronized stereo capture from two USB webcams.</p>
+                            <p>Synchronized stereo capture from two cameras.</p>
                             <span className="hidden sm:inline-block w-1 h-1 rounded-full bg-border"></span>
                             <p className="flex items-center gap-1.5 font-mono text-xs bg-background px-2 py-1 rounded border border-border">
-                                <span className={`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-muted'}`}></span>
-                                MODE: {isStreaming ? "DUAL WEBCAM" : "IDLE"}
+                                <span className={`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-text-muted'}`}></span>
+                                MODE: {isStreaming ? mode : 'IDLE'}
                             </p>
                         </div>
                     </div>
@@ -167,70 +137,56 @@ export default function CameraCapture() {
                         {isStreaming && (
                             <button
                                 onClick={isRecording ? handleStopRecording : handleStartRecording}
-                                className={`flex items-center gap-2 px-5 py-2.5 rounded-lg transition-all h-fit whitespace-nowrap shadow-md text-sm font-medium active:scale-95 ${isRecording ? 'bg-background border border-red-500 text-red-500 hover:bg-red-500/10 animate-pulse' : 'bg-red-500 text-white hover:bg-red-600'}`}
+                                className={`flex items-center gap-2 px-5 py-2.5 rounded-lg transition-all h-fit whitespace-nowrap shadow-md text-sm font-medium active:scale-95 ${
+                                    isRecording
+                                        ? 'bg-background border border-red-500 text-red-500 hover:bg-red-500/10 animate-pulse'
+                                        : 'bg-red-500 text-white hover:bg-red-600'
+                                }`}
                             >
-                                <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500' : 'bg-white'}`}></div>
-                                {isRecording ? "Stop OBS Recording" : "Record Video"}
+                                {isRecording ? <StopCircle className="w-4 h-4" /> : <Video className="w-4 h-4" />}
+                                {isRecording ? 'Stop & Save' : 'Record Video'}
                             </button>
                         )}
 
                         <button
                             onClick={toggleStream}
                             disabled={isConnecting}
-                            className={`flex items-center gap-2 text-white px-5 py-2.5 rounded-lg transition-all h-fit whitespace-nowrap shadow-md text-sm font-medium active:scale-95 disabled:opacity-60 ${isStreaming ? 'bg-background-light border border-border text-text hover:bg-background' : 'bg-primary hover:bg-primary/90 shadow-primary/20'}`}
+                            className={`flex items-center gap-2 text-white px-5 py-2.5 rounded-lg transition-all h-fit whitespace-nowrap shadow-md text-sm font-medium active:scale-95 disabled:opacity-60 ${
+                                isStreaming
+                                    ? 'bg-background-main border border-border text-text hover:bg-background'
+                                    : 'bg-primary hover:bg-primary/90'
+                            }`}
                         >
                             {isStreaming ? <StopCircle className="w-4 h-4" /> : <Camera className="w-4 h-4" />}
-                            {isConnecting ? "Connecting..." : isStreaming ? "Stop Live Feed" : "Start Live Feed"}
+                            {isConnecting ? 'Connecting...' : isStreaming ? 'Stop Live Feed' : 'Start Live Feed'}
                         </button>
                     </div>
                 </div>
 
                 <div className={`rounded-xl border-2 flex flex-col relative overflow-hidden transition-colors duration-300 w-full ${status.boxClass}`}>
                     {isStreaming ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-0 w-full aspect-video">
-                            <div className="relative bg-black border-b md:border-b-0 md:border-r border-border/50">
-                                <span className="absolute top-3 left-3 z-10 px-2 py-1 text-xs font-bold uppercase tracking-wider bg-background/90 backdrop-blur rounded border border-border text-text">
-                                    Left
-                                </span>
-                                <img
-                                    key={`left-${streamKey}`}
-                                    src={streamSrc('left')}
-                                    alt="Left webcam"
-                                    className="w-full h-full object-contain"
-                                    onError={() => toast.warn("Left webcam stream failed.")}
-                                />
-                            </div>
-                            <div className="relative bg-black">
-                                <span className="absolute top-3 left-3 z-10 px-2 py-1 text-xs font-bold uppercase tracking-wider bg-background/90 backdrop-blur rounded border border-border text-text">
-                                    Right
-                                </span>
-                                <img
-                                    key={`right-${streamKey}`}
-                                    src={streamSrc('right')}
-                                    alt="Right webcam"
-                                    className="w-full h-full object-contain"
-                                    onError={() => toast.warn("Right webcam stream failed.")}
-                                />
-                            </div>
+                        <div className="relative bg-black w-full">
+                            <span className="absolute top-3 left-3 z-10 px-2 py-1 text-xs font-bold uppercase tracking-wider bg-background/90 backdrop-blur rounded border border-border text-text">
+                                Left | Right (synchronized)
+                            </span>
+                            <img
+                                key={`stereo-${streamKey}`}
+                                src={streamSrc}
+                                alt="Synchronized stereo feed"
+                                className="w-full h-auto object-contain"
+                                onError={() => toast.warn('Stereo stream failed — is the feed still running?')}
+                            />
                         </div>
                     ) : (
                         <div className="aspect-video flex flex-col items-center justify-center p-8">
-                            {status.icon}
-                            <p className="text-muted-foreground font-bold text-lg drop-shadow-md">Webcams Offline</p>
-                            <p className="text-sm text-muted mt-2 text-center max-w-md">
-                                Plug in both USB cameras, then click &quot;Start Live Feed&quot;.
-                                Default indices are 0 (left) and 1 (right).
+                            <VideoOff className="w-10 h-10 text-text-muted mb-2 opacity-40" />
+                            <p className="font-bold text-lg text-text">Cameras Offline</p>
+                            <p className="text-sm text-text-muted mt-2 text-center max-w-md">
+                                Make sure both camera sources are available, then click &quot;Start Live Feed&quot;.
                             </p>
-                            {detectedIndices !== null && (
-                                <p className="text-xs text-muted mt-3 font-mono">
-                                    Detected: {detectedIndices.length
-                                        ? detectedIndices.join(', ')
-                                        : 'none — check USB connections'}
-                                </p>
-                            )}
-                            {activeIndices !== null && (
-                                <p className="text-xs text-muted mt-1 font-mono">
-                                    Streaming: left={activeIndices.left}, right={activeIndices.right}
+                            {lastVideoId && (
+                                <p className="text-xs text-text-muted mt-3 font-mono">
+                                    Last recording saved (id {lastVideoId.slice(-6)}). Open Videos to analyze it.
                                 </p>
                             )}
                         </div>
@@ -241,7 +197,6 @@ export default function CameraCapture() {
                         {status.statusText}
                     </div>
                 </div>
-
             </div>
         </AppLayout>
     );
