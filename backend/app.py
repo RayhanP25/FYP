@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()  # Must be before everything else
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import client, database_name
@@ -14,12 +17,14 @@ db = client[database_name]
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True, # MUST be True for cookies/auth to work
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -30,7 +35,7 @@ app.include_router(users.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
 app.include_router(pose.router, prefix="/api")
 
-# Register OBS and Camera routes 
+# Register OBS and Camera routes
 # (These already have prefix="/api/obs" and prefix="/api/camera" defined inside their files)
 app.include_router(obs_api.router)
 app.include_router(camera.router)

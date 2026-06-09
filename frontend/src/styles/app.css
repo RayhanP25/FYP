@@ -1,27 +1,54 @@
 @import "tailwindcss";
 
-/*If the hex color text is red in color its cause your IDE doesnt recognize Tailwind v4's @theme at-rule.
-  download Tailwind CSS IntelliSense extension to get rid of the error.
-  everything works fine even if you dont install the extension tho, just the hex color text looks red.
-*/
+/* If the hex color text is red in your IDE, it's just that the editor doesn't
+   recognize Tailwind v4's @theme at-rule. Install the "Tailwind CSS IntelliSense"
+   extension to remove the warning. Everything works regardless. */
 
 @theme {
-    /* #D1C49F  /  #EE6983 */
-    --color-primary: #F55036;
-    /*white*/
-    --color-background: #1C1E22;
-    /*#f9fafb*/
-    --color-background-main: #121418;
-    --color-border: #222222;
+    /* ===== Brand accent ===== */
+    --color-primary: #FF6B3D;          /* refined SportPose orange */
+    --color-primary-hover: #FF855C;    /* NEW: lighter accent for hovers/gradients */
 
-    /*#111827*/
-    --color-text: #E0E0E0;
-    /* text-gray-900 #6B7280*/
-    --color-text-secondary: #A0A09C;
-    /* text-gray-500/600 #9CA3AF*/
-    --color-text-muted: #9CA3AF;
-    /* text-gray-400 white*/
+    /* ===== Surfaces (modern dark navy / charcoal) ===== */
+    --color-background: #0A0E17;        /* page base + default cards */
+    --color-background-main: #121826;   /* sidebar, panels, dropdowns */
+    --color-background-raised: #18202F; /* NEW: elevated / nested surfaces */
+
+    --color-border: #222B3D;            /* hairline borders */
+
+    /* ===== Text ===== */
+    --color-text: #EAEEF7;              /* primary text */
+    --color-text-primary: #EAEEF7;      /* NEW alias so text-text-primary resolves */
+    --color-text-secondary: #9AA4BC;    /* muted */
+    --color-text-muted: #5C6680;        /* hints */
     --color-text-inverse: white;
+}
+
+/* ---- Subtle atmosphere on the app base (automatic) ---- */
+@layer base {
+    body {
+        background-color: var(--color-background);
+        background-image:
+            radial-gradient(900px 500px at 12% -8%, rgba(255, 107, 61, 0.08), transparent 60%),
+            radial-gradient(800px 600px at 100% 0%, rgba(56, 98, 180, 0.08), transparent 55%);
+        background-attachment: fixed;
+        color: var(--color-text);
+    }
+}
+
+/* ---- Opt-in flourish utilities (add the class where you want the effect) ---- */
+
+/* Elevated card with a faint top sheen — add `card-elevated` to a card wrapper */
+@utility card-elevated {
+    background-color: var(--color-background-raised);
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 28%);
+    border: 1px solid var(--color-border);
+}
+
+/* Gradient accent button — add `btn-gradient` to a primary button */
+@utility btn-gradient {
+    background-image: linear-gradient(180deg, var(--color-primary-hover), var(--color-primary));
+    color: #1A0C06;
 }
 
 @utility no-scrollbar {

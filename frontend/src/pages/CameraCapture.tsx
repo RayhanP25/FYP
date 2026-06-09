@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { api } from '../api/axiosInstance';
 import { Camera, VideoOff, Video, StopCircle } from 'lucide-react';
 import { toast } from 'react-toastify';
@@ -10,20 +10,17 @@ export default function CameraCapture() {
     const [isConnecting, setIsConnecting] = useState(false);
     const [streamKey, setStreamKey] = useState(0);
     const [detectedIndices, setDetectedIndices] = useState<number[] | null>(null);
+    const [activeIndices, setActiveIndices] = useState<{ left: number; right: number } | null>(null);
 
     const backendUrl = api.defaults.baseURL || "http://localhost:8000";
-
-    useEffect(() => {
-        api.get('/api/camera/list', { timeout: 60000 })
-            .then((res) => setDetectedIndices(res.data.available_indices ?? []))
-            .catch(() => setDetectedIndices(null));
-    }, []);
 
     const toggleStream = async () => {
         if (isStreaming) {
             try {
                 await api.post('/api/camera/stop');
                 setIsStreaming(false);
+                setDetectedIndices(null);
+                setActiveIndices(null);
                 toast.info("Webcams disconnected.");
             } catch {
                 toast.error("Failed to stop cameras.");
@@ -32,18 +29,28 @@ export default function CameraCapture() {
         }
 
         setIsConnecting(true);
+
+        // Fetch detected indices at click time (non-blocking, just for display)
+        api.get('/api/camera/list', { timeout: 10000 })
+            .then((res) => setDetectedIndices(res.data.available_indices ?? []))
+            .catch(() => setDetectedIndices(null));
+
         try {
-            const { data } = await api.post('/api/camera/start', {}, { timeout: 45000 });
+            const { data } = await api.post('/api/camera/start', {}, { timeout: 90000 });
             if (!data.started) {
-                const detail = data.errors
-                    ? `Left: ${data.errors.left ?? 'ok'} | Right: ${data.errors.right ?? 'ok'}`
-                    : data.error ?? 'Unknown error';
-                toast.error(`Could not start both webcams. ${detail}`);
+                const parts: string[] = [];
+                if (data.error) parts.push(String(data.error));
+                if (data.errors?.left) parts.push(`Left: ${data.errors.left}`);
+                if (data.errors?.right) parts.push(`Right: ${data.errors.right}`);
+                if (data.hint) parts.push(String(data.hint));
+                toast.error(parts.length ? parts.join(' — ') : 'Could not start both webcams.');
                 return;
             }
             setStreamKey((k) => k + 1);
             setIsStreaming(true);
-            toast.success(`Connected — Left: index ${data.left_index}, Right: index ${data.right_index}`);
+            setActiveIndices({ left: data.left_index, right: data.right_index });
+            const auto = data.auto_configured ? ' (auto-selected)' : '';
+            toast.success(`Connected — Left: index ${data.left_index}, Right: index ${data.right_index}${auto}`);
         } catch (error: unknown) {
             const axiosErr = error as {
                 code?: string;
@@ -219,6 +226,11 @@ export default function CameraCapture() {
                                     Detected: {detectedIndices.length
                                         ? detectedIndices.join(', ')
                                         : 'none — check USB connections'}
+                                </p>
+                            )}
+                            {activeIndices !== null && (
+                                <p className="text-xs text-muted mt-1 font-mono">
+                                    Streaming: left={activeIndices.left}, right={activeIndices.right}
                                 </p>
                             )}
                         </div>

@@ -14,23 +14,26 @@ interface AngleData {
     confidence: number;
 }
 
+type AngleMap = {
+    left_knee?: AngleData;
+    right_knee?: AngleData;
+    left_hip?: AngleData;
+    right_hip?: AngleData;
+    left_elbow?: AngleData;
+    right_elbow?: AngleData;
+    left_wrist?: AngleData;
+    right_wrist?: AngleData;
+    left_shoulder?: AngleData;
+    right_shoulder?: AngleData;
+    left_ankle?: AngleData;
+    right_ankle?: AngleData;
+};
+
 interface FrameData {
     frame_index: number;
     keypoints: number[][] | null;
-    angles: {
-        left_knee?: AngleData;
-        right_knee?: AngleData;
-        left_hip?: AngleData;
-        right_hip?: AngleData;
-        left_elbow?: AngleData;
-        right_elbow?: AngleData;
-        left_wrist?: AngleData;
-        right_wrist?: AngleData;
-        left_shoulder?: AngleData;
-        right_shoulder?: AngleData;
-        left_ankle?: AngleData;
-        right_ankle?: AngleData;
-    };
+    angles: AngleMap;
+    angles_raw?: AngleMap;   // original (pre-healing) angles, when available
 }
 
 const ANGLE_NAMES: Record<string, string> = {
@@ -66,6 +69,7 @@ const ANGLE_COLORS: Record<string, string> = {
 const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
     const [selectedAngles, setSelectedAngles] = useState<string[]>(['left_knee']);
     const [xAxisMode, setXAxisMode] = useState<'frame' | 'time'>('time');
+    const [showRaw, setShowRaw] = useState<boolean>(false);
     const chartRef = useRef<HTMLDivElement>(null);
     const chartInstance = useRef<echarts.ECharts | null>(null);
     const queryClient = useQueryClient();
@@ -94,6 +98,9 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
         };
     }, [videoId, queryClient]);
 
+    // Does this analysis actually contain raw angles to compare against?
+    const hasRaw = !!analysisData?.frames?.some((f: FrameData) => f.angles_raw);
+
     // Update chart when data or settings change
     useEffect(() => {
         if (!analysisData || !analysisData.frames.length || !chartRef.current) return;
@@ -101,55 +108,62 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
         const frames = analysisData.frames;
         const fps = analysisData.fps;
 
-        // Prepare series data for each selected angle
-        const series = selectedAngles.map(angleName => {
-            const data: [number, number][] = [];
+        const xOf = (frame: FrameData) =>
+            xAxisMode === 'time' ? frame.frame_index / fps : frame.frame_index;
 
+        // Build a series from a given angle source ('angles' = healed, 'angles_raw' = before)
+        const buildSeries = (angleName: string, source: 'angles' | 'angles_raw') => {
+            const data: [number, number][] = [];
             frames.forEach((frame: FrameData) => {
-                const angleData = frame.angles?.[angleName as keyof typeof frame.angles];
+                const map = source === 'angles' ? frame.angles : frame.angles_raw;
+                const angleData = map?.[angleName as keyof AngleMap];
                 if (angleData && angleData.angle !== null && angleData.confidence > 0.5) {
-                    const xValue = xAxisMode === 'time'
-                        ? frame.frame_index / fps
-                        : frame.frame_index;
-                    data.push([xValue, angleData.angle]);
+                    data.push([xOf(frame), angleData.angle]);
                 }
             });
-
+            const color = ANGLE_COLORS[angleName] || '#666';
+            const isRaw = source === 'angles_raw';
             return {
-                name: ANGLE_NAMES[angleName] || angleName,
+                name: isRaw
+                    ? `${ANGLE_NAMES[angleName] || angleName} (raw)`
+                    : (ANGLE_NAMES[angleName] || angleName),
                 type: 'line',
-                data: data,
-                smooth: true,
+                data,
+                smooth: !isRaw,          // raw stays jagged so the jitter is visible
                 showSymbol: false,
+                z: isRaw ? 1 : 2,        // healed drawn on top
                 lineStyle: {
-                    width: 2.5,
-                    color: ANGLE_COLORS[angleName] || '#666'
+                    width: isRaw ? 1.25 : 2.5,
+                    color,
+                    opacity: isRaw ? 0.45 : 1,
+                    type: isRaw ? 'dashed' : 'solid'
                 },
-                emphasis: {
-                    lineStyle: {
-                        width: 3.5
-                    }
-                },
-                areaStyle: {
-                    opacity: 0.05
-                }
+                emphasis: { lineStyle: { width: isRaw ? 2 : 3.5 } },
+                areaStyle: isRaw ? undefined : { opacity: 0.05 }
             };
-        });
+        };
 
-        // Initialize or update chart
+        // raw first (underneath), then healed on top
+        const rawSeries = (showRaw && hasRaw)
+            ? selectedAngles.map(a => buildSeries(a, 'angles_raw'))
+            : [];
+        const healedSeries = selectedAngles.map(a => buildSeries(a, 'angles'));
+        const series = [...rawSeries, ...healedSeries];
+
         if (!chartInstance.current) {
             chartInstance.current = echarts.init(chartRef.current);
         }
 
         const option = {
             title: {
-                text: 'Joint Angles Over Time',
+                text: showRaw && hasRaw ? 'Joint Angles — Raw vs Healed' : 'Joint Angles Over Time',
                 left: 'center',
-                textStyle: {
-                    fontSize: 14,
-                    fontWeight: 'bold'
-                }
+                top: 0,
+                textStyle: { fontSize: 14, fontWeight: 'bold' }
             },
+            legend: (showRaw && hasRaw)
+                ? { top: 26, type: 'scroll', textStyle: { fontSize: 11 } }
+                : undefined,
             tooltip: {
                 trigger: 'axis',
                 formatter: (params: any) => {
@@ -166,7 +180,7 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
                 left: '10%',
                 right: '10%',
                 bottom: '15%',
-                top: '20%'
+                top: (showRaw && hasRaw) ? '26%' : '20%'
             },
             xAxis: {
                 type: 'value',
@@ -174,12 +188,8 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
                 nameLocation: 'middle',
                 nameGap: 30,
                 axisLabel: {
-                    formatter: (value: number) => {
-                        if (xAxisMode === 'time') {
-                            return value.toFixed(1) + 's';
-                        }
-                        return Math.round(value).toString();
-                    }
+                    formatter: (value: number) =>
+                        xAxisMode === 'time' ? value.toFixed(1) + 's' : Math.round(value).toString()
                 }
             },
             yAxis: {
@@ -188,21 +198,15 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
                 nameLocation: 'middle',
                 nameGap: 50
             },
-            series: series
+            series
         };
 
         chartInstance.current.setOption(option, true);
 
-        // Handle resize
-        const handleResize = () => {
-            chartInstance.current?.resize();
-        };
+        const handleResize = () => { chartInstance.current?.resize(); };
         window.addEventListener('resize', handleResize);
-
-        return () => {
-            window.removeEventListener('resize', handleResize);
-        };
-    }, [analysisData, selectedAngles, xAxisMode]);
+        return () => { window.removeEventListener('resize', handleResize); };
+    }, [analysisData, selectedAngles, xAxisMode, showRaw, hasRaw]);
 
     // Cleanup chart on unmount
     useEffect(() => {
@@ -273,17 +277,33 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
                     </DropdownMenu>
                 </div>
 
-                <div className="flex items-center gap-2">
-                    <Clock className={`w-4 h-4 transition-colors ${xAxisMode === 'time' ? 'text-primary' : 'text-text-primary/30'}`} />
+                <div className="flex items-center gap-4">
+                    {/* Raw vs Healed toggle */}
                     <button
-                        onClick={() => setXAxisMode(xAxisMode === 'time' ? 'frame' : 'time')}
-                        className="relative inline-flex h-6 w-11 items-center rounded-full bg-border transition-colors focus:outline-none focus:ring-2 focus:ring-border focus:ring-offset-2 focus:ring-offset-background"
+                        onClick={() => setShowRaw(v => !v)}
+                        disabled={!hasRaw}
+                        title={hasRaw ? 'Overlay the original (pre-healing) angles' : 'Re-process this video to enable raw comparison'}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors focus:outline-none
+                            ${!hasRaw ? 'opacity-40 cursor-not-allowed border-border text-text-primary/40'
+                              : showRaw ? 'bg-primary text-white border-primary'
+                              : 'border-border text-text-primary/70 hover:bg-border'}`}
                     >
-                        <span
-                            className={`inline-block h-4 w-4 transform rounded-full bg-background transition-transform ${xAxisMode === 'time' ? 'translate-x-1' : 'translate-x-6'}`}
-                        />
+                        {showRaw ? 'Hide raw' : 'Show raw'}
                     </button>
-                    <Frame className={`w-4 h-4 transition-colors ${xAxisMode === 'frame' ? 'text-primary' : 'text-text-primary/30'}`} />
+
+                    {/* Time / Frame toggle */}
+                    <div className="flex items-center gap-2">
+                        <Clock className={`w-4 h-4 transition-colors ${xAxisMode === 'time' ? 'text-primary' : 'text-text-primary/30'}`} />
+                        <button
+                            onClick={() => setXAxisMode(xAxisMode === 'time' ? 'frame' : 'time')}
+                            className="relative inline-flex h-6 w-11 items-center rounded-full bg-border transition-colors focus:outline-none focus:ring-2 focus:ring-border focus:ring-offset-2 focus:ring-offset-background"
+                        >
+                            <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-background transition-transform ${xAxisMode === 'time' ? 'translate-x-1' : 'translate-x-6'}`}
+                            />
+                        </button>
+                        <Frame className={`w-4 h-4 transition-colors ${xAxisMode === 'frame' ? 'text-primary' : 'text-text-primary/30'}`} />
+                    </div>
                 </div>
             </div>
             <div ref={chartRef} className="h-96 w-full"></div>
