@@ -19,8 +19,8 @@ import os
 import cv2
 
 MAX_INDEX = 5
-W = int(os.getenv("CAMERA_WIDTH", "640"))
-H = int(os.getenv("CAMERA_HEIGHT", "480"))
+W = int(os.getenv("CAMERA_WIDTH", "1280"))
+H = int(os.getenv("CAMERA_HEIGHT", "720"))
 LEFT = int(os.getenv("CAMERA_LEFT_INDEX", "0"))
 RIGHT = int(os.getenv("CAMERA_RIGHT_INDEX", "1"))
 BACKEND = cv2.CAP_DSHOW if os.name == "nt" else 0

@@ -11,18 +11,24 @@ from datetime import datetime
 
 router = APIRouter()
 
+# calibration.npz lives in backend/ ; this file is backend/routes/pose.py
+CALIB_PATH = os.path.join(os.path.dirname(__file__), "..", "calibration.npz")
+
+
 @router.post("/process-video/{video_id}")
 async def process_video(
     video_id: str,
-    force: bool = False,                      # <-- NEW: set ?force=true to re-process
+    force: bool = False,                      # set ?force=true to re-process
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Synchronously process a video: download from MinIO, run pose estimation with overlays,
+    Synchronously process a video: download from MinIO, run pose estimation,
     save processed video to MinIO, and update video metadata.
 
-    Pass ?force=true to re-run processing on a clip that was already processed
-    (needed when iterating on the healing/smoothing pipeline).
+    Side-by-side stereo recordings (layout == "side_by_side") are routed through
+    triangulation to produce 3D keypoints when calibration.npz is present.
+
+    Pass ?force=true to re-run processing on a clip that was already processed.
     """
     # 1. Verify video exists and belongs to user
     videos_collection = client[database_name]["videos"]
@@ -48,15 +54,18 @@ async def process_video(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to download video: {str(e)}")
 
-    # 4. Process video with overlays (healing + smoothing applied inside)
+    # 4. Process. Stereo recordings -> triangulation (3D); everything else -> normal 2D.
+    is_stereo = (video_doc.get("layout") == "side_by_side"
+                 or video_doc.get("source") == "stereo_camera")
     try:
         temp_output_path = tempfile.mktemp(suffix="_processed.mp4")
-        # result = process_video_with_overlays(
-        #     temp_input_path,
-        #     temp_output_path,
-        #     heal_kwargs={"beta": 0.5},        # tune here if motion looks laggy/noisy
-        # )
-        result = process_video_with_overlays(temp_input_path, temp_output_path, apply_healing=False)
+        if is_stereo and os.path.exists(CALIB_PATH):
+            from stereo_process import process_stereo_video
+            result = process_stereo_video(temp_input_path, temp_output_path, calib_path=CALIB_PATH)
+        else:
+            # If it's stereo but calibration is missing, fall back to 2D so it
+            # still works (analyses the left half is not split here -- whole frame).
+            result = process_video_with_overlays(temp_input_path, temp_output_path, apply_healing=False)
     except Exception as e:
         os.unlink(temp_input_path)
         if os.path.exists(temp_output_path):
@@ -91,7 +100,7 @@ async def process_video(
         {"$set": {"processed_object_name": processed_object_name}}
     )
 
-    # 9. Store keypoint analysis in MongoDB (result now includes healed frames + healing_report)
+    # 9. Store keypoint analysis in MongoDB (stereo result also carries frames_3d)
     analysis_collection = client[database_name]["pose_analysis"]
     analysis_doc = {
         "video_id": video_id,
@@ -108,11 +117,14 @@ async def process_video(
 
     return {
         "status": "completed",
+        "mode": result.get("mode", "2d"),
         "processed_object_name": processed_object_name,
         "total_frames": result["total_frames"],
         "fps": result["fps"],
-        "healing_report": result.get("healing_report"),   # <-- confirm healing ran
+        "has_3d": "frames_3d" in result,
+        "healing_report": result.get("healing_report"),
     }
+
 
 @router.get("/get-analysis/{video_id}")
 async def get_analysis(video_id: str, current_user: dict = Depends(get_current_user)):

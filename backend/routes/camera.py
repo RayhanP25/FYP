@@ -199,19 +199,40 @@ class Recorder:
         combo = _compose(pair[0], pair[1])
         h, w = combo.shape[:2]
         writer = _open_writer(self.path, w, h, CAP_FPS)
-        interval = 1.0 / CAP_FPS
-        next_t = time.time()
+        
+        start_time = time.time()
+        self.frames = 0
+        
         while self.active:
-            pair = manager.get_latest()
-            if pair is not None:
-                writer.write(_compose(pair[0], pair[1]))
-                self.frames += 1
-            next_t += interval
-            sleep = next_t - time.time()
-            if sleep > 0:
-                time.sleep(sleep)
-            else:
-                next_t = time.time()
+            # 1. Check the true real-world clock
+            expected_frames = int((time.time() - start_time) * CAP_FPS)
+            
+            if self.frames < expected_frames:
+                current_pair = manager.get_latest()
+                if current_pair is not None:
+                    # 2. Compose the CPU-heavy image ONLY ONCE
+                    current_combo = _compose(current_pair[0], current_pair[1])
+                    
+                    # 3. Flush it instantly to catch up to the clock
+                    while self.frames < expected_frames and self.active:
+                        writer.write(current_combo)
+                        self.frames += 1
+            
+            # Tiny sleep to prevent the while-loop from hogging the CPU 
+            # away from the camera capture threads
+            time.sleep(0.005)
+            
+        # 4. FINAL FLUSH: When the user hits 'Stop', write out the very last 
+        # fractions of a second before the file closes to ensure perfect duration.
+        final_expected = int((time.time() - start_time) * CAP_FPS)
+        if self.frames < final_expected:
+            current_pair = manager.get_latest()
+            if current_pair is not None:
+                final_combo = _compose(current_pair[0], current_pair[1])
+                while self.frames < final_expected:
+                    writer.write(final_combo)
+                    self.frames += 1
+                    
         writer.release()
 
     def stop(self):
