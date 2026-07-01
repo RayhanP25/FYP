@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { Home, Video, Camera, BarChart3, User2, Users, Search, ChevronDown, LogOut } from 'lucide-react';
+import { Home, Video, Camera, User2, Users, Search, ChevronDown, LogOut } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../dropdown/dropdown';
 import SidebarItem from './sidebarItem';
 import SectionTitle from './sectionTitle';
@@ -40,7 +40,6 @@ const Sidebar = () => {
                         <SidebarItem icon={Home} text="Dashboard" href="/home" />
                         <SidebarItem icon={Video} text="Videos" href="/video-test" />
                         <SidebarItem icon={Camera} text="Camera" href="/camera-capture" />
-                        <SidebarItem icon={BarChart3} text="Analysis" href="/kinematic-analysis" />
                         {user?.role === 'admin' && (
                             <SidebarItem icon={Users} text="Users" href="/view-users" />
                         )}

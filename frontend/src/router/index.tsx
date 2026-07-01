@@ -60,13 +60,9 @@ const AppRoutes = () => {
       element: <PrivateRoute element={<VideoTest />} />,
     },
     {
-      path: '/kinematic-analysis',
-      element: <PrivateRoute element={<VideoTest />} />,
+      path: '/*',
+      element: <NotFound />,
     },
-    {
-      path: '*',
-      element: <NotFound />
-    }
   ];
 
   return useRoutes(allRoutes);
