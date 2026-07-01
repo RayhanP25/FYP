@@ -1,15 +1,11 @@
-# backend/database.py
+from pymongo.mongo_client import MongoClient
+from pymongo.server_api import ServerApi
 import os
 from dotenv import load_dotenv
-from pymongo import MongoClient
 
-load_dotenv() # This reads the .env file
+load_dotenv()
 
-DATABASE_URI = os.getenv("DATABASE_URI")
+uri = os.getenv("DATBASE_URI")
 database_name = os.getenv("DATABASE_NAME")
 
-# Ensure it's not None
-if not DATABASE_URI:
-    raise Exception("DATABASE_URI is not set in .env file")
-
-client = MongoClient(DATABASE_URI, tlsAllowInvalidCertificates=True)
+client = MongoClient(uri, server_api=ServerApi('1'))
