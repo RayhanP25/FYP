@@ -3,6 +3,7 @@ import os
 import sys
 import threading
 from typing import List
+import time
 
 import cv2
 import numpy as np
@@ -29,6 +30,8 @@ def open_capture(index: int):
             if sys.platform == "win32" and backend == cv2.CAP_DSHOW:
                 cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, OPEN_TIMEOUT_MS)
             if cap.isOpened():
+                # STRICTLY ENFORCE 30 FPS AT THE HARDWARE LEVEL
+                cap.set(cv2.CAP_PROP_FPS, 30.0)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 return cap
             cap.release()
@@ -99,6 +102,8 @@ class WebCamera(CameraStream):
 
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        # ENFORCE 30 FPS ON THE CAPTURE OBJECT
+        self.cap.set(cv2.CAP_PROP_FPS, 30.0)
 
         self.ret, self.frame = self.cap.read()
         if not self.ret or self.frame is None:
@@ -112,11 +117,17 @@ class WebCamera(CameraStream):
         self.thread = threading.Thread(target=self._update, daemon=True)
         self.thread.start()
         h, w = self.frame.shape[:2]
-        logger.info("Webcam index %s opened (%sx%s), actual frame %sx%s", index, width, height, w, h)
+        logger.info("Webcam index %s opened (%sx%s) locked to 30 FPS, actual frame %sx%s", index, width, height, w, h)
 
     def _update(self):
+        # A hard throttle to ensure the background reading thread never exceeds 30fps, 
+        # which prevents buffer overflow loops and sync drift
+        target_interval = 1.0 / 30.0
+        
         while not self.stopped and self.is_open:
+            start_time = time.time()
             ret, frame = self.cap.read()
+            
             if ret and frame is not None:
                 with self._frame_lock:
                     self.frame = frame
@@ -126,6 +137,10 @@ class WebCamera(CameraStream):
                 if self._read_failures >= 30:
                     self.is_open = False
                     break
+            
+            elapsed = time.time() - start_time
+            if elapsed < target_interval:
+                time.sleep(target_interval - elapsed)
 
     def get_frame(self) -> np.ndarray | None:
         if not self.is_open:

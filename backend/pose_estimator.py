@@ -18,10 +18,6 @@ CONNECTIONS = [
 ]
 
 def calculate_angle(p1: list, p2: list, p3: list) -> dict:
-    """
-    Calculate angle between three points (p1-p2-p3).
-    Returns dictionary with angle in degrees and confidence.
-    """
     if not p1 or not p2 or not p3 or len(p1) < 3 or len(p2) < 3 or len(p3) < 3:
         return {"angle": None, "confidence": 0.0}
 
@@ -100,7 +96,6 @@ def calculate_frame_angles(keypoints: list) -> dict:
         angles["left_shoulder"] = to_anatomical(calculate_angle(normalized_kp[1], normalized_kp[2], normalized_kp[4]))
     if len(normalized_kp) > 5:
         angles["right_shoulder"] = to_anatomical(calculate_angle(normalized_kp[1], normalized_kp[3], normalized_kp[5]))
-    # NOTE: indices 16/17 are the foot/toe index from MediaPipe (31/32), not the heel.
     if len(normalized_kp) > 16:
         angles["left_ankle"] = to_anatomical(calculate_angle(normalized_kp[12], normalized_kp[14], normalized_kp[16]))
     if len(normalized_kp) > 17:
@@ -108,7 +103,6 @@ def calculate_frame_angles(keypoints: list) -> dict:
     return angles
 
 def draw_keypoints_on_frame(frame, keypoints, color_line=(0, 255, 0), color_pt=(0, 0, 255)):
-    """Draw keypoints and skeleton on a frame using OpenCV."""
     if keypoints is None:
         return frame
     height, width = frame.shape[:2]
@@ -132,13 +126,10 @@ def draw_keypoints_on_frame(frame, keypoints, color_line=(0, 255, 0), color_pt=(
     return frame
 
 
-# Mapping from MediaPipe 33 landmarks to custom 18-keypoint indices
 _MP_MAPPING = [0, 11, 12, 13, 14, 15, 16, 19, 20, 23, 24, 25, 26, 27, 28, 31, 32]
 
 
 def _run_inference(video_path: str) -> dict:
-    """PASS 1 — run MediaPipe over the whole video and collect RAW keypoints.
-    No drawing here. Returns the raw result dict."""
     model_path = 'pose_landmarker.task'
     base_options = python.BaseOptions(model_asset_path=model_path)
     options = vision.PoseLandmarkerOptions(
@@ -152,7 +143,8 @@ def _run_inference(video_path: str) -> dict:
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    # STRICTLY ENFORCE 30 FPS (Ignores corrupted headers completely)
+    fps = 30.0
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_idx = 0
@@ -164,6 +156,8 @@ def _run_inference(video_path: str) -> dict:
             break
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        
+        # Lock inference timestamps exactly to 30fps
         timestamp_ms = int(frame_idx * (1000 / fps))
         detection_result = detector.detect_for_video(mp_image, timestamp_ms)
 
@@ -196,12 +190,12 @@ def _run_inference(video_path: str) -> dict:
 
 
 def _render_overlay(video_path: str, frames: list, output_path: str):
-    """PASS 2 — re-read the source video and draw the given keypoints
-    (raw or healed) onto each frame, writing a browser-friendly H.264 file."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        
+    # STRICTLY ENFORCE 30 FPS OUTPUT WRITER
+    fps = 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fourcc = cv2.VideoWriter_fourcc(*'avc1')
@@ -228,25 +222,8 @@ def process_video_with_overlays(
     apply_healing: bool = True,
     heal_kwargs: dict = None,
 ) -> dict:
-    """
-    Full pipeline:
-      Pass 1  -> MediaPipe inference (raw keypoints + angles)
-      Heal    -> temporal occlusion recovery + One-Euro smoothing
-      Pass 2  -> draw HEALED skeleton onto the video (output_path)
-
-    Args:
-        output_path     : where the HEALED overlay video is written
-        raw_output_path : optional; if given, also writes the RAW (unsmoothed)
-                          overlay video here, for before/after comparison
-        apply_healing   : set False to reproduce the old raw-only behaviour
-        heal_kwargs     : optional dict forwarded to heal_and_smooth(), e.g.
-                          {"beta": 0.6, "max_gap": 12}
-
-    Returns the (healed) result dict, including a 'healing_report'.
-    """
     raw_result = _run_inference(video_path)
 
-    # optional: write the raw overlay first (the "before" video)
     if raw_output_path:
         _render_overlay(video_path, raw_result["frames"], raw_output_path)
 
@@ -255,19 +232,16 @@ def process_video_with_overlays(
         return raw_result
 
     from pose_postprocess import heal_and_smooth
-    kwargs = {"healed_confidence": 0.6}          # >0.5 so healed joints render
+    kwargs = {"healed_confidence": 0.6}
     if heal_kwargs:
         kwargs.update(heal_kwargs)
     healed_result = heal_and_smooth(raw_result, **kwargs)
 
-    # attach the RAW (pre-healing) angles to each frame so the frontend
-    # can plot a before/after comparison from a single analysis document
     for i, fr in enumerate(healed_result["frames"]):
         if i < len(raw_result["frames"]):
             fr["angles_raw"] = raw_result["frames"][i].get("angles", {})
         else:
             fr["angles_raw"] = {}
 
-    # write the healed overlay (the "after" video)
     _render_overlay(video_path, healed_result["frames"], output_path)
     return healed_result

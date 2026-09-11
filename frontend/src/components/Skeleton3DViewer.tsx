@@ -2,45 +2,34 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from "react"
 
 type Pt = [number, number, number] | null;
 interface Frame3D { frame_index: number; keypoints_3d: Pt[]; angles_3d: Record<string, number>; }
-
-// NEW: currentTime prop added here
-interface Props { videoId?: string; apiBase?: string; analysis?: { fps?: number; frames_3d?: Frame3D[] }; currentTime?: number; }
+interface Props { videoId?: string; apiBase?: string; analysis?: { fps?: number; frames_3d?: Frame3D[] }; }
 
 const BONES_LEFT: [number, number][] = [[1, 2], [2, 4], [4, 6], [6, 8], [2, 10], [10, 12], [12, 14], [14, 16]];
 const BONES_RIGHT: [number, number][] = [[1, 3], [3, 5], [5, 7], [7, 9], [3, 11], [11, 13], [13, 15], [15, 17]];
 const BONES_CENTER: [number, number][] = [[0, 1], [10, 11]];
 
-const COL_LEFT = "#4F9CFF";
-const COL_RIGHT = "#FF7A3D";
-const COL_CENTER = "#8892A6";
-const COL_JOINT = "#EAEEF7";
+const COL_LEFT = "#22D3EE"; // Bright Cyan
+const COL_RIGHT = "#F472B6"; // Hot Pink
+const COL_CENTER = "#94A3B8"; // Slate
+const COL_JOINT = "#FFFFFF";
 
-function generateSample(): { fps: number; frames_3d: Frame3D[] } {
-  // ... (keeping sample generator short for brevity, leave yours intact if you prefer)
-  return { fps: 30, frames_3d: [] };
-}
-
-export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, currentTime }: Props) {
+export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [frames, setFrames] = useState<Frame3D[]>([]);
   const [fps, setFps] = useState(30);
   const [idx, setIdx] = useState(0);
-  const [playing, setPlaying] = useState(true);
   const [yaw, setYaw] = useState(0.5);
   const [pitch, setPitch] = useState(0.15);
   const [zoom, setZoom] = useState(1);
   const drag = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    if (analysis?.frames_3d?.length) {
-      setFrames(analysis.frames_3d); setFps(analysis.fps || 30); return;
-    }
+    if (analysis?.frames_3d?.length) { setFrames(analysis.frames_3d); setFps(analysis.fps || 30); return; }
     if (videoId) {
       fetch(`${apiBase}/api/get-analysis/${videoId}`, { credentials: "include" })
         .then((r) => r.json())
         .then((d) => { setFrames(d.result?.frames_3d || []); setFps(d.result?.fps || 30); })
         .catch(() => {});
-      return;
     }
   }, [videoId, apiBase, analysis]);
 
@@ -54,20 +43,17 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, curr
     return { center: c, radius: r };
   }, [frames]);
 
-  // NEW: Sync with Master Video Time
   useEffect(() => {
-    if (currentTime !== undefined && frames.length > 0) {
-        setPlaying(false); // Stop internal loop when bound to a video
-        const targetIdx = Math.floor(currentTime * fps);
-        setIdx(Math.max(0, Math.min(frames.length - 1, targetIdx)));
-    }
-  }, [currentTime, fps, frames.length]);
-
-  useEffect(() => {
-    if (!playing || frames.length === 0 || currentTime !== undefined) return;
-    const id = setInterval(() => setIdx((i) => (i + 1) % frames.length), 1000 / fps);
-    return () => clearInterval(id);
-  }, [playing, fps, frames.length, currentTime]);
+    const handleSync = (e: Event) => {
+        const time = (e as CustomEvent).detail as number;
+        if (frames.length > 0) {
+            const targetIdx = Math.floor(time * fps);
+            setIdx(Math.max(0, Math.min(frames.length - 1, targetIdx)));
+        }
+    };
+    window.addEventListener('sync-time', handleSync);
+    return () => window.removeEventListener('sync-time', handleSync);
+  }, [fps, frames.length]);
 
   useEffect(() => {
     const cv = canvasRef.current; if (!cv) return;
@@ -90,7 +76,8 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, curr
     };
     const P = f.keypoints_3d.map(project);
 
-    ctx.strokeStyle = "rgba(136,146,166,0.12)";
+    // Glowing tech floor grid
+    ctx.strokeStyle = "rgba(34, 211, 238, 0.1)"; 
     ctx.lineWidth = 1;
     for (let g = -2; g <= 2; g++) {
       const a = project([g * 300 + center[0], radius + center[1], -600 + center[2]]);
@@ -114,7 +101,7 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, curr
 
     P.forEach((p) => {
       if (!p) return;
-      ctx.beginPath(); ctx.arc(p.sx, p.sy, 4, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, 3.5, 0, Math.PI * 2);
       ctx.fillStyle = COL_JOINT; ctx.fill();
     });
   }, [frames, idx, yaw, pitch, zoom, center, radius]);
@@ -132,33 +119,37 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, curr
   const curAngles = frames[idx]?.angles_3d || {};
 
   return (
-    // Updated container rules to allow it to fit nicely inside the grid parent
-    <div className="flex w-full h-full text-white font-sans">
-      <div className="flex-1 bg-[#121826] flex flex-col p-3 border-r border-[#222B3D]">
-        <div className="flex-1 min-h-0 relative rounded-lg overflow-hidden border border-[#222B3D] bg-[#0A0E17]">
-            <canvas
-            ref={canvasRef}
-            // By making it 100% width/height and scaling via CSS, it fills the grid cell dynamically
-            style={{ width: "100%", height: "100%", objectFit: "contain", cursor: drag.current ? "grabbing" : "grab", touchAction: "none" }}
-            width={600} height={400} 
-            onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onWheel={onWheel}
-            />
+    <div className="w-full h-full relative bg-[#060B14] font-sans overflow-hidden">
+      <canvas
+        ref={canvasRef}
+        style={{ width: "100%", height: "100%", cursor: drag.current ? "grabbing" : "grab", touchAction: "none" }}
+        width={800} height={600}
+        onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onWheel={onWheel}
+      />
+      
+      {/* High-tech floating HUD with native CSS custom scrollbars */}
+      <div className="absolute top-4 right-4 w-52 bg-slate-900/60 backdrop-blur-md border border-slate-700/50 rounded-2xl p-4 shadow-2xl">
+        <div className="flex justify-between items-center mb-4 border-b border-slate-700/50 pb-2">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">3D Biometrics</span>
+          <span className="text-[10px] text-cyan-300 bg-cyan-500/10 px-2.5 py-0.5 rounded-full font-mono border border-cyan-500/20">FR {idx}</span>
         </div>
-        <div className="text-xs text-[#5C6680] mt-3 flex justify-between items-center px-1">
-          <span>Drag to rotate • Scroll to zoom</span>
-          <button onClick={() => { setYaw(0.5); setPitch(0.15); setZoom(1); }} className="text-[#4F9CFF] hover:text-white transition-colors">Reset View</button>
+        
+        <div className="h-56 overflow-y-auto pr-2 space-y-2.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full">
+          {Object.entries(curAngles).map(([k, v]) => (
+            <div key={k} className="flex justify-between text-xs items-center">
+              <span className="text-slate-300 capitalize text-[11px] font-medium tracking-wide">{k.replace(/_/g, " ")}</span>
+              <span className="text-slate-50 font-mono font-semibold">{Math.round(v)}°</span>
+            </div>
+          ))}
         </div>
       </div>
 
-      <div className="w-[200px] bg-[#121826] p-4 overflow-y-auto no-scrollbar">
-        <div className="font-bold mb-1">3D joint angles</div>
-        <div className="text-xs text-[#9AA4BC] mb-4">frame {idx}</div>
-        {Object.entries(curAngles).map(([k, v]) => (
-          <div key={k} className="flex justify-between py-1 text-sm border-b border-[#222B3D]/50 last:border-0">
-            <span className="text-[#9AA4BC]">{k.replace(/_/g, " ")}</span>
-            <span className="font-semibold tabular-nums">{Math.round(v)}°</span>
-          </div>
-        ))}
+      <div className="absolute bottom-4 left-0 right-0 flex justify-center pointer-events-none">
+        <div className="flex items-center gap-6 text-[10px] text-slate-400 font-mono bg-slate-900/60 backdrop-blur-md px-5 py-2 rounded-full border border-slate-800 shadow-lg pointer-events-auto">
+            <span className="tracking-widest">DRAG TO ROTATE • SCROLL TO ZOOM</span>
+            <div className="w-[1px] h-3 bg-slate-700"></div>
+            <button onClick={() => { setYaw(0.5); setPitch(0.15); setZoom(1); }} className="text-cyan-400 hover:text-cyan-300 font-bold tracking-widest transition-colors">RESET</button>
+        </div>
       </div>
     </div>
   );

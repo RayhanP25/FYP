@@ -77,6 +77,13 @@ def triangulate_keypoints(kp_left, kp_right, calib, conf_threshold=0.5):
 
     if idxs:
         X3 = triangulate_pair(ptsL, ptsR, calib)
+        # Optional floor levelling: if calibration.npz carries an R_level rotation
+        # (set with 'f' in stereo_calibrate.py), rotate the 3D so the floor is
+        # horizontal and "up" is up. Joint ANGLES are rotation-invariant, so this
+        # only changes how the skeleton is oriented for display -- never the numbers.
+        R_level = calib.get("R_level") if isinstance(calib, dict) else None
+        if R_level is not None:
+            X3 = (np.asarray(R_level, dtype=np.float64) @ X3.T).T
         for k, j in enumerate(idxs):
             out[j] = X3[k]
     return out
@@ -92,3 +99,56 @@ def angle_3d(a, b, c):
         return None
     cosang = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
     return float(np.degrees(np.arccos(cosang)))
+
+
+# --------------------------------------------------------------------------- #
+#  Floor levelling helpers
+#  Used by stereo_calibrate.py ('f' key) to turn a checkerboard lying flat on
+#  the floor into a rotation that makes the reconstructed skeleton stand upright
+#  regardless of how the cameras are tilted.
+# --------------------------------------------------------------------------- #
+def rotation_between(a, b):
+    """Smallest rotation matrix that rotates unit vector a onto unit vector b."""
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    a = a / (np.linalg.norm(a) + 1e-12)
+    b = b / (np.linalg.norm(b) + 1e-12)
+    v = np.cross(a, b)
+    c = float(np.dot(a, b))
+    s = float(np.linalg.norm(v))
+    if s < 1e-8:                         # already (anti)parallel
+        if c > 0:
+            return np.eye(3)
+        perp = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        axis = np.cross(a, perp)
+        axis = axis / np.linalg.norm(axis)
+        K = np.array([[0, -axis[2], axis[1]],
+                      [axis[2], 0, -axis[0]],
+                      [-axis[1], axis[0], 0]])
+        return np.eye(3) + 2.0 * (K @ K)   # 180-degree rotation about axis
+    vx = np.array([[0, -v[2], v[1]],
+                   [v[2], 0, -v[0]],
+                   [-v[1], v[0], 0]])
+    return np.eye(3) + vx + vx @ vx * ((1.0 - c) / (s * s))
+
+
+def compute_floor_alignment(pts3d, up_target=(0.0, -1.0, 0.0)):
+    """
+    pts3d : (N,3) triangulated 3D points of a checkerboard lying flat on the
+            floor (LEFT-camera frame, mm). NaN rows are ignored.
+    Returns a 3x3 rotation R_level so that (R_level @ X) makes the floor plane
+    horizontal with "up" pointing along up_target. Default up_target = -Y, which
+    is screen-up in the Skeleton3DViewer convention.
+    """
+    pts = np.asarray(pts3d, dtype=np.float64)
+    pts = pts[~np.isnan(pts).any(axis=1)]
+    if len(pts) < 3:
+        raise ValueError("Need >= 3 valid floor points to fit a plane.")
+    c = pts.mean(axis=0)
+    _, _, vt = np.linalg.svd(pts - c)
+    normal = vt[2]                       # plane normal = smallest-variance axis
+    # Orient the normal to point UP out of the floor (toward the cameras, which
+    # sit at/above the origin), so the skeleton ends up head-up not upside-down.
+    if np.dot(normal, -c) < 0:
+        normal = -normal
+    return rotation_between(normal, np.asarray(up_target, dtype=np.float64))

@@ -5,19 +5,17 @@ import * as echarts from 'echarts';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem } from '@/components/dropdown/dropdown';
 import { ChevronDown, Clock, Frame } from 'lucide-react';
 
-interface KinematicAnalysisProps {
-    videoId: string;
-    currentTime?: number; // <--- NEW PROP
-}
-
-// ... (KEEP ALL YOUR EXISTING INTERFACES AND CONSTANTS HERE) ...
+interface KinematicAnalysisProps { videoId: string; }
 interface AngleData { angle: number | null; confidence: number; }
-type AngleMap = { left_knee?: AngleData; right_knee?: AngleData; left_hip?: AngleData; right_hip?: AngleData; left_elbow?: AngleData; right_elbow?: AngleData; left_wrist?: AngleData; right_wrist?: AngleData; left_shoulder?: AngleData; right_shoulder?: AngleData; left_ankle?: AngleData; right_ankle?: AngleData; };
+type AngleMap = Record<string, AngleData>;
 interface FrameData { frame_index: number; keypoints: number[][] | null; angles: AngleMap; angles_raw?: AngleMap; }
-const ANGLE_NAMES: Record<string, string> = { left_knee: 'Left Knee', right_knee: 'Right Knee', left_hip: 'Left Hip', right_hip: 'Right Hip', left_elbow: 'Left Elbow', right_elbow: 'Right Elbow', left_wrist: 'Left Wrist', right_wrist: 'Right Wrist', left_shoulder: 'Left Shoulder', right_shoulder: 'Right Shoulder', left_ankle: 'Left Ankle', right_ankle: 'Right Ankle' };
-const ANGLE_COLORS: Record<string, string> = { left_knee: '#3b82f6', right_knee: '#ef4444', left_hip: '#10b981', right_hip: '#8b5cf6', left_elbow: '#f59e0b', right_elbow: '#ec4899', left_wrist: '#06b6d4', right_wrist: '#84cc16', left_shoulder: '#14b8a6', right_shoulder: '#a855f7', left_ankle: '#e11d48', right_ankle: '#6366f1' };
 
-const KinematicAnalysis = ({ videoId, currentTime }: KinematicAnalysisProps) => {
+const ANGLE_NAMES: Record<string, string> = { left_knee: 'Left Knee', right_knee: 'Right Knee', left_hip: 'Left Hip', right_hip: 'Right Hip', left_elbow: 'Left Elbow', right_elbow: 'Right Elbow', left_wrist: 'Left Wrist', right_wrist: 'Right Wrist', left_shoulder: 'Left Shoulder', right_shoulder: 'Right Shoulder', left_ankle: 'Left Ankle', right_ankle: 'Right Ankle' };
+
+// Vivid neon palette for dark mode
+const ANGLE_COLORS: Record<string, string> = { left_knee: '#22D3EE', right_knee: '#F472B6', left_hip: '#34D399', right_hip: '#A78BFA', left_elbow: '#FBBF24', right_elbow: '#FB7185', left_wrist: '#06B6D4', right_wrist: '#A3E635', left_shoulder: '#2DD4BF', right_shoulder: '#C084FC', left_ankle: '#F43F5E', right_ankle: '#818CF8' };
+
+const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
     const [selectedAngles, setSelectedAngles] = useState<string[]>(['left_knee']);
     const [xAxisMode, setXAxisMode] = useState<'frame' | 'time'>('time');
     const [showRaw, setShowRaw] = useState<boolean>(false);
@@ -25,14 +23,10 @@ const KinematicAnalysis = ({ videoId, currentTime }: KinematicAnalysisProps) => 
     const chartInstance = useRef<echarts.ECharts | null>(null);
     const queryClient = useQueryClient();
 
-    const { data: analysisData, isLoading, error } = useQuery({
+    const { data: analysisData, isLoading } = useQuery({
         queryKey: ['analysis', videoId],
-        queryFn: async () => {
-            const response = await api.get(`/api/get-analysis/${videoId}`);
-            return response.data.result;
-        },
-        enabled: !!videoId,
-        retry: false
+        queryFn: async () => { const res = await api.get(`/api/get-analysis/${videoId}`); return res.data.result; },
+        enabled: !!videoId
     });
 
     useEffect(() => {
@@ -43,47 +37,37 @@ const KinematicAnalysis = ({ videoId, currentTime }: KinematicAnalysisProps) => 
 
     const hasRaw = !!analysisData?.frames?.some((f: FrameData) => f.angles_raw);
 
-    // Initial Chart Render Hook
+    // Echarts Initialization
     useEffect(() => {
         if (!analysisData || !analysisData.frames.length || !chartRef.current) return;
-        const frames = analysisData.frames;
-        const fps = analysisData.fps;
-        const xOf = (frame: FrameData) => xAxisMode === 'time' ? frame.frame_index / fps : frame.frame_index;
-
+        
         const buildSeries = (angleName: string, source: 'angles' | 'angles_raw') => {
             const data: [number, number][] = [];
-            frames.forEach((frame: FrameData) => {
-                const map = source === 'angles' ? frame.angles : frame.angles_raw;
-                const angleData = map?.[angleName as keyof AngleMap];
-                if (angleData && angleData.angle !== null && angleData.confidence > 0.5) {
-                    data.push([xOf(frame), angleData.angle]);
-                }
+            analysisData.frames.forEach((f: FrameData) => {
+                const map = source === 'angles' ? f.angles : f.angles_raw;
+                const ad = map?.[angleName];
+                if (ad && ad.angle !== null && ad.confidence > 0.5) data.push([xAxisMode === 'time' ? f.frame_index / analysisData.fps : f.frame_index, ad.angle]);
             });
-            const color = ANGLE_COLORS[angleName] || '#666';
+            const col = ANGLE_COLORS[angleName] || '#94A3B8';
             const isRaw = source === 'angles_raw';
             return {
-                name: isRaw ? `${ANGLE_NAMES[angleName]} (raw)` : ANGLE_NAMES[angleName],
+                name: isRaw ? `${ANGLE_NAMES[angleName]} (Raw)` : ANGLE_NAMES[angleName],
                 type: 'line', data, smooth: !isRaw, showSymbol: false, z: isRaw ? 1 : 2,
-                lineStyle: { width: isRaw ? 1.25 : 2.5, color, opacity: isRaw ? 0.45 : 1, type: isRaw ? 'dashed' : 'solid' },
-                emphasis: { lineStyle: { width: isRaw ? 2 : 3.5 } },
-                areaStyle: isRaw ? undefined : { opacity: 0.05 }
+                lineStyle: { width: isRaw ? 1.5 : 2.5, color: col, opacity: isRaw ? 0.4 : 1, type: isRaw ? 'dashed' : 'solid' },
+                areaStyle: isRaw ? undefined : { opacity: 0.1, color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: col }, { offset: 1, color: 'transparent' }]) }
             };
         };
 
-        const rawSeries = (showRaw && hasRaw) ? selectedAngles.map(a => buildSeries(a, 'angles_raw')) : [];
-        const healedSeries = selectedAngles.map(a => buildSeries(a, 'angles'));
-        const series = [...rawSeries, ...healedSeries];
+        const series = [...(showRaw && hasRaw ? selectedAngles.map(a => buildSeries(a, 'angles_raw')) : []), ...selectedAngles.map(a => buildSeries(a, 'angles'))];
 
-        if (!chartInstance.current) {
-            chartInstance.current = echarts.init(chartRef.current);
-        }
-
+        if (!chartInstance.current) chartInstance.current = echarts.init(chartRef.current);
+        
         chartInstance.current.setOption({
-            title: { text: showRaw && hasRaw ? 'Joint Angles — Raw vs Healed' : 'Joint Angles Over Time', left: 'center', top: 0, textStyle: { fontSize: 14, color: '#EAEEF7' } },
-            tooltip: { trigger: 'axis' },
-            grid: { left: '8%', right: '5%', bottom: '10%', top: '20%' },
-            xAxis: { type: 'value', name: xAxisMode === 'time' ? 'Time (s)' : 'Frame', nameLocation: 'middle', nameGap: 25 },
-            yAxis: { type: 'value', name: 'Angle (°)', nameLocation: 'middle', nameGap: 40 },
+            backgroundColor: 'transparent',
+            tooltip: { trigger: 'axis', backgroundColor: 'rgba(15, 23, 42, 0.95)', borderColor: '#334155', borderWidth: 1, textStyle: { color: '#F8FAFC' }, padding: [12, 16], borderRadius: 12 },
+            grid: { left: '3%', right: '3%', bottom: '12%', top: '8%', containLabel: true },
+            xAxis: { type: 'value', name: xAxisMode === 'time' ? 'Time (s)' : 'Frame', nameLocation: 'middle', nameGap: 25, splitLine: { show: true, lineStyle: { color: '#1E293B', type: 'dashed' } }, axisLabel: { color: '#64748B', fontFamily: 'monospace' } },
+            yAxis: { type: 'value', name: 'Angle (°)', nameLocation: 'middle', nameGap: 40, splitLine: { show: true, lineStyle: { color: '#1E293B', type: 'dashed' } }, axisLabel: { color: '#64748B', fontFamily: 'monospace' } },
             series
         }, true);
 
@@ -92,73 +76,61 @@ const KinematicAnalysis = ({ videoId, currentTime }: KinematicAnalysisProps) => 
         return () => window.removeEventListener('resize', handleResize);
     }, [analysisData, selectedAngles, xAxisMode, showRaw, hasRaw]);
 
-    // NEW: Real-time Cursor Sync Hook
+    // EVENT-DRIVEN CURSOR SYNC (Throttled to 20fps)
+    const lastUpdate = useRef<number>(0);
     useEffect(() => {
-        if (!chartInstance.current || currentTime === undefined || !analysisData || selectedAngles.length === 0) return;
-        
-        const fps = analysisData.fps || 30;
-        const xVal = xAxisMode === 'time' ? currentTime : currentTime * fps;
+        const handleSync = (e: Event) => {
+            const time = (e as CustomEvent).detail as number;
+            const now = performance.now();
+            if (now - lastUpdate.current < 50 || !chartInstance.current || !analysisData) return;
+            lastUpdate.current = now;
 
-        // Injects a vertical red cursor line into the first series without fully rebuilding the chart
-        chartInstance.current.setOption({
-            series: [{
-                markLine: {
-                    animation: false,
-                    silent: true,
-                    symbol: ['none', 'none'],
-                    label: { show: false },
-                    data: [{ xAxis: xVal }],
-                    lineStyle: { color: '#ef4444', width: 2, type: 'solid' }
-                }
-            }]
-        });
-    }, [currentTime, xAxisMode, analysisData, selectedAngles]);
+            const xVal = xAxisMode === 'time' ? time : time * (analysisData.fps || 30);
+            chartInstance.current.setOption({
+                series: [{ markLine: { animation: false, silent: true, symbol: ['none', 'none'], label: { show: false }, data: [{ xAxis: xVal }], lineStyle: { color: '#F43F5E', width: 2, type: 'solid' } } }]
+            });
+        };
+        window.addEventListener('sync-time', handleSync);
+        return () => window.removeEventListener('sync-time', handleSync);
+    }, [xAxisMode, analysisData]);
 
-    useEffect(() => {
-        return () => chartInstance.current?.dispose();
-    }, []);
-
-    if (isLoading || !analysisData) return <div className="p-5 min-h-[200px] text-text-secondary">Loading...</div>;
-    if (error) return <div className="p-5 text-text-muted">Please analyze the video first.</div>;
+    if (isLoading || !analysisData) return <div className="h-full flex items-center justify-center text-slate-500 font-mono tracking-widest text-sm uppercase">Loading sequence data...</div>;
 
     return (
-        <div className="bg-background rounded-xl shadow-sm border p-4 flex flex-col w-full h-full">
-            <div className="flex items-center justify-between mb-4 flex-shrink-0">
-                <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-text-primary/70">Select Angles:</span>
-                    <DropdownMenu>
-                        <DropdownMenuTrigger className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-background-main border rounded-md">
-                            <span className="text-text-primary/70">{selectedAngles.length} selected</span>
-                            <ChevronDown className="w-4 h-4" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent className="w-64 bg-background border">
-                            {Object.entries(ANGLE_NAMES).map(([angleKey, angleName]) => (
-                                <DropdownMenuCheckboxItem
-                                    key={angleKey}
-                                    checked={selectedAngles.includes(angleKey)}
-                                    onCheckedChange={(checked) => setSelectedAngles(prev => checked ? [...prev, angleKey] : prev.filter(a => a !== angleKey))}
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: ANGLE_COLORS[angleKey] }} />
-                                        <span>{angleName}</span>
-                                    </div>
-                                </DropdownMenuCheckboxItem>
-                            ))}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-                </div>
-                <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2">
-                        <Clock className={`w-4 h-4 ${xAxisMode === 'time' ? 'text-primary' : 'text-text-primary/30'}`} />
-                        <button onClick={() => setXAxisMode(xAxisMode === 'time' ? 'frame' : 'time')} className="relative inline-flex h-6 w-11 items-center rounded-full bg-border">
-                            <span className={`inline-block h-4 w-4 transform rounded-full bg-background ${xAxisMode === 'time' ? 'translate-x-1' : 'translate-x-6'}`} />
+        <div className="flex flex-col w-full h-full p-5 relative">
+            {/* Sleek unified control bar */}
+            <div className="flex items-center justify-between mb-4 flex-shrink-0 z-10 relative bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/60 backdrop-blur-md">
+                <DropdownMenu>
+                    <DropdownMenuTrigger className="inline-flex items-center gap-3 px-4 py-1.5 text-sm bg-slate-900 border border-slate-700 rounded-lg text-slate-200 hover:bg-slate-800 hover:border-slate-600 transition-all shadow-lg">
+                        <span className="font-medium">{selectedAngles.length} Joints Tracked</span> <ChevronDown className="w-4 h-4 text-slate-400" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-64 bg-slate-900 border-slate-700 shadow-2xl text-slate-200 rounded-xl p-2">
+                        {Object.entries(ANGLE_NAMES).map(([k, name]) => (
+                            <DropdownMenuCheckboxItem key={k} checked={selectedAngles.includes(k)} onCheckedChange={(c) => setSelectedAngles(p => c ? [...p, k] : p.filter(a => a !== k))} className="hover:bg-slate-800 rounded-lg cursor-pointer">
+                                <div className="flex items-center gap-3 py-1">
+                                    <div className="w-2.5 h-2.5 rounded-full shadow-[0_0_8px_currentColor]" style={{ backgroundColor: ANGLE_COLORS[k], color: ANGLE_COLORS[k] }} />
+                                    <span className="font-medium text-sm tracking-wide">{name}</span>
+                                </div>
+                            </DropdownMenuCheckboxItem>
+                        ))}
+                    </DropdownMenuContent>
+                </DropdownMenu>
+
+                <div className="flex gap-3">
+                    {hasRaw && (
+                        <button onClick={() => setShowRaw(!showRaw)} className={`text-xs px-4 py-1.5 rounded-lg border font-bold tracking-wider transition-all ${showRaw ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.2)]' : 'border-slate-700 text-slate-400 bg-slate-900 hover:bg-slate-800 hover:text-slate-200'}`}>
+                            RAW
                         </button>
-                        <Frame className={`w-4 h-4 ${xAxisMode === 'frame' ? 'text-primary' : 'text-text-primary/30'}`} />
-                    </div>
+                    )}
+                    <button onClick={() => setXAxisMode(xAxisMode === 'time' ? 'frame' : 'time')} className="flex items-center gap-3 bg-slate-900 border border-slate-700 rounded-lg px-4 py-1.5 cursor-pointer hover:bg-slate-800 transition-all">
+                        <Clock className={`w-4 h-4 ${xAxisMode === 'time' ? 'text-cyan-400 drop-shadow-[0_0_5px_rgba(6,182,212,0.8)]' : 'text-slate-500'}`} />
+                        <span className="text-xs text-slate-600 font-black">/</span>
+                        <Frame className={`w-4 h-4 ${xAxisMode === 'frame' ? 'text-cyan-400 drop-shadow-[0_0_5px_rgba(6,182,212,0.8)]' : 'text-slate-500'}`} />
+                    </button>
                 </div>
             </div>
-            {/* flex-1 and min-h-0 prevents the chart from forcing its parent to expand */}
-            <div ref={chartRef} className="flex-1 w-full min-h-0"></div>
+            
+            <div ref={chartRef} className="flex-1 w-full min-h-0 relative -mt-2"></div>
         </div>
     );
 };

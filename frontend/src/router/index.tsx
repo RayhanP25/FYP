@@ -6,9 +6,11 @@ import Login from '../pages/Login';
 import NotFound from '../pages/notFound';
 import ViewUserPage from '../pages/viewUser';
 import UserProfilePage from '../pages/userProfile';
-import VideoTest from '../pages/videoTest';
+// import VideoTest from '../pages/videoTest';
 import type { JSX } from 'react';
 import CameraCapture from '../pages/CameraCapture';
+import VideosPage from '../pages/VideosPage';
+import AnalysisPage from '../pages/AnalysisPage';
 
 const PrivateRoute = ({ element }: { element: JSX.Element }) => {
   const { isAuthenticated } = useAuth();
@@ -55,18 +57,32 @@ const AppRoutes = () => {
       path: '/camera-capture',
       element: <PrivateRoute element={<CameraCapture />} />,
     },
-    {
-      path: '/video-test',
-      element: <PrivateRoute element={<VideoTest />} />,
-    },
-    {
-      path: '/kinematic-analysis',
-      element: <PrivateRoute element={<VideoTest />} />,
-    },
+    // {
+    //   path: '/video-test',
+    //   element: <PrivateRoute element={<VideoTest />} />,
+    // },
+    // {
+    //   path: '/kinematic-analysis',
+    //   element: <PrivateRoute element={<VideoTest />} />,
+    // },
     {
       path: '*',
       element: <NotFound />
-    }
+    },
+    {
+      path: '/video-test',
+      element: <PrivateRoute element={<VideosPage />} />,
+    },
+    {
+      // Matches the exact video ID when you click a video
+      path: '/kinematic-analysis/:videoId', 
+      element: <PrivateRoute element={<AnalysisPage />} />,
+    },
+    {
+      // Matches if you just click the sidebar tab directly
+      path: '/kinematic-analysis', 
+      element: <PrivateRoute element={<AnalysisPage />} />,
+    },
   ];
 
   return useRoutes(allRoutes);

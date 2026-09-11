@@ -11,6 +11,9 @@ board with 25 mm squares -- MEASURE your real square size and set SQUARE_MM.
 Controls (a window opens with both feeds):
     SPACE : capture the current pair (only works when the board is found in BOTH)
     c     : calibrate from the captured pairs and save calibration.npz
+    f     : set the FLOOR LEVEL -- lay the board flat on the floor (both cameras
+            must see it) and press f. This makes the 3D skeleton stand upright
+            even though the cameras are tilted down. Do this AFTER c.
     u     : undo the last captured pair
     q     : quit
 
@@ -23,16 +26,26 @@ import os
 import time
 import numpy as np
 import cv2
+from dotenv import load_dotenv
+
+load_dotenv()  # read backend/.env so EXPECTED_BASELINE_MM and CAMERA_* take effect
+
+from triangulate import triangulate_pair, compute_floor_alignment
 
 # ---- board geometry: SET THESE TO YOUR PRINTED BOARD ----
 CHECKERBOARD = (9, 6)        # number of INNER corners (cols, rows)
-SQUARE_MM = 40.0             # physical size of one square, in millimetres
+SQUARE_MM = 55.0             # physical size of one square, in millimetres
 
 LEFT_INDEX = int(os.getenv("CAMERA_LEFT_INDEX", "0"))
 RIGHT_INDEX = int(os.getenv("CAMERA_RIGHT_INDEX", "1"))
 CAP_W = int(os.getenv("CAMERA_WIDTH", "1280"))
 CAP_H = int(os.getenv("CAMERA_HEIGHT", "720"))
 BACKEND = cv2.CAP_DSHOW if os.name == "nt" else 0
+
+# Optional: your measured lens-to-lens distance in mm, used only as a sanity
+# check on the calibrated baseline |T|. Set EXPECTED_BASELINE_MM in .env (e.g.
+# 3600 for cameras ~3.6 m apart). 0 = skip the check.
+EXPECTED_BASELINE_MM = float(os.getenv("EXPECTED_BASELINE_MM", "0") or 0)
 
 # 3D coordinates of board corners in board space (z=0), scaled to mm
 objp = np.zeros((CHECKERBOARD[0] * CHECKERBOARD[1], 3), np.float32)
@@ -85,7 +98,9 @@ def main():
 
     objpoints, imgL, imgR = [], [], []
     sizeL = sizeR = None
-    print("Show the board to BOTH cameras. SPACE=capture, c=calibrate, u=undo, q=quit")
+    cal_state = {}   # holds the last saved calibration so 'f' can level the floor
+    print("Show the board to BOTH cameras. "
+          "SPACE=capture, c=calibrate, f=floor-level, u=undo, q=quit")
 
     while True:
         okL, fL = capL.read()
@@ -119,7 +134,7 @@ def main():
         status = f"pairs: {len(objpoints)}   both detected: {foundL and foundR}"
         cv2.putText(disp, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
                     (0, 220, 0) if (foundL and foundR) else (0, 0, 255), 2)
-        cv2.imshow("Stereo Calibration (SPACE capture / c calibrate / u undo / q quit)", disp)
+        cv2.imshow("Stereo Calibration (SPACE capture / c calibrate / f floor / u undo / q quit)", disp)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -193,15 +208,62 @@ def main():
                           f"kept {len(o)} pairs")
 
                 print(f"  stereo RMS: {rmsS:.3f} px  (aim < 1.0)")
-                print(f"  baseline |T|: {np.linalg.norm(T):.1f} mm")
+                base = float(np.linalg.norm(T))
+                print(f"  baseline |T|: {base:.1f} mm")
+                if EXPECTED_BASELINE_MM > 0:
+                    dev = abs(base - EXPECTED_BASELINE_MM) / EXPECTED_BASELINE_MM * 100.0
+                    tag = "OK" if dev <= 15 else "WARNING -- check square size / recapture"
+                    print(f"  expected ~{EXPECTED_BASELINE_MM:.0f} mm  ->  {dev:.0f}% off  [{tag}]")
                 np.savez("calibration.npz",
                          K1=K1, D1=D1, K2=K2, D2=D2, R=R, T=T,
                          size1=np.array(sizeL), size2=np.array(sizeR),
                          rms=np.array(rmsS), square_mm=np.array(SQUARE_MM))
+                cal_state.update(dict(K1=K1, D1=D1, K2=K2, D2=D2, R=R, T=T,
+                                      size1=np.array(sizeL), size2=np.array(sizeR),
+                                      rms=np.array(rmsS)))
                 print("  saved calibration.npz")
+                print("  NEXT: lay the board FLAT on the floor where the athlete will")
+                print("        stand, make sure BOTH cameras see it, then press 'f' to level.")
             except Exception as ex:
                 print(f"  calibration error: {ex}")
                 print("  your captures are kept -- press c to retry, or capture more pairs")
+        elif key == ord('f'):
+            # FLOOR LEVEL: board lies flat on the floor, seen by both cameras.
+            # Triangulate its corners with the current calibration, fit the floor
+            # plane, and store a rotation (R_level) that stands the skeleton upright.
+            if not cal_state:
+                print("  calibrate first (press c) before setting the floor level")
+                continue
+            capL.grab(); capR.grab()
+            okfL, ffL = capL.retrieve()
+            okfR, ffR = capR.retrieve()
+            if not (okfL and okfR):
+                print("  couldn't grab a synced pair -- try again")
+                continue
+            okL3, cL3 = find_corners(cv2.cvtColor(ffL, cv2.COLOR_BGR2GRAY))
+            okR3, cR3 = find_corners(cv2.cvtColor(ffR, cv2.COLOR_BGR2GRAY))
+            if not (okL3 and okR3):
+                print("  board not found in BOTH views on the floor -- reposition and retry")
+                continue
+            try:
+                X3 = triangulate_pair(cL3.reshape(-1, 2), cR3.reshape(-1, 2), cal_state)
+                R_level = compute_floor_alignment(X3)
+            except Exception as ex:
+                print(f"  floor fit failed: {ex}")
+                continue
+            # flatness diagnostic: RMS distance of the corners to the fitted plane
+            Xc = X3 - X3.mean(axis=0)
+            _, _, vt = np.linalg.svd(Xc)
+            resid = float(np.sqrt(((Xc @ vt[2]) ** 2).mean()))
+            np.savez("calibration.npz",
+                     K1=cal_state["K1"], D1=cal_state["D1"],
+                     K2=cal_state["K2"], D2=cal_state["D2"],
+                     R=cal_state["R"], T=cal_state["T"],
+                     size1=cal_state["size1"], size2=cal_state["size2"],
+                     rms=cal_state["rms"], square_mm=np.array(SQUARE_MM),
+                     R_level=R_level)
+            print(f"  floor level saved (plane residual {resid:.1f} mm; smaller is better).")
+            print("  3D output will now be leveled. Re-process a clip to see it upright.")
 
     capL.release(); capR.release()
     cv2.destroyAllWindows()
