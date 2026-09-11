@@ -100,7 +100,6 @@ def calculate_frame_angles(keypoints: list) -> dict:
         angles["left_shoulder"] = to_anatomical(calculate_angle(normalized_kp[1], normalized_kp[2], normalized_kp[4]))
     if len(normalized_kp) > 5:
         angles["right_shoulder"] = to_anatomical(calculate_angle(normalized_kp[1], normalized_kp[3], normalized_kp[5]))
-    # NOTE: indices 16/17 are the foot/toe index from MediaPipe (31/32), not the heel.
     if len(normalized_kp) > 16:
         angles["left_ankle"] = to_anatomical(calculate_angle(normalized_kp[12], normalized_kp[14], normalized_kp[16]))
     if len(normalized_kp) > 17:

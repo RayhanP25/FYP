@@ -11,7 +11,7 @@ from datetime import datetime
 
 router = APIRouter()
 
-# calibration.npz lives in backend/ ; this file is backend/routes/pose.py
+# calibration.npz lives in backend
 CALIB_PATH = os.path.join(os.path.dirname(__file__), "..", "calibration.npz")
 
 

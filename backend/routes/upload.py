@@ -6,8 +6,6 @@ from bson import ObjectId
 import uuid
 from routes.users import get_current_user
 
-# from database.minio_config import minio_client
-
 router = APIRouter()
 
 @router.post("/upload-video")
@@ -22,7 +20,7 @@ async def upload_video(video: UploadFile = File(...), current_user: dict = Depen
             detail=f"Invalid file format. Allowed formats: {', '.join(allowed_extensions)}"
         )
     
-    # Validate file size (100mb)
+    # Validate file size (max 100mb)
     max_size = 100 * 1024 * 1024
     if video.size and video.size > max_size:
         raise HTTPException(
@@ -111,10 +109,6 @@ async def get_my_videos(current_user: dict = Depends(get_current_user)):
     videos_collection = client[database_name]["videos"]
     
     videos = list(videos_collection.find({"user_id": str(current_user["_id"])}))
-    
-    # Convert ObjectId to string and format response.
-    # Use .get() with fallbacks so a document missing a field (e.g. a camera
-    # recording) can never crash the whole list.
     result = []
     for video in videos:
         result.append({
@@ -166,7 +160,7 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
                 object_name=video_doc["processed_object_name"]
             )
         except Exception:
-            pass  # Ignore if processed video doesn't exist
+            pass
 
     # Delete from MongoDB
     try:

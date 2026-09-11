@@ -325,7 +325,6 @@ def stop_recording(current_user: dict = Depends(get_current_user)):
         "content_type": "video/mp4",
         "file_size": file_size,
         "uploaded_at": now,
-        # extra metadata (safe to keep)
         "source": "stereo_camera",
         "layout": "side_by_side",
         "fps": CAP_FPS,
