@@ -90,7 +90,9 @@ def triangulate_keypoints(kp_left, kp_right, calib, conf_threshold=0.5):
 
 
 def angle_3d(a, b, c):
-    """3D joint angle at b (degrees), or None if any point missing."""
+    """
+    3D joint angle at b (degrees), or None if any point missing.
+    """
     if np.any(np.isnan([a, b, c])):
         return None
     v1, v2 = a - b, c - b
@@ -98,7 +100,10 @@ def angle_3d(a, b, c):
     if n1 == 0 or n2 == 0:
         return None
     cosang = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
-    return float(np.degrees(np.arccos(cosang)))
+    interior_angle = np.degrees(np.arccos(cosang))
+
+    anatomical_angle = 180 - interior_angle
+    return float(anatomical_angle)
 
 
 # --------------------------------------------------------------------------- #

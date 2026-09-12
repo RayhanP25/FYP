@@ -29,7 +29,7 @@ from database import client, database_name
 from minio_client import minio_client
 from routes.users import get_current_user
 
-router = APIRouter(prefix="/api/camera", tags=["camera"])
+router = APIRouter(prefix="/camera", tags=["camera"])
 
 CAMERA_MODE = os.getenv("CAMERA_MODE", "USB").upper()
 PHONE_1_IP = os.getenv("PHONE_1_IP", "")

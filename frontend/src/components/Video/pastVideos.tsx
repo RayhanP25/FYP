@@ -78,9 +78,16 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
     const videos = videosData?.videos || [];
 
     const filteredVideos = useMemo(() => {
-        if (searchTerm === '') return videos;
+        let result = videos;
 
-        return videos.filter(video =>
+        // Sort by uploaded_at in descending order (newest first)
+        result = [...result].sort((a, b) => 
+            new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()
+        );
+
+        if (searchTerm === '') return result;
+
+        return result.filter(video =>
             video.original_filename.toLowerCase().includes(searchTerm.toLowerCase())
         );
     }, [searchTerm, videos]);
@@ -176,10 +183,11 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                 ) : (
                     <>
                         <div className="overflow-x-auto">
-                            <table className="w-full">
+                            <table className="w-full table-fixed">
                                 <thead>
                                     <tr className="border-b">
-                                        <th className="text-left py-3 px-4 font-medium text-secondary">Video Name</th>
+                                        <th className="text-left py-3 px-4 font-medium text-secondary w-full">Video Name</th>
+                                        <th className="w-12"></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -193,8 +201,8 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                                                 });
                                             }}
                                         >
-                                            <td className="py-3 px-4">
-                                                <div className="flex items-center gap-3">
+                                            <td className="py-3 px-4 max-w-0">
+                                                <div className="flex items-center gap-3 min-w-0">
                                                     <VideoThumbnail videoId={video.video_id} />
                                                     <div className="flex-1 min-w-0">
                                                         <p className="font-medium truncate" title={video.original_filename}>

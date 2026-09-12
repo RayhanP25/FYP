@@ -2,7 +2,7 @@
 import obsws_python as obs
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/api/obs", tags=["OBS Integration"])
+router = APIRouter(prefix="/obs", tags=["OBS Integration"])
 
 # Initialize OBS WebSocket Client
 # Ensure OBS is running, WebSocket is enabled on port 4455, and the password matches
