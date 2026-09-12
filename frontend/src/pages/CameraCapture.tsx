@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/axiosInstance';
 import { Camera, VideoOff, Video, StopCircle } from 'lucide-react';
 import { toast } from 'react-toastify';
 import AppLayout from '../layout/AppLayout';
+import { getVideoUrl } from '../api/videoApi';
 
 export default function CameraCapture() {
+    const navigate = useNavigate();
     const [isStreaming, setIsStreaming] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
     const [isConnecting, setIsConnecting] = useState(false);
@@ -85,11 +88,15 @@ export default function CameraCapture() {
             setIsRecording(false);
             setLastVideoId(data.video_id);
             toast.update(id, {
-                render: `Saved ${data.frames} frames. Find it in Videos to analyze.`,
+                render: `Saved ${data.frames} frames. Redirecting to analysis...`,
                 type: 'success',
                 isLoading: false,
-                autoClose: 4000,
+                autoClose: 2000,
             });
+            
+            // Automatically navigate to analysis page
+            const videoData = await getVideoUrl(data.video_id);
+            navigate(`/kinematic-analysis/${data.video_id}?url=${encodeURIComponent(videoData.presigned_url)}`);
         } catch (error: unknown) {
             const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
             toast.update(id, {
