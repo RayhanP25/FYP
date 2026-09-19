@@ -8,11 +8,11 @@ const BONES_LEFT: [number, number][] = [[1, 2], [2, 4], [4, 6], [6, 8], [2, 10],
 const BONES_RIGHT: [number, number][] = [[1, 3], [3, 5], [5, 7], [7, 9], [3, 11], [11, 13], [13, 15], [15, 17]];
 const BONES_CENTER: [number, number][] = [[0, 1], [10, 11]];
 
-// Matches the app theme in src/styles/app.css
-const COL_LEFT = "#FF6B3D";   // primary orange
-const COL_RIGHT = "#4C9AFF";  // complementary blue
-const COL_CENTER = "#9AA4BC"; // text-secondary
-const COL_JOINT = "#EAEEF7";  // text
+
+const COL_LEFT = "#FF6B3D";   
+const COL_RIGHT = "#4C9AFF";  
+const COL_CENTER = "#9AA4BC"; 
+const COL_JOINT = "#EAEEF7";  
 const COL_GRID = "rgba(154, 164, 188, 0.14)";
 
 export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Props) {
@@ -78,7 +78,6 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
     };
     const P = f.keypoints_3d.map(project);
 
-    // Subtle floor grid
     ctx.strokeStyle = COL_GRID;
     ctx.lineWidth = 1;
     for (let g = -2; g <= 2; g++) {

@@ -14,7 +14,6 @@ const ANGLE_NAMES: Record<string, string> = { left_knee: 'Left Knee', right_knee
 
 const ANGLE_COLORS: Record<string, string> = { left_knee: '#FF6B3D', right_knee: '#4C9AFF', left_hip: '#3DD68C', right_hip: '#A78BFA', left_elbow: '#FFC24B', right_elbow: '#FF7A9A', left_wrist: '#2DD4BF', right_wrist: '#A3C644', left_shoulder: '#38BDF8', right_shoulder: '#C084FC', left_ankle: '#F97362', right_ankle: '#7C9CF5' };
 
-// Mirrors the tokens in src/styles/app.css so the canvas chart matches the DOM
 const THEME = { surface: '#121826', border: '#222B3D', text: '#EAEEF7', textSecondary: '#9AA4BC', textMuted: '#5C6680', primary: '#FF6B3D' };
 
 const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
@@ -40,7 +39,6 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
 
     const is3D = !!analysisData?.frames_3d?.length;
 
-    // Only offer joints that actually have data (3D has no wrists)
     const availableAngles = analysisData
         ? Object.keys(ANGLE_NAMES).filter((name) =>
               is3D

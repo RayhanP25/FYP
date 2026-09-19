@@ -16,7 +16,13 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
     const [currentVideoUrl, setCurrentVideoUrl] = useState(videoUrl);
     const [error, setError] = useState<string | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [isAnalyzed, setIsAnalyzed] = useState(false);
+    const [isAnalyzed, setIsAnalyzed] = useState<boolean | null>(null);
+
+    useEffect(() => {
+        api.get(`/api/get-analysis/${videoId}`)
+            .then(() => setIsAnalyzed(true))
+            .catch(() => setIsAnalyzed(false));
+    }, [videoId]);
 
     // --- EVENT-DRIVEN TIME SYNC ---
     useEffect(() => {
@@ -81,7 +87,7 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
 
             <video ref={videoRef} src={currentVideoUrl} className="w-full h-full object-contain" controls />
             
-            {!isAnalyzed && (
+            {isAnalyzed === false && (
                 <div className="absolute top-4 right-4 z-10">
                     <Button onClick={analyzePose} disabled={isAnalyzing} className="bg-primary/90 backdrop-blur-sm text-text-inverse hover:bg-primary transition-colors rounded-lg px-4 py-2 flex items-center gap-2 text-sm">
                         {isAnalyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing AI...</> : <><Wand2 className="w-4 h-4" /> Extract Kinematics</>}
