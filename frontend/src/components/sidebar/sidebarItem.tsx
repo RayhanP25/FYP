@@ -14,9 +14,9 @@ const SidebarItem = ({ icon: Icon, text, href }: SidebarElementProps) => {
     return (
         <Link
             to={href}
-            className={`w-full flex items-center gap-3 px-4 py-4 rounded-lg text-sm transition-colors ${isActive ? 'text-primary' : 'text-text-primary hover:bg-background'}`}
+            className={`w-full flex items-center gap-3 px-4 py-4 rounded-lg text-sm transition-colors ${isActive ? 'text-primary' : 'text-text hover:bg-background'}`}
         >
-            <Icon className={`w-5 h-5 ${isActive ? 'text-primary' : 'text-text-primary'}`} />
+            <Icon className={`w-5 h-5 ${isActive ? 'text-primary' : 'text-text'}`} />
             <span className="font-light">{text}</span>
             {isActive && (<div className="ml-auto w-1 h-5 bg-white rounded-full" />)}
         </Link>

@@ -58,7 +58,7 @@ function Login() {
             <div className="space-y-2">
               <label className="block text-sm font-medium text-text mb-2">Email</label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                 <input
                   type="email"
                   name="email"
@@ -74,7 +74,7 @@ function Login() {
             <div className="space-y-2">
               <label className="block text-sm font-medium text-text mb-2">Password</label>
               <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                 <input
                   type={showPassword ? 'text' : 'password'}
                   name="password"
@@ -87,7 +87,7 @@ function Login() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>

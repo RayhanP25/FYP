@@ -8,13 +8,6 @@ const BONES_LEFT: [number, number][] = [[1, 2], [2, 4], [4, 6], [6, 8], [2, 10],
 const BONES_RIGHT: [number, number][] = [[1, 3], [3, 5], [5, 7], [7, 9], [3, 11], [11, 13], [13, 15], [15, 17]];
 const BONES_CENTER: [number, number][] = [[0, 1], [10, 11]];
 
-
-const COL_LEFT = "#FF6B3D";   
-const COL_RIGHT = "#4C9AFF";  
-const COL_CENTER = "#9AA4BC"; 
-const COL_JOINT = "#EAEEF7";  
-const COL_GRID = "rgba(154, 164, 188, 0.14)";
-
 export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [frames, setFrames] = useState<Frame3D[]>([]);
@@ -34,6 +27,16 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
         .catch(() => {});
     }
   }, [videoId, apiBase, analysis]);
+
+  const COL = useMemo(() => {
+    const v = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    return {
+      left: v('--color-primary'),
+      right: '#EE6983',
+      center: v('--color-text-muted'),
+      joint: v('--color-text'),
+    };
+  }, []);
 
   const { center, radius } = useMemo(() => {
     const pts: number[][] = [];
@@ -78,7 +81,8 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
     };
     const P = f.keypoints_3d.map(project);
 
-    ctx.strokeStyle = COL_GRID;
+    ctx.strokeStyle = COL.center;
+    ctx.globalAlpha = 0.15;
     ctx.lineWidth = 1;
     for (let g = -2; g <= 2; g++) {
       const a = project([g * 300 + center[0], radius + center[1], -600 + center[2]]);
@@ -88,6 +92,7 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
       if (a && b) { ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke(); }
       if (c && d) { ctx.beginPath(); ctx.moveTo(c.sx, c.sy); ctx.lineTo(d.sx, d.sy); ctx.stroke(); }
     }
+    ctx.globalAlpha = 1;
 
     const drawBones = (bones: [number, number][], col: string) => {
       ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.lineCap = "round";
@@ -96,16 +101,16 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
         if (a && b) { ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke(); }
       });
     };
-    drawBones(BONES_CENTER, COL_CENTER);
-    drawBones(BONES_LEFT, COL_LEFT);
-    drawBones(BONES_RIGHT, COL_RIGHT);
+    drawBones(BONES_CENTER, COL.center);
+    drawBones(BONES_LEFT, COL.left);
+    drawBones(BONES_RIGHT, COL.right);
 
     P.forEach((p) => {
       if (!p) return;
       ctx.beginPath(); ctx.arc(p.sx, p.sy, 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = COL_JOINT; ctx.fill();
+      ctx.fillStyle = COL.joint; ctx.fill();
     });
-  }, [frames, idx, yaw, pitch, zoom, center, radius]);
+  }, [frames, idx, yaw, pitch, zoom, center, radius, COL]);
 
   const onDown = (e: React.MouseEvent) => { drag.current = { x: e.clientX, y: e.clientY }; };
   const onMove = (e: React.MouseEvent) => {
@@ -118,7 +123,7 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
   const onWheel = useCallback((e: React.WheelEvent) => setZoom((z) => Math.max(0.3, Math.min(4, z - e.deltaY * 0.001))), []);
 
   return (
-    <div className="w-full h-full relative bg-background font-sans overflow-hidden">
+    <div className="w-full h-full relative bg-background-main font-sans overflow-hidden">
       <canvas
         ref={canvasRef}
         style={{ width: "100%", height: "100%", cursor: drag.current ? "grabbing" : "grab", touchAction: "none" }}
@@ -126,12 +131,12 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
         onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onWheel={onWheel}
       />
       
-      <div className="absolute top-4 right-4 px-2.5 py-1 bg-background-main/90 backdrop-blur-sm border border-border rounded-full text-[10px] text-text-muted shadow-sm">
+      <div className="absolute top-4 right-4 px-2.5 py-1 bg-background/90 backdrop-blur-sm border border-border rounded-full text-[10px] text-text-muted shadow-sm">
         FR {idx}
       </div>
 
       <div className="absolute bottom-4 left-0 right-0 flex justify-center pointer-events-none">
-        <div className="flex items-center gap-4 text-[10px] text-text-muted bg-background-main/90 backdrop-blur-sm px-4 py-2 rounded-full border border-border shadow-sm pointer-events-auto">
+        <div className="flex items-center gap-4 text-[10px] text-text-muted bg-background/90 backdrop-blur-sm px-4 py-2 rounded-full border border-border shadow-sm pointer-events-auto">
             <span>Drag to rotate • Scroll to zoom</span>
             <div className="w-[1px] h-3 bg-border"></div>
             <button onClick={() => { setYaw(0.5); setPitch(0.15); setZoom(1); }} className="text-primary hover:brightness-110 font-semibold transition-all">Reset</button>

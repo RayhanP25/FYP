@@ -12,9 +12,9 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         const baseClasses = 'inline-flex items-center justify-center font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
 
         const variants = {
-            primary: 'bg-primary text-text-primary/70 hover:brightness-90 focus:ring-primary',
-            secondary: 'bg-background-main border border-border text-text-primary/70 hover:bg-border hover:brightness-110 focus:ring-border',
-            ghost: 'text-text-primary/70 hover:bg-background-main focus:ring-border'
+            primary: 'bg-primary text-text-inverse hover:brightness-90 focus:ring-primary',
+            secondary: 'bg-background-main border border-border text-text hover:bg-border hover:brightness-110 focus:ring-border',
+            ghost: 'text-text hover:bg-background-main focus:ring-border'
         };
 
         const sizes = {

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/axiosInstance';
 import * as echarts from 'echarts';
@@ -12,9 +12,7 @@ interface FrameData { frame_index: number; keypoints: number[][] | null; angles:
 
 const ANGLE_NAMES: Record<string, string> = { left_knee: 'Left Knee', right_knee: 'Right Knee', left_hip: 'Left Hip', right_hip: 'Right Hip', left_elbow: 'Left Elbow', right_elbow: 'Right Elbow', left_wrist: 'Left Wrist', right_wrist: 'Right Wrist', left_shoulder: 'Left Shoulder', right_shoulder: 'Right Shoulder', left_ankle: 'Left Ankle', right_ankle: 'Right Ankle' };
 
-const ANGLE_COLORS: Record<string, string> = { left_knee: '#FF6B3D', right_knee: '#4C9AFF', left_hip: '#3DD68C', right_hip: '#A78BFA', left_elbow: '#FFC24B', right_elbow: '#FF7A9A', left_wrist: '#2DD4BF', right_wrist: '#A3C644', left_shoulder: '#38BDF8', right_shoulder: '#C084FC', left_ankle: '#F97362', right_ankle: '#7C9CF5' };
-
-const THEME = { surface: '#121826', border: '#222B3D', text: '#EAEEF7', textSecondary: '#9AA4BC', textMuted: '#5C6680', primary: '#FF6B3D' };
+const ANGLE_COLORS: Record<string, string> = { left_knee: '#F55036', right_knee: '#EE6983', left_hip: '#D1C49F', right_hip: '#9B8EC4', left_elbow: '#E8A04C', right_elbow: '#C97F6B', left_wrist: '#8FA98F', right_wrist: '#7FA3B8', left_shoulder: '#E8C06B', right_shoulder: '#B08BB0', left_ankle: '#E0E0E0', right_ankle: '#9CA3AF' };
 
 const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
     const [selectedAngles, setSelectedAngles] = useState<string[]>(['left_knee']);
@@ -38,6 +36,18 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
 
 
     const is3D = !!analysisData?.frames_3d?.length;
+
+    const THEME = useMemo(() => {
+        const v = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+        return {
+            surface: v('--color-background'),
+            border: v('--color-border'),
+            text: v('--color-text'),
+            textSecondary: v('--color-text-secondary'),
+            textMuted: v('--color-text-muted'),
+            primary: v('--color-primary'),
+        };
+    }, []);
 
     const availableAngles = analysisData
         ? Object.keys(ANGLE_NAMES).filter((name) =>
@@ -103,7 +113,7 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
         const handleResize = () => chartInstance.current?.resize();
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
-    }, [analysisData, selectedAngles, xAxisMode]);
+    }, [analysisData, selectedAngles, xAxisMode, THEME]);
 
     // EVENT-DRIVEN CURSOR SYNC (Throttled to 20fps)
     const lastUpdate = useRef<number>(0);
@@ -116,12 +126,12 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
 
             const xVal = xAxisMode === 'time' ? time : time * (analysisData.fps || 30);
             chartInstance.current.setOption({
-                series: [{ markLine: { animation: false, silent: true, symbol: ['none', 'none'], label: { show: false }, data: [{ xAxis: xVal }], lineStyle: { color: THEME.primary, width: 2, type: 'solid' } } }]
+                series: [{ markLine: { animation: false, silent: true, symbol: ['none', 'none'], label: { show: false }, data: [{ xAxis: xVal }], lineStyle: { color: '#FFFFFF', width: 2, type: 'solid' } } }]
             });
         };
         window.addEventListener('sync-time', handleSync);
         return () => window.removeEventListener('sync-time', handleSync);
-    }, [xAxisMode, analysisData]);
+    }, [xAxisMode, analysisData, THEME]);
 
     if (isLoading || !analysisData) return <div className="h-full flex items-center justify-center text-text-muted text-sm">Loading analysis data...</div>;
 
@@ -129,12 +139,12 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
         <div className="flex flex-col w-full h-full p-5 relative">
             <div className="flex items-center justify-between mb-4 flex-shrink-0 z-10 relative">
                 <DropdownMenu>
-                    <DropdownMenuTrigger className="inline-flex items-center gap-3 px-4 py-2 text-sm bg-background-main border border-border rounded-lg text-text hover:bg-background-raised transition-colors">
+                    <DropdownMenuTrigger className="inline-flex items-center gap-3 px-4 py-2 text-sm bg-background border border-border rounded-lg text-text hover:bg-border transition-colors">
                         <span className="font-medium">{selectedAngles.length} Joints Tracked</span> <ChevronDown className="w-4 h-4 text-text-muted" />
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent className="w-64 bg-background-main border-border text-text rounded-lg p-2">
+                    <DropdownMenuContent className="w-64 bg-background border-border text-text rounded-lg p-2">
                         {availableAngles.map((k) => (
-                            <DropdownMenuCheckboxItem key={k} checked={selectedAngles.includes(k)} onCheckedChange={(c) => setSelectedAngles(p => c ? [...p, k] : p.filter(a => a !== k))} className="hover:bg-background-raised rounded-md cursor-pointer">
+                            <DropdownMenuCheckboxItem key={k} checked={selectedAngles.includes(k)} onCheckedChange={(c) => setSelectedAngles(p => c ? [...p, k] : p.filter(a => a !== k))} className="hover:bg-border rounded-md cursor-pointer">
                                 <div className="flex items-center gap-3 py-1">
                                     <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: ANGLE_COLORS[k] }} />
                                     <span className="font-medium text-sm">{ANGLE_NAMES[k]}</span>
@@ -144,7 +154,7 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
                     </DropdownMenuContent>
                 </DropdownMenu>
 
-                <button onClick={() => setXAxisMode(xAxisMode === 'time' ? 'frame' : 'time')} className="flex items-center gap-3 bg-background-main border border-border rounded-lg px-4 py-2 cursor-pointer hover:bg-background-raised transition-colors" title={xAxisMode === 'time' ? 'Showing time — switch to frames' : 'Showing frames — switch to time'}>
+                <button onClick={() => setXAxisMode(xAxisMode === 'time' ? 'frame' : 'time')} className="flex items-center gap-3 bg-background border border-border rounded-lg px-4 py-2 cursor-pointer hover:bg-border transition-colors" title={xAxisMode === 'time' ? 'Showing time — switch to frames' : 'Showing frames — switch to time'}>
                     <Clock className={`w-4 h-4 ${xAxisMode === 'time' ? 'text-primary' : 'text-text-muted'}`} />
                     <span className="text-xs text-text-muted">/</span>
                     <Frame className={`w-4 h-4 ${xAxisMode === 'frame' ? 'text-primary' : 'text-text-muted'}`} />

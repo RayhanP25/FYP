@@ -48,12 +48,12 @@ const AnalysisPage = () => {
                 
                 {/* Top Row: Video & 3D Viewer */}
                 <div className="flex flex-row h-[42%] gap-4 flex-shrink-0">
-                    <div className={`${isStereo ? 'w-1/2' : 'w-full'} h-full bg-background border border-border rounded-xl shadow-sm overflow-hidden relative`}>
+                    <div className={`${isStereo ? 'w-1/2' : 'w-full'} h-full bg-background-main border border-border rounded-xl shadow-sm overflow-hidden relative`}>
                         <VideoPlayer videoId={videoId} videoUrl={videoUrl} />
                     </div>
                     
                     {isStereo && (
-                        <div className="w-1/2 h-full bg-background border border-border rounded-xl shadow-sm overflow-hidden">
+                        <div className="w-1/2 h-full bg-background-main border border-border rounded-xl shadow-sm overflow-hidden">
                             <Skeleton3DViewer videoId={videoId} apiBase="http://localhost:8000" />
                         </div>
                     )}
@@ -61,7 +61,7 @@ const AnalysisPage = () => {
 
                 {/* Bottom Row: Chart */}
                 <div className="flex-1 min-h-0 w-full pb-1">
-                    <div className="h-full w-full bg-background border border-border rounded-xl shadow-sm overflow-hidden">
+                    <div className="h-full w-full bg-background-main border border-border rounded-xl shadow-sm overflow-hidden">
                         <KinematicAnalysis videoId={videoId} />
                     </div>
                 </div>
