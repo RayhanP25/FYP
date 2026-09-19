@@ -81,12 +81,14 @@ def _split_to_temp(input_path, target_w):
 
 
 def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
-                         target_w=1280):
+                         target_w=1280, output_path_right=None):
     """
-    input_path  : the side-by-side recording
-    output_path : where to write the 2D overlay of the LEFT view (so the normal
-                  video player still has something to show)
-    calib_path  : calibration.npz from stereo_calibrate.py
+    input_path        : the side-by-side recording
+    output_path       : where to write the 2D overlay of the LEFT view
+    output_path_right : optional, where to write the 2D overlay of the RIGHT
+                        view. When given it is kept (not deleted) so the caller
+                        can store it and let the user switch between views.
+    calib_path        : calibration.npz from stereo_calibrate.py
     """
     if not os.path.exists(calib_path):
         raise RuntimeError(
@@ -94,7 +96,8 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
     calib = load_calibration(calib_path)
 
     lp, rp, fps = _split_to_temp(input_path, target_w)
-    roTmp = tempfile.mktemp(suffix="_Ro.mp4")
+    keep_right = output_path_right is not None
+    roTmp = output_path_right or tempfile.mktemp(suffix="_Ro.mp4")
     try:
         # left overlay goes to output_path (the displayed processed video)
         resL = process_video_with_overlays(lp, output_path, apply_healing=False)
@@ -128,7 +131,8 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
                               "keypoints_3d": kp_list,
                               "angles_3d": angles})
     finally:
-        for p in (lp, rp, roTmp):
+        cleanup = [lp, rp] if keep_right else [lp, rp, roTmp]
+        for p in cleanup:
             if os.path.exists(p):
                 os.unlink(p)
 

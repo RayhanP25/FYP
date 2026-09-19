@@ -17,12 +17,44 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
     const [error, setError] = useState<string | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [isAnalyzed, setIsAnalyzed] = useState<boolean | null>(null);
+    const [view, setView] = useState<'left' | 'right'>('left');
+    const [hasRightView, setHasRightView] = useState(false);
 
     useEffect(() => {
         api.get(`/api/get-analysis/${videoId}`)
             .then(() => setIsAnalyzed(true))
             .catch(() => setIsAnalyzed(false));
     }, [videoId]);
+
+    const checkRightView = useCallback(async () => {
+        try {
+            const data = await getVideoUrl(videoId);
+            setHasRightView(!!data.has_right_view);
+        } catch { /* no right view available */ }
+    }, [videoId]);
+
+    useEffect(() => { checkRightView(); }, [checkRightView]);
+
+    const switchView = async (next: 'left' | 'right') => {
+        if (next === view) return;
+        const video = videoRef.current;
+        const resumeAt = video?.currentTime ?? 0;
+        const wasPlaying = video ? !video.paused : false;
+        try {
+            const data = await getVideoUrl(videoId, next);
+            setView(next);
+            setCurrentVideoUrl(data.presigned_url);
+            if (video) {
+                video.src = data.presigned_url;
+                video.addEventListener('loadedmetadata', () => {
+                    video.currentTime = resumeAt;
+                    if (wasPlaying) video.play();
+                }, { once: true });
+            }
+        } catch {
+            toast.error('Failed to switch camera view');
+        }
+    };
 
     // --- EVENT-DRIVEN TIME SYNC ---
     useEffect(() => {
@@ -71,6 +103,7 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
             toast.success('Pose analysis completed!');
             setIsAnalyzed(true);
             if (response.data.status === 'completed' || response.data.status === 'already_processed') await refreshVideoUrl();
+            await checkRightView();
             window.dispatchEvent(new CustomEvent('analysis-complete', { detail: { videoId } }));
         } catch (err) { toast.error('Analysis failed'); } finally { setIsAnalyzing(false); }
     };
@@ -86,6 +119,20 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
             </AnimatePresence>
 
             <video ref={videoRef} src={currentVideoUrl} className="w-full h-full object-contain" controls />
+
+            {hasRightView && (
+                <div className="absolute top-4 left-4 z-10 flex items-center rounded-lg border border-border bg-background/90 backdrop-blur-sm p-0.5 text-xs">
+                    {(['left', 'right'] as const).map((v) => (
+                        <button
+                            key={v}
+                            onClick={() => switchView(v)}
+                            className={`px-3 py-1 rounded-md capitalize transition-colors ${view === v ? 'bg-primary text-text-inverse font-medium' : 'text-text-muted hover:text-text'}`}
+                        >
+                            {v}
+                        </button>
+                    ))}
+                </div>
+            )}
             
             {isAnalyzed === false && (
                 <div className="absolute top-4 right-4 z-10">

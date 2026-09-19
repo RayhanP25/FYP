@@ -57,11 +57,15 @@ async def process_video(
     # 4. Process. Stereo recordings -> triangulation (3D); everything else -> normal 2D.
     is_stereo = (video_doc.get("layout") == "side_by_side"
                  or video_doc.get("source") == "stereo_camera")
+    temp_output_right_path = None
     try:
         temp_output_path = tempfile.mktemp(suffix="_processed.mp4")
         if is_stereo and os.path.exists(CALIB_PATH):
             from stereo_process import process_stereo_video
-            result = process_stereo_video(temp_input_path, temp_output_path, calib_path=CALIB_PATH)
+            temp_output_right_path = tempfile.mktemp(suffix="_processed_right.mp4")
+            result = process_stereo_video(temp_input_path, temp_output_path,
+                                          calib_path=CALIB_PATH,
+                                          output_path_right=temp_output_right_path)
         else:
             # If it's stereo but calibration is missing, fall back to 2D so it
             # still works (analyses the left half is not split here -- whole frame).
@@ -70,6 +74,8 @@ async def process_video(
         os.unlink(temp_input_path)
         if os.path.exists(temp_output_path):
             os.unlink(temp_output_path)
+        if temp_output_right_path and os.path.exists(temp_output_right_path):
+            os.unlink(temp_output_right_path)
         raise HTTPException(status_code=500, detail=f"Pose estimation failed: {str(e)}")
 
     # 5. Delete input temp file
@@ -94,11 +100,30 @@ async def process_video(
     # 7. Delete output temp file
     os.unlink(temp_output_path)
 
+    # 7b. Upload the RIGHT view too (stereo only) so the UI can switch views
+    processed_object_name_right = None
+    if temp_output_right_path and os.path.exists(temp_output_right_path):
+        try:
+            processed_object_name_right = f"processed_right_{uuid.uuid4()}.mp4"
+            with open(temp_output_right_path, 'rb') as f:
+                minio_client.put_object(
+                    bucket_name="sport-pose-videos",
+                    object_name=processed_object_name_right,
+                    data=f,
+                    length=-1,
+                    part_size=10*1024*1024,
+                    content_type="video/mp4"
+                )
+        except Exception:
+            processed_object_name_right = None
+        finally:
+            os.unlink(temp_output_right_path)
+
     # 8. Update video metadata with processed video info
-    videos_collection.update_one(
-        {"_id": ObjectId(video_id)},
-        {"$set": {"processed_object_name": processed_object_name}}
-    )
+    update_fields = {"processed_object_name": processed_object_name}
+    if processed_object_name_right:
+        update_fields["processed_object_name_right"] = processed_object_name_right
+    videos_collection.update_one({"_id": ObjectId(video_id)}, {"$set": update_fields})
 
     # 9. Store keypoint analysis in MongoDB (stereo result also carries frames_3d)
     analysis_collection = client[database_name]["pose_analysis"]

@@ -65,7 +65,7 @@ async def upload_video(video: UploadFile = File(...), current_user: dict = Depen
     return {"object_name": object_name, "video_id": str(video_doc["_id"])}
 
 @router.get("/get-video/{video_id}")
-async def get_video(video_id: str, current_user: dict = Depends(get_current_user)):
+async def get_video(video_id: str, view: str = "left", current_user: dict = Depends(get_current_user)):
     # Find video metadata in MongoDB
     videos_collection = client[database_name]["videos"]
     
@@ -81,8 +81,13 @@ async def get_video(video_id: str, current_user: dict = Depends(get_current_user
     if current_user.get("role") != "admin" and video_doc["user_id"] != str(current_user["_id"]):
         raise HTTPException(status_code=403, detail="Access denied: You don't own this video")
     
-    # Use processed video if available, otherwise use original
-    object_name = video_doc.get("processed_object_name") or video_doc["object_name"]
+    # Use processed video if available, otherwise use original.
+    # Stereo clips also have a right-view overlay the user can switch to.
+    right_object_name = video_doc.get("processed_object_name_right")
+    if view == "right" and right_object_name:
+        object_name = right_object_name
+    else:
+        object_name = video_doc.get("processed_object_name") or video_doc["object_name"]
     
     # Generate presigned URL from MinIO
     try:
@@ -102,7 +107,9 @@ async def get_video(video_id: str, current_user: dict = Depends(get_current_user
             or video_doc.get("object_name", "Untitled video"),
         "content_type": video_doc.get("content_type", "video/mp4"),
         "uploaded_at": video_doc.get("uploaded_at") or video_doc.get("created_at"),
-        "is_processed": bool(video_doc.get("processed_object_name"))
+        "is_processed": bool(video_doc.get("processed_object_name")),
+        "view": "right" if (view == "right" and right_object_name) else "left",
+        "has_right_view": bool(right_object_name)
     }
 
 @router.get("/my-videos")
@@ -158,15 +165,16 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete video from storage: {str(e)}")
 
-    # Delete processed video if exists
-    if video_doc.get("processed_object_name"):
-        try:
-            minio_client.remove_object(
-                bucket_name=video_doc["bucket_name"],
-                object_name=video_doc["processed_object_name"]
-            )
-        except Exception:
-            pass  # Ignore if processed video doesn't exist
+    # Delete processed videos if they exist
+    for key in ("processed_object_name", "processed_object_name_right"):
+        if video_doc.get(key):
+            try:
+                minio_client.remove_object(
+                    bucket_name=video_doc["bucket_name"],
+                    object_name=video_doc[key]
+                )
+            except Exception:
+                pass  # Ignore if processed video doesn't exist
 
     # Delete from MongoDB
     try:
