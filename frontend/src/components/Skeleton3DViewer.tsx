@@ -17,6 +17,7 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
   const [pitch, setPitch] = useState(0.15);
   const [zoom, setZoom] = useState(1);
   const drag = useRef<{ x: number; y: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
     if (analysis?.frames_3d?.length) { setFrames(analysis.frames_3d); setFps(analysis.fps || 30); return; }
@@ -65,7 +66,7 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
     const ctx = cv.getContext("2d"); if (!ctx) return;
     const W = cv.width, H = cv.height;
     ctx.clearRect(0, 0, W, H);
-    const f = frames[idx]; if (!f) return;
+    const f = frames[idx]; if (!f?.keypoints_3d) return;
 
     const S = ((Math.min(W, H) * 0.42) / radius) * zoom;
     const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
@@ -112,21 +113,24 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
     });
   }, [frames, idx, yaw, pitch, zoom, center, radius, COL]);
 
-  const onDown = (e: React.MouseEvent) => { drag.current = { x: e.clientX, y: e.clientY }; };
+  const onDown = (e: React.MouseEvent) => { drag.current = { x: e.clientX, y: e.clientY }; setDragging(true); };
   const onMove = (e: React.MouseEvent) => {
-    if (!drag.current) return;
-    setYaw((y) => y + (e.clientX - drag.current!.x) * 0.01);
-    setPitch((p) => Math.max(-1.4, Math.min(1.4, p + (e.clientY - drag.current!.y) * 0.01)));
+    const start = drag.current;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
     drag.current = { x: e.clientX, y: e.clientY };
+    setYaw((y) => y + dx * 0.01);
+    setPitch((p) => Math.max(-1.4, Math.min(1.4, p + dy * 0.01)));
   };
-  const onUp = () => { drag.current = null; };
+  const onUp = () => { drag.current = null; setDragging(false); };
   const onWheel = useCallback((e: React.WheelEvent) => setZoom((z) => Math.max(0.3, Math.min(4, z - e.deltaY * 0.001))), []);
 
   return (
     <div className="w-full h-full relative bg-background-main font-sans overflow-hidden">
       <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: "100%", cursor: drag.current ? "grabbing" : "grab", touchAction: "none" }}
+        style={{ width: "100%", height: "100%", cursor: dragging ? "grabbing" : "grab", touchAction: "none" }}
         width={800} height={600}
         onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onWheel={onWheel}
       />
