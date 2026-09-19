@@ -121,7 +121,7 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
             setIsDeleteDialogOpen(false);
             setVideoToDelete(null);
         },
-        onError: (error: Error) => {
+        onError: () => {
             toast.error('Failed to delete video');
         }
     });

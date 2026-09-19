@@ -8,7 +8,7 @@ Depends on a calibration produced by stereo_calibrate.py, which stores:
               (T is in the units of the checkerboard square size you measured,
                so 3D output is in those units -- use millimetres)
 
-Method (the standard, robust one):
+Method:
     1. Undistort both points to NORMALISED camera coordinates (removes lens
        distortion and the intrinsics).
     2. Triangulate with P1 = [I|0], P2 = [R|T].

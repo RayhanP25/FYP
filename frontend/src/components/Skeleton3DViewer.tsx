@@ -8,10 +8,12 @@ const BONES_LEFT: [number, number][] = [[1, 2], [2, 4], [4, 6], [6, 8], [2, 10],
 const BONES_RIGHT: [number, number][] = [[1, 3], [3, 5], [5, 7], [7, 9], [3, 11], [11, 13], [13, 15], [15, 17]];
 const BONES_CENTER: [number, number][] = [[0, 1], [10, 11]];
 
-const COL_LEFT = "#22D3EE"; // Bright Cyan
-const COL_RIGHT = "#F472B6"; // Hot Pink
-const COL_CENTER = "#94A3B8"; // Slate
-const COL_JOINT = "#FFFFFF";
+// Matches the app theme in src/styles/app.css
+const COL_LEFT = "#FF6B3D";   // primary orange
+const COL_RIGHT = "#4C9AFF";  // complementary blue
+const COL_CENTER = "#9AA4BC"; // text-secondary
+const COL_JOINT = "#EAEEF7";  // text
+const COL_GRID = "rgba(154, 164, 188, 0.14)";
 
 export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -76,8 +78,8 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
     };
     const P = f.keypoints_3d.map(project);
 
-    // Glowing tech floor grid
-    ctx.strokeStyle = "rgba(34, 211, 238, 0.1)"; 
+    // Subtle floor grid
+    ctx.strokeStyle = COL_GRID;
     ctx.lineWidth = 1;
     for (let g = -2; g <= 2; g++) {
       const a = project([g * 300 + center[0], radius + center[1], -600 + center[2]]);
@@ -116,10 +118,8 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
   const onUp = () => { drag.current = null; };
   const onWheel = useCallback((e: React.WheelEvent) => setZoom((z) => Math.max(0.3, Math.min(4, z - e.deltaY * 0.001))), []);
 
-  const curAngles = frames[idx]?.angles_3d || {};
-
   return (
-    <div className="w-full h-full relative bg-[#060B14] font-sans overflow-hidden">
+    <div className="w-full h-full relative bg-background font-sans overflow-hidden">
       <canvas
         ref={canvasRef}
         style={{ width: "100%", height: "100%", cursor: drag.current ? "grabbing" : "grab", touchAction: "none" }}
@@ -127,28 +127,15 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
         onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onWheel={onWheel}
       />
       
-      {/* High-tech floating HUD with native CSS custom scrollbars */}
-      <div className="absolute top-4 right-4 w-52 bg-slate-900/60 backdrop-blur-md border border-slate-700/50 rounded-2xl p-4 shadow-2xl">
-        <div className="flex justify-between items-center mb-4 border-b border-slate-700/50 pb-2">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">3D Biometrics</span>
-          <span className="text-[10px] text-cyan-300 bg-cyan-500/10 px-2.5 py-0.5 rounded-full font-mono border border-cyan-500/20">FR {idx}</span>
-        </div>
-        
-        <div className="h-56 overflow-y-auto pr-2 space-y-2.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full">
-          {Object.entries(curAngles).map(([k, v]) => (
-            <div key={k} className="flex justify-between text-xs items-center">
-              <span className="text-slate-300 capitalize text-[11px] font-medium tracking-wide">{k.replace(/_/g, " ")}</span>
-              <span className="text-slate-50 font-mono font-semibold">{Math.round(v)}°</span>
-            </div>
-          ))}
-        </div>
+      <div className="absolute top-4 right-4 px-2.5 py-1 bg-background-main/90 backdrop-blur-sm border border-border rounded-full text-[10px] text-text-muted shadow-sm">
+        FR {idx}
       </div>
 
       <div className="absolute bottom-4 left-0 right-0 flex justify-center pointer-events-none">
-        <div className="flex items-center gap-6 text-[10px] text-slate-400 font-mono bg-slate-900/60 backdrop-blur-md px-5 py-2 rounded-full border border-slate-800 shadow-lg pointer-events-auto">
-            <span className="tracking-widest">DRAG TO ROTATE • SCROLL TO ZOOM</span>
-            <div className="w-[1px] h-3 bg-slate-700"></div>
-            <button onClick={() => { setYaw(0.5); setPitch(0.15); setZoom(1); }} className="text-cyan-400 hover:text-cyan-300 font-bold tracking-widest transition-colors">RESET</button>
+        <div className="flex items-center gap-4 text-[10px] text-text-muted bg-background-main/90 backdrop-blur-sm px-4 py-2 rounded-full border border-border shadow-sm pointer-events-auto">
+            <span>Drag to rotate • Scroll to zoom</span>
+            <div className="w-[1px] h-3 bg-border"></div>
+            <button onClick={() => { setYaw(0.5); setPitch(0.15); setZoom(1); }} className="text-primary hover:brightness-110 font-semibold transition-all">Reset</button>
         </div>
       </div>
     </div>
