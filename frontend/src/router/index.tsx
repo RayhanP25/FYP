@@ -12,30 +12,41 @@ import CameraCapture from '../pages/CameraCapture';
 import VideosPage from '../pages/VideosPage';
 import AnalysisPage from '../pages/AnalysisPage';
 
+const AuthLoading = () => (
+  <div className="flex h-screen items-center justify-center bg-background text-text-secondary">
+    Loading...
+  </div>
+);
+
 const PrivateRoute = ({ element }: { element: JSX.Element }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
+  if (loading) return <AuthLoading />;
   return isAuthenticated() ? element : <Navigate to="/login" />;
 };
 
 const AdminRoute = ({ element }: { element: JSX.Element }) => {
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, loading } = useAuth();
+  if (loading) return <AuthLoading />;
   if (!isAuthenticated()) return <Navigate to="/login" />;
   if (user?.role !== 'admin') return <Navigate to="/home" />;
   return element;
 };
 
 const PublicRoute = ({ element }: { element: JSX.Element }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
+  if (loading) return <AuthLoading />;
   return isAuthenticated() ? <Navigate to="/video-test" /> : element;
 };
 
 const AppRoutes = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
 
   const allRoutes: RouteObject[] = [
     {
       path: '/',
-      element: <Navigate to={isAuthenticated() ? "/home" : "/login"} replace />
+      element: loading
+        ? <AuthLoading />
+        : <Navigate to={isAuthenticated() ? "/home" : "/login"} replace />
     },
     {
       path: '/login',
