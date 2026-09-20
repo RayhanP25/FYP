@@ -25,12 +25,12 @@ const Header = () => {
           <div className="flex items-center gap-2 text-sm">
             <span className="text-text-muted">Menu</span>
             <span className="text-text-muted">/</span>
-            <span className="text-text-primary font-medium">{getBreadcrumb()}</span>
+            <span className="text-text font-medium">{getBreadcrumb()}</span>
           </div>
         </div>
 
         <div className="flex items-center gap-4">
-          <button className="p-2 text-text-muted hover:text-text-primary hover:bg-background rounded-lg transition-colors" onClick={() => navigate('/settings')}>
+          <button className="p-2 text-text-muted hover:text-text hover:bg-background rounded-lg transition-colors" onClick={() => navigate('/settings')}>
             <Settings className="w-5 h-5" />
           </button>
         </div>

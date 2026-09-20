@@ -4,6 +4,7 @@ import { api } from '@/api/axiosInstance';
 import { toast } from 'react-toastify';
 import Button from '../ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Loader2, Wand2 } from 'lucide-react';
 
 interface VideoPlayerProps {
     videoId: string;
@@ -14,145 +15,133 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [currentVideoUrl, setCurrentVideoUrl] = useState(videoUrl);
     const [error, setError] = useState<string | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [isAnalyzed, setIsAnalyzed] = useState(false);
+    const [isAnalyzed, setIsAnalyzed] = useState<boolean | null>(null);
+    const [view, setView] = useState<'left' | 'right'>('left');
+    const [hasRightView, setHasRightView] = useState(false);
+
+    useEffect(() => {
+        api.get(`/api/get-analysis/${videoId}`)
+            .then(() => setIsAnalyzed(true))
+            .catch(() => setIsAnalyzed(false));
+    }, [videoId]);
+
+    const checkRightView = useCallback(async () => {
+        try {
+            const data = await getVideoUrl(videoId);
+            setHasRightView(!!data.has_right_view);
+        } catch { /* no right view available */ }
+    }, [videoId]);
+
+    useEffect(() => { checkRightView(); }, [checkRightView]);
+
+    const switchView = async (next: 'left' | 'right') => {
+        if (next === view) return;
+        const video = videoRef.current;
+        const resumeAt = video?.currentTime ?? 0;
+        const wasPlaying = video ? !video.paused : false;
+        try {
+            const data = await getVideoUrl(videoId, next);
+            setView(next);
+            setCurrentVideoUrl(data.presigned_url);
+            if (video) {
+                video.src = data.presigned_url;
+                video.addEventListener('loadedmetadata', () => {
+                    video.currentTime = resumeAt;
+                    if (wasPlaying) video.play();
+                }, { once: true });
+            }
+        } catch {
+            toast.error('Failed to switch camera view');
+        }
+    };
+
+    // --- EVENT-DRIVEN TIME SYNC ---
+    useEffect(() => {
+        let animationFrameId: number;
+        const video = videoRef.current;
+
+        const emitTime = () => {
+            if (video) window.dispatchEvent(new CustomEvent('sync-time', { detail: video.currentTime }));
+        };
+
+        const loop = () => {
+            if (video && !video.paused) emitTime();
+            animationFrameId = requestAnimationFrame(loop);
+        };
+
+        const handleEvents = () => { emitTime(); if (animationFrameId) cancelAnimationFrame(animationFrameId); };
+
+        if (video) {
+            video.addEventListener('play', () => { loop(); });
+            video.addEventListener('pause', handleEvents);
+            video.addEventListener('seeked', handleEvents);
+        }
+
+        return () => {
+            if (video) {
+                video.removeEventListener('play', loop);
+                video.removeEventListener('pause', handleEvents);
+                video.removeEventListener('seeked', handleEvents);
+            }
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        };
+    }, []);
 
     const refreshVideoUrl = useCallback(async () => {
         try {
-            setIsLoading(true);
-            setError(null);
             const videoData = await getVideoUrl(videoId);
             setCurrentVideoUrl(videoData.presigned_url);
-
-            // Update video element src
-            if (videoRef.current) {
-                videoRef.current.src = videoData.presigned_url;
-            }
-        } catch (err) {
-            setError('Failed to refresh video URL. Please try again.');
-            console.error('Error refreshing video URL:', err);
-        } finally {
-            setIsLoading(false);
-        }
+            if (videoRef.current) videoRef.current.src = videoData.presigned_url;
+        } catch (err) { setError('Failed to load media stream.'); }
     }, [videoId]);
 
-    const analyzePose = useCallback(async () => {
+    const analyzePose = async () => {
         try {
             setIsAnalyzing(true);
-            setError(null);
-
             const response = await api.post(`/api/process-video/${videoId}`);
-
-            toast.success('Pose analysis completed successfully!');
+            toast.success('Pose analysis completed!');
             setIsAnalyzed(true);
-
-            // Refresh video URL to get the processed version
-            if (response.data.status === 'completed' || response.data.status === 'already_processed') {
-                await refreshVideoUrl();
-            }
-
-            // Trigger event to notify kinematic analysis component
+            if (response.data.status === 'completed' || response.data.status === 'already_processed') await refreshVideoUrl();
+            await checkRightView();
             window.dispatchEvent(new CustomEvent('analysis-complete', { detail: { videoId } }));
-
-        } catch (err: any) {
-            setError('Failed to analyze pose. Please try again.');
-            toast.error('Pose analysis failed');
-            console.error('Error analyzing pose:', err);
-        } finally {
-            setIsAnalyzing(false);
-        }
-    }, [videoId, refreshVideoUrl]);
-
-    useEffect(() => {
-        if (videoRef.current) {
-            videoRef.current.addEventListener('error', () => {
-                setError('Failed to load video. Please try refreshing.');
-            });
-
-            // Auto-refresh URL every 50 minutes (before 1-hour expiration)
-            const refreshInterval = setInterval(refreshVideoUrl, 50 * 60 * 1000);
-
-            return () => {
-                clearInterval(refreshInterval);
-            };
-        }
-    }, [videoId, videoUrl, refreshVideoUrl]);
+        } catch (err) { toast.error('Analysis failed'); } finally { setIsAnalyzing(false); }
+    };
 
     return (
-        <motion.div
-            className="flex items-start justify-start p-6"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: "easeOut" }}
-        >
-            <motion.div
-                className="w-full max-w-2xl"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.5, delay: 0.2, ease: "easeOut" }}
-            >
-                <AnimatePresence>
-                    {error && (
-                        <motion.div
-                            className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg"
-                            initial={{ opacity: 0, x: -20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: 20 }}
-                            transition={{ duration: 0.3 }}
-                        >
-                            <p className="text-red-600 text-sm mb-2">{error}</p>
-                            <motion.div
-                                whileHover={{ scale: 1.02 }}
-                                whileTap={{ scale: 0.98 }}
-                            >
-                                <Button
-                                    onClick={refreshVideoUrl}
-                                    disabled={isLoading}
-                                    size="sm"
-                                    variant="secondary"
-                                >
-                                    {isLoading ? 'Refreshing...' : 'Refresh Video'}
-                                </Button>
-                            </motion.div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+        <div className="flex flex-col w-full h-full relative bg-black/50">
+            <AnimatePresence>
+                {error && (
+                    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="absolute top-4 left-4 right-4 z-20 p-3 bg-red-500/10 backdrop-blur-sm border border-red-500/20 rounded-lg flex justify-between items-center">
+                        <p className="text-red-400 text-sm font-medium">{error}</p>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
-                <motion.div
-                    className="aspect-video bg-gray-900 rounded-lg shadow-lg overflow-hidden min-h-96 relative"
-                    initial={{ opacity: 0, scale: 1 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ duration: 0.6, delay: 0.3, ease: "easeOut" }}
-                    whileHover={{ boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)" }}
-                >
-                    <video
-                        ref={videoRef}
-                        src={currentVideoUrl}
-                        className="w-full h-full object-cover"
-                        controls
-                    />
-                </motion.div>
+            <video ref={videoRef} src={currentVideoUrl} className="w-full h-full object-contain" controls />
 
-                <div className="flex justify-start gap-3 mt-4">
-                    {!isAnalyzed && (
-                        <Button
-                            onClick={analyzePose}
-                            disabled={isAnalyzing}
-                            size="md"
+            {hasRightView && (
+                <div className="absolute top-4 left-4 z-10 flex items-center rounded-lg border border-border bg-background/90 backdrop-blur-sm p-0.5 text-xs">
+                    {(['left', 'right'] as const).map((v) => (
+                        <button
+                            key={v}
+                            onClick={() => switchView(v)}
+                            className={`px-3 py-1 rounded-md capitalize transition-colors ${view === v ? 'bg-primary text-text-inverse font-medium' : 'text-text-muted hover:text-text'}`}
                         >
-                            {isAnalyzing ? 'Analyzing Pose...' : 'Analyze Pose'}
-                        </Button>
-                    )}
-                    <Button
-                        variant="primary"
-                        size="md"
-                    >
-                        Download Video
+                            {v}
+                        </button>
+                    ))}
+                </div>
+            )}
+            
+            {isAnalyzed === false && (
+                <div className="absolute top-4 right-4 z-10">
+                    <Button onClick={analyzePose} disabled={isAnalyzing} className="bg-primary/90 backdrop-blur-sm text-text-inverse hover:bg-primary transition-colors rounded-lg px-4 py-2 flex items-center gap-2 text-sm">
+                        {isAnalyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing AI...</> : <><Wand2 className="w-4 h-4" /> Extract Kinematics</>}
                     </Button>
                 </div>
-            </motion.div>
-        </motion.div>
+            )}
+        </div>
     );
 };
 

@@ -19,6 +19,8 @@ export interface VideoUrlResponse {
     original_filename: string;
     content_type: string;
     uploaded_at: string;
+    view?: 'left' | 'right';
+    has_right_view?: boolean;
 }
 
 export interface MyVideosResponse {
@@ -38,9 +40,9 @@ export const uploadVideo = async (formData: FormData): Promise<VideoUploadRespon
     }
 };
 
-export const getVideoUrl = async (videoId: string): Promise<VideoUrlResponse> => {
+export const getVideoUrl = async (videoId: string, view: 'left' | 'right' = 'left'): Promise<VideoUrlResponse> => {
     try {
-        const response = await api.get(`/api/get-video/${videoId}`);
+        const response = await api.get(`/api/get-video/${videoId}`, { params: { view } });
         return response.data;
     } catch (error) {
         throw new Error('Failed to get video URL');

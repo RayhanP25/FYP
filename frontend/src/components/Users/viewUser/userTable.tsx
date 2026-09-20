@@ -54,7 +54,7 @@ const UserTable = () => {
         return (
             <section className="bg-background rounded-xl shadow-sm border p-5 flex flex-col">
                 <div className="flex items-center justify-center py-8">
-                    <p className="text-secondary">Loading users...</p>
+                    <p className="text-text-secondary">Loading users...</p>
                 </div>
             </section>
         );
@@ -79,7 +79,7 @@ const UserTable = () => {
             case 'athlete':
                 return 'bg-blue-500/20 text-blue-400';
             default:
-                return 'bg-gray-500/20 text-gray-400';
+                return 'bg-background-main text-text-muted';
         }
     };
 
@@ -91,7 +91,7 @@ const UserTable = () => {
                 </div>
                 <div className="flex gap-2">
                     <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                         <input
                             type="text"
                             placeholder="Search users..."
@@ -104,7 +104,7 @@ const UserTable = () => {
                         />
                     </div>
                     <div className="relative">
-                        <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                        <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                         <select
                             value={selectedRole}
                             onChange={(e) => {
@@ -126,9 +126,9 @@ const UserTable = () => {
                 <table className="w-full">
                     <thead>
                         <tr className="border-b">
-                            <th className="text-left py-3 px-4 font-medium text-secondary">Name</th>
-                            <th className="text-left py-3 px-4 font-medium text-secondary">Email</th>
-                            <th className="text-left py-3 px-4 font-medium text-secondary">Role</th>
+                            <th className="text-left py-3 px-4 font-medium text-text-secondary">Name</th>
+                            <th className="text-left py-3 px-4 font-medium text-text-secondary">Email</th>
+                            <th className="text-left py-3 px-4 font-medium text-text-secondary">Role</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -154,7 +154,7 @@ const UserTable = () => {
                                         </div>
                                     </div>
                                 </td>
-                                <td className="py-3 px-4 text-muted">{user.email}</td>
+                                <td className="py-3 px-4 text-text-muted">{user.email}</td>
                                 <td className="py-3 px-4">
                                     <span className={`px-2 py-1 text-xs rounded-full ${getRoleStyles(user.role)}`}>
                                         {user.role}

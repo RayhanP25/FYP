@@ -1,67 +1,18 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/axiosInstance';
 import * as echarts from 'echarts';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem } from '@/components/dropdown/dropdown';
 import { ChevronDown, Clock, Frame } from 'lucide-react';
 
-interface KinematicAnalysisProps {
-    videoId: string;
-}
+interface KinematicAnalysisProps { videoId: string; }
+interface AngleData { angle: number | null; confidence: number; }
+type AngleMap = Record<string, AngleData>;
+interface FrameData { frame_index: number; keypoints: number[][] | null; angles: AngleMap; }
 
-interface AngleData {
-    angle: number | null;
-    confidence: number;
-}
+const ANGLE_NAMES: Record<string, string> = { left_knee: 'Left Knee', right_knee: 'Right Knee', left_hip: 'Left Hip', right_hip: 'Right Hip', left_elbow: 'Left Elbow', right_elbow: 'Right Elbow', left_wrist: 'Left Wrist', right_wrist: 'Right Wrist', left_shoulder: 'Left Shoulder', right_shoulder: 'Right Shoulder', left_ankle: 'Left Ankle', right_ankle: 'Right Ankle' };
 
-interface FrameData {
-    frame_index: number;
-    keypoints: number[][] | null;
-    angles: {
-        left_knee?: AngleData;
-        right_knee?: AngleData;
-        left_hip?: AngleData;
-        right_hip?: AngleData;
-        left_elbow?: AngleData;
-        right_elbow?: AngleData;
-        left_wrist?: AngleData;
-        right_wrist?: AngleData;
-        left_shoulder?: AngleData;
-        right_shoulder?: AngleData;
-        left_ankle?: AngleData;
-        right_ankle?: AngleData;
-    };
-}
-
-const ANGLE_NAMES: Record<string, string> = {
-    left_knee: 'Left Knee',
-    right_knee: 'Right Knee',
-    left_hip: 'Left Hip',
-    right_hip: 'Right Hip',
-    left_elbow: 'Left Elbow',
-    right_elbow: 'Right Elbow',
-    left_wrist: 'Left Wrist',
-    right_wrist: 'Right Wrist',
-    left_shoulder: 'Left Shoulder',
-    right_shoulder: 'Right Shoulder',
-    left_ankle: 'Left Ankle',
-    right_ankle: 'Right Ankle'
-};
-
-const ANGLE_COLORS: Record<string, string> = {
-    left_knee: '#3b82f6',
-    right_knee: '#ef4444',
-    left_hip: '#10b981',
-    right_hip: '#8b5cf6',
-    left_elbow: '#f59e0b',
-    right_elbow: '#ec4899',
-    left_wrist: '#06b6d4',
-    right_wrist: '#84cc16',
-    left_shoulder: '#14b8a6',
-    right_shoulder: '#a855f7',
-    left_ankle: '#e11d48',
-    right_ankle: '#6366f1'
-};
+const ANGLE_COLORS: Record<string, string> = { left_knee: '#F55036', right_knee: '#EE6983', left_hip: '#D1C49F', right_hip: '#9B8EC4', left_elbow: '#E8A04C', right_elbow: '#C97F6B', left_wrist: '#8FA98F', right_wrist: '#7FA3B8', left_shoulder: '#E8C06B', right_shoulder: '#B08BB0', left_ankle: '#E0E0E0', right_ankle: '#9CA3AF' };
 
 const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
     const [selectedAngles, setSelectedAngles] = useState<string[]>(['left_knee']);
@@ -70,223 +21,147 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
     const chartInstance = useRef<echarts.ECharts | null>(null);
     const queryClient = useQueryClient();
 
-    // Fetch analysis data
-    const { data: analysisData, isLoading, error } = useQuery({
+    const { data: analysisData, isLoading } = useQuery({
         queryKey: ['analysis', videoId],
-        queryFn: async () => {
-            const response = await api.get(`/api/get-analysis/${videoId}`);
-            return response.data.result;
-        },
-        enabled: !!videoId,
-        retry: false
+        queryFn: async () => { const res = await api.get(`/api/get-analysis/${videoId}`); return res.data.result; },
+        enabled: !!videoId
     });
 
-    // Listen for analysis completion and invalidate query
     useEffect(() => {
-        const handleAnalysisComplete = () => {
-            queryClient.invalidateQueries({ queryKey: ['analysis', videoId] });
-        };
-
+        const handleAnalysisComplete = () => queryClient.invalidateQueries({ queryKey: ['analysis', videoId] });
         window.addEventListener('analysis-complete', handleAnalysisComplete);
-
-        return () => {
-            window.removeEventListener('analysis-complete', handleAnalysisComplete);
-        };
+        return () => window.removeEventListener('analysis-complete', handleAnalysisComplete);
     }, [videoId, queryClient]);
 
-    // Update chart when data or settings change
-    useEffect(() => {
-        if (!analysisData || !analysisData.frames.length || !chartRef.current) return;
 
-        const frames = analysisData.frames;
-        const fps = analysisData.fps;
 
-        // Prepare series data for each selected angle
-        const series = selectedAngles.map(angleName => {
-            const data: [number, number][] = [];
+    const is3D = !!analysisData?.frames_3d?.length;
 
-            frames.forEach((frame: FrameData) => {
-                const angleData = frame.angles?.[angleName as keyof typeof frame.angles];
-                if (angleData && angleData.angle !== null && angleData.confidence > 0.5) {
-                    const xValue = xAxisMode === 'time'
-                        ? frame.frame_index / fps
-                        : frame.frame_index;
-                    data.push([xValue, angleData.angle]);
-                }
-            });
-
-            return {
-                name: ANGLE_NAMES[angleName] || angleName,
-                type: 'line',
-                data: data,
-                smooth: true,
-                showSymbol: false,
-                lineStyle: {
-                    width: 2.5,
-                    color: ANGLE_COLORS[angleName] || '#666'
-                },
-                emphasis: {
-                    lineStyle: {
-                        width: 3.5
-                    }
-                },
-                areaStyle: {
-                    opacity: 0.05
-                }
-            };
-        });
-
-        // Initialize or update chart
-        if (!chartInstance.current) {
-            chartInstance.current = echarts.init(chartRef.current);
-        }
-
-        const option = {
-            title: {
-                text: 'Joint Angles Over Time',
-                left: 'center',
-                textStyle: {
-                    fontSize: 14,
-                    fontWeight: 'bold'
-                }
-            },
-            tooltip: {
-                trigger: 'axis',
-                formatter: (params: any) => {
-                    let result = xAxisMode === 'time'
-                        ? `Time: ${params[0].value[0].toFixed(2)}s<br/>`
-                        : `Frame: ${params[0].value[0]}<br/>`;
-                    params.forEach((param: any) => {
-                        result += `${param.seriesName}: ${param.value[1].toFixed(1)}°<br/>`;
-                    });
-                    return result;
-                }
-            },
-            grid: {
-                left: '10%',
-                right: '10%',
-                bottom: '15%',
-                top: '20%'
-            },
-            xAxis: {
-                type: 'value',
-                name: xAxisMode === 'time' ? 'Time (seconds)' : 'Frame Number',
-                nameLocation: 'middle',
-                nameGap: 30,
-                axisLabel: {
-                    formatter: (value: number) => {
-                        if (xAxisMode === 'time') {
-                            return value.toFixed(1) + 's';
-                        }
-                        return Math.round(value).toString();
-                    }
-                }
-            },
-            yAxis: {
-                type: 'value',
-                name: 'Angle (degrees)',
-                nameLocation: 'middle',
-                nameGap: 50
-            },
-            series: series
-        };
-
-        chartInstance.current.setOption(option, true);
-
-        // Handle resize
-        const handleResize = () => {
-            chartInstance.current?.resize();
-        };
-        window.addEventListener('resize', handleResize);
-
-        return () => {
-            window.removeEventListener('resize', handleResize);
-        };
-    }, [analysisData, selectedAngles, xAxisMode]);
-
-    // Cleanup chart on unmount
-    useEffect(() => {
-        return () => {
-            if (chartInstance.current) {
-                chartInstance.current.dispose();
-            }
+    const THEME = useMemo(() => {
+        const v = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+        return {
+            surface: v('--color-background'),
+            border: v('--color-border'),
+            text: v('--color-text'),
+            textSecondary: v('--color-text-secondary'),
+            textMuted: v('--color-text-muted'),
+            primary: v('--color-primary'),
         };
     }, []);
 
-    if (isLoading) {
-        return (
-            <div className="bg-background rounded-xl shadow-sm border p-5 flex flex-col items-center justify-center min-h-[400px]">
-                <p className="text-text-secondary">Loading analysis data...</p>
-            </div>
-        );
-    }
+    const availableAngles = analysisData
+        ? Object.keys(ANGLE_NAMES).filter((name) =>
+              is3D
+                  ? analysisData.frames_3d.some((f: any) => typeof f.angles_3d?.[name] === 'number')
+                  : analysisData.frames.some((f: FrameData) => f.angles?.[name]?.angle != null)
+          )
+        : [];
 
-    if (error) {
-        return (
-            <div className="bg-background rounded-xl shadow-sm border p-5 flex flex-col items-center justify-center min-h-[500px] min-w-[500px]">
-                <p className="text-sm text-text-muted">Please analyze the video first.</p>
-            </div>
-        );
-    }
+    // Echarts Initialization
+    useEffect(() => {
+        if (!analysisData || !chartRef.current || (!analysisData.frames?.length && !analysisData.frames_3d?.length)) return;
+        
+        const buildSeries = (angleName: string) => {
+            const data: [number, number][] = [];
+            const toX = (idx: number) => xAxisMode === 'time' ? idx / analysisData.fps : idx;
+            if (is3D) {
+                analysisData.frames_3d.forEach((f: any) => {
+                    const v = f.angles_3d?.[angleName];
+                    if (typeof v === 'number') data.push([toX(f.frame_index), v]);
+                });
+            } else {
+                analysisData.frames.forEach((f: FrameData) => {
+                    const ad = f.angles?.[angleName];
+                    if (ad && ad.angle !== null && ad.confidence > 0.5) data.push([toX(f.frame_index), ad.angle]);
+                });
+            }
+            const col = ANGLE_COLORS[angleName] || THEME.textSecondary;
+            return {
+                name: ANGLE_NAMES[angleName],
+                type: 'line',
+                data,
+                smooth: true,
+                showSymbol: false,
+                z: 2,
+                lineStyle: { width: 2.5, color: col, opacity: 1, type: 'solid' },
+                areaStyle: { opacity: 0.1, color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: col }, { offset: 1, color: 'transparent' }]) }
+            };
+        };
 
-    if (!analysisData) {
-        return (
-            <div className="bg-background rounded-xl shadow-sm border p-5 flex flex-col items-center justify-center min-h-[400px]">
-                <p className="text-text-secondary">No analysis data available</p>
-            </div>
-        );
-    }
+        const series = selectedAngles.map((a) => buildSeries(a));
+
+        if (!chartInstance.current) chartInstance.current = echarts.init(chartRef.current);
+        
+        chartInstance.current.setOption({
+            backgroundColor: 'transparent',
+            tooltip: {
+                trigger: 'axis',
+                backgroundColor: THEME.surface,
+                borderColor: THEME.border,
+                borderWidth: 1,
+                textStyle: { color: THEME.text },
+                padding: [10, 14],
+                borderRadius: 8,
+                valueFormatter: (value: any) => Number(value).toFixed(1),
+            },
+            grid: { left: '3%', right: '3%', bottom: '12%', top: '8%', containLabel: true },
+            xAxis: { type: 'value', name: xAxisMode === 'time' ? 'Time (s)' : 'Frame', nameLocation: 'middle', nameGap: 25, nameTextStyle: { color: THEME.textSecondary }, splitLine: { show: true, lineStyle: { color: THEME.border, type: 'dashed' } }, axisLine: { lineStyle: { color: THEME.border } }, axisLabel: { color: THEME.textMuted } },
+            yAxis: { type: 'value', name: 'Angle (°)', nameLocation: 'middle', nameGap: 40, nameTextStyle: { color: THEME.textSecondary }, splitLine: { show: true, lineStyle: { color: THEME.border, type: 'dashed' } }, axisLine: { lineStyle: { color: THEME.border } }, axisLabel: { color: THEME.textMuted } },
+            series
+        }, true);
+
+        const handleResize = () => chartInstance.current?.resize();
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [analysisData, selectedAngles, xAxisMode, THEME]);
+
+    // EVENT-DRIVEN CURSOR SYNC (Throttled to 20fps)
+    const lastUpdate = useRef<number>(0);
+    useEffect(() => {
+        const handleSync = (e: Event) => {
+            const time = (e as CustomEvent).detail as number;
+            const now = performance.now();
+            if (now - lastUpdate.current < 50 || !chartInstance.current || !analysisData) return;
+            lastUpdate.current = now;
+
+            const xVal = xAxisMode === 'time' ? time : time * (analysisData.fps || 30);
+            chartInstance.current.setOption({
+                series: [{ markLine: { animation: false, silent: true, symbol: ['none', 'none'], label: { show: false }, data: [{ xAxis: xVal }], lineStyle: { color: '#FFFFFF', width: 2, type: 'solid' } } }]
+            });
+        };
+        window.addEventListener('sync-time', handleSync);
+        return () => window.removeEventListener('sync-time', handleSync);
+    }, [xAxisMode, analysisData, THEME]);
+
+    if (isLoading || !analysisData) return <div className="h-full flex items-center justify-center text-text-muted text-sm">Loading analysis data...</div>;
 
     return (
-        <div className="bg-background rounded-xl shadow-sm border p-6 flex flex-col min-w-135">
-            <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-text-primary/70">Select Angles:</span>
-                    <DropdownMenu>
-                        <DropdownMenuTrigger className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-background-main border border-border rounded-md hover:bg-border transition-colors focus:outline-none focus:ring-2 focus:ring-border">
-                            <span className="text-text-primary/70">{selectedAngles.length === 0 ? 'Select angles...' : selectedAngles.length === 1 ? ANGLE_NAMES[selectedAngles[0]] : `${selectedAngles.length} angles selected`}</span>
-                            <ChevronDown className="w-4 h-4 text-text-primary/50" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent className="w-64 bg-background border border-border">
-                            {Object.entries(ANGLE_NAMES).map(([angleKey, angleName]) => (
-                                <DropdownMenuCheckboxItem
-                                    key={angleKey}
-                                    checked={selectedAngles.includes(angleKey)}
-                                    onCheckedChange={(checked) => {
-                                        if (checked) {
-                                            setSelectedAngles(prev => [...prev, angleKey]);
-                                        } else {
-                                            setSelectedAngles(prev => prev.filter(a => a !== angleKey));
-                                        }
-                                    }}
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <div
-                                            className="w-3 h-3 rounded-full"
-                                            style={{ backgroundColor: ANGLE_COLORS[angleKey] }}
-                                        />
-                                        <span className="text-text-primary/70">{angleName}</span>
-                                    </div>
-                                </DropdownMenuCheckboxItem>
-                            ))}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-                </div>
+        <div className="flex flex-col w-full h-full p-5 relative">
+            <div className="flex items-center justify-between mb-4 flex-shrink-0 z-10 relative">
+                <DropdownMenu>
+                    <DropdownMenuTrigger className="inline-flex items-center gap-3 px-4 py-2 text-sm bg-background border border-border rounded-lg text-text hover:bg-border transition-colors">
+                        <span className="font-medium">{selectedAngles.length} Joints Tracked</span> <ChevronDown className="w-4 h-4 text-text-muted" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-64 bg-background border-border text-text rounded-lg p-2">
+                        {availableAngles.map((k) => (
+                            <DropdownMenuCheckboxItem key={k} checked={selectedAngles.includes(k)} onCheckedChange={(c) => setSelectedAngles(p => c ? [...p, k] : p.filter(a => a !== k))} className="hover:bg-border rounded-md cursor-pointer">
+                                <div className="flex items-center gap-3 py-1">
+                                    <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: ANGLE_COLORS[k] }} />
+                                    <span className="font-medium text-sm">{ANGLE_NAMES[k]}</span>
+                                </div>
+                            </DropdownMenuCheckboxItem>
+                        ))}
+                    </DropdownMenuContent>
+                </DropdownMenu>
 
-                <div className="flex items-center gap-2">
-                    <Clock className={`w-4 h-4 transition-colors ${xAxisMode === 'time' ? 'text-primary' : 'text-text-primary/30'}`} />
-                    <button
-                        onClick={() => setXAxisMode(xAxisMode === 'time' ? 'frame' : 'time')}
-                        className="relative inline-flex h-6 w-11 items-center rounded-full bg-border transition-colors focus:outline-none focus:ring-2 focus:ring-border focus:ring-offset-2 focus:ring-offset-background"
-                    >
-                        <span
-                            className={`inline-block h-4 w-4 transform rounded-full bg-background transition-transform ${xAxisMode === 'time' ? 'translate-x-1' : 'translate-x-6'}`}
-                        />
-                    </button>
-                    <Frame className={`w-4 h-4 transition-colors ${xAxisMode === 'frame' ? 'text-primary' : 'text-text-primary/30'}`} />
-                </div>
+                <button onClick={() => setXAxisMode(xAxisMode === 'time' ? 'frame' : 'time')} className="flex items-center gap-3 bg-background border border-border rounded-lg px-4 py-2 cursor-pointer hover:bg-border transition-colors" title={xAxisMode === 'time' ? 'Showing time — switch to frames' : 'Showing frames — switch to time'}>
+                    <Clock className={`w-4 h-4 ${xAxisMode === 'time' ? 'text-primary' : 'text-text-muted'}`} />
+                    <span className="text-xs text-text-muted">/</span>
+                    <Frame className={`w-4 h-4 ${xAxisMode === 'frame' ? 'text-primary' : 'text-text-muted'}`} />
+                </button>
             </div>
-            <div ref={chartRef} className="h-96 w-full"></div>
+            
+            <div ref={chartRef} className="flex-1 w-full min-h-0 relative"></div>
         </div>
     );
 };

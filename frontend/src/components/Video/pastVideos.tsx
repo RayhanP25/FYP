@@ -78,9 +78,16 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
     const videos = videosData?.videos || [];
 
     const filteredVideos = useMemo(() => {
-        if (searchTerm === '') return videos;
+        let result = videos;
 
-        return videos.filter(video =>
+        // Sort by uploaded_at in descending order (newest first)
+        result = [...result].sort((a, b) => 
+            new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()
+        );
+
+        if (searchTerm === '') return result;
+
+        return result.filter(video =>
             video.original_filename.toLowerCase().includes(searchTerm.toLowerCase())
         );
     }, [searchTerm, videos]);
@@ -114,7 +121,7 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
             setIsDeleteDialogOpen(false);
             setVideoToDelete(null);
         },
-        onError: (error: Error) => {
+        onError: () => {
             toast.error('Failed to delete video');
         }
     });
@@ -128,7 +135,7 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
         return (
             <section className="bg-background rounded-xl shadow-sm border p-5 flex flex-col">
                 <div className="flex items-center justify-center py-8">
-                    <p className="text-secondary">Loading videos...</p>
+                    <p className="text-text-secondary">Loading videos...</p>
                 </div>
             </section>
         );
@@ -150,10 +157,10 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
                     <div className="flex items-center gap-2">
                         <FileVideo className="w-5 h-5 text-primary" />
-                        <h3 className="text-lg font-medium text-text-primary">Past Videos</h3>
+                        <h3 className="text-lg font-medium text-text">Past Videos</h3>
                     </div>
                     <div className="relative w-full sm:w-auto">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                         <input
                             type="text"
                             placeholder="Search videos..."
@@ -169,17 +176,18 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
 
                 {videos.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12">
-                        <FileVideo className="w-16 h-16 text-muted mb-4" />
-                        <p className="text-secondary text-lg font-medium">No videos uploaded yet</p>
-                        <p className="text-muted mt-2">Upload your first video to get started</p>
+                        <FileVideo className="w-16 h-16 text-text-muted mb-4" />
+                        <p className="text-text-secondary text-lg font-medium">No videos uploaded yet</p>
+                        <p className="text-text-muted mt-2">Upload your first video to get started</p>
                     </div>
                 ) : (
                     <>
                         <div className="overflow-x-auto">
-                            <table className="w-full">
+                            <table className="w-full table-fixed">
                                 <thead>
                                     <tr className="border-b">
-                                        <th className="text-left py-3 px-4 font-medium text-secondary">Video Name</th>
+                                        <th className="text-left py-3 px-4 font-medium text-text-secondary w-full">Video Name</th>
+                                        <th className="w-12"></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -193,8 +201,8 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                                                 });
                                             }}
                                         >
-                                            <td className="py-3 px-4">
-                                                <div className="flex items-center gap-3">
+                                            <td className="py-3 px-4 max-w-0">
+                                                <div className="flex items-center gap-3 min-w-0">
                                                     <VideoThumbnail videoId={video.video_id} />
                                                     <div className="flex-1 min-w-0">
                                                         <p className="font-medium truncate" title={video.original_filename}>

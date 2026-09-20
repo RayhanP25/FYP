@@ -29,6 +29,18 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+def set_auth_cookie(response: Response, token: str):
+    response.set_cookie(
+        key="auth_token",
+        value=token,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+        domain=None,
+        secure=False,
+        httponly=True,
+        samesite="lax"
+    )
+
 def verify_token(token: str):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -88,16 +100,7 @@ def login(user_credentials: UserLogin, response: Response):
     )
     
     # Set HttpOnly cookie
-    response.set_cookie(
-        key="auth_token",
-        value=access_token,
-        max_age=1800,
-        path="/",
-        domain=None,
-        secure=False,
-        httponly=True,
-        samesite="lax"
-    )
+    set_auth_cookie(response, access_token)
     
     # Return user info
     return {
@@ -111,7 +114,7 @@ def login(user_credentials: UserLogin, response: Response):
     }
 
 @router.get("/me")
-def get_current_user(auth_token: Optional[str] = Cookie(None)):
+def get_current_user(response: Response, auth_token: Optional[str] = Cookie(None)):
     # Get token from cookie
     if not auth_token:
         raise HTTPException(
@@ -135,6 +138,10 @@ def get_current_user(auth_token: Optional[str] = Cookie(None)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
         )
+    
+    # Sliding session: every authenticated request extends the window, so an
+    # active user is never logged out mid-session.
+    set_auth_cookie(response, create_access_token({"sub": user["email"], "role": user["role"]}))
     
     # Return user info
     return {
