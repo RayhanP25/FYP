@@ -139,8 +139,7 @@ def get_current_user(response: Response, auth_token: Optional[str] = Cookie(None
             detail="User not found"
         )
     
-    # Sliding session: every authenticated request extends the window, so an
-    # active user is never logged out mid-session.
+    # Sliding session: every authenticated request extends the window, so an active user is never logged out mid-session.
     set_auth_cookie(response, create_access_token({"sub": user["email"], "role": user["role"]}))
     
     # Return user info

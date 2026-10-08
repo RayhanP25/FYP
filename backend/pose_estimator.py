@@ -1,9 +1,112 @@
+import os
 import cv2
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 import numpy as np
 import math
+
+# --- ViTPose (MMPose) engine -------------------------------------------------
+# Replaces MediaPipe. Output format is unchanged: 18 keypoints [x, y, conf],
+# x/y normalised 0-1, in the project's keypoint order -- so triangulation,
+# angles, healing, storage and the frontend all keep working unchanged.
+from mmpose.apis import init_model, inference_topdown
+from mmpose.datasets.datasets.utils import parse_pose_metainfo
+from mmdet.apis import DetInferencer
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_MODEL_DIR = os.path.join(_HERE, "models")
+_POSE_CONFIG = os.path.join(_MODEL_DIR, "vitpose_base_512_v2.py")
+_POSE_CKPT = os.path.join(_MODEL_DIR, "best_coco_AP_epoch_24.pth")
+_POSE_METAINFO = os.path.join(_MODEL_DIR, "metainfo_18kp.py")
+
+NUM_KEYPOINTS = 18
+
+# Re-detect the person every N frames. Keep this at 1: ViTPose is a top-down
+# model, so it only sees the crop defined by this box. Reusing a stale box on a
+# moving athlete crops limbs out and the keypoints land wrong -- and the person
+# detector is only ~5% of the per-frame cost, so skipping it buys almost nothing.
+DET_EVERY = int(os.environ.get("POSE_DET_EVERY", "1"))
+# Horizontal-flip test averaging. Matches how the model was evaluated, but costs
+# a second forward pass per frame. Set POSE_FLIP_TEST=0 to halve inference time.
+FLIP_TEST = os.environ.get("POSE_FLIP_TEST", "1") not in ("0", "false", "False")
+
+# Minimum score for a keypoint to be considered usable (drawing, triangulation).
+# This is NOT the old MediaPipe 0.5: MediaPipe reported a `presence` logit that
+# sat near 1.0 for every visible landmark, so 0.5 almost never rejected anything.
+# ViTPose reports the UDP heatmap peak instead -- correctly located joints often
+# score 0.2-0.4 (toes, fingers, motion blur, self-occlusion), so reusing 0.5 here
+# deletes good keypoints. 0.3 is MMPose's own default visualisation threshold
+# (kpt_thr) for this score type.
+MIN_KEYPOINT_CONFIDENCE = float(os.environ.get("POSE_MIN_CONF", "0.3"))
+
+
+def _pick_device():
+    forced = os.environ.get("POSE_DEVICE")
+    if forced:
+        return forced
+    try:
+        import torch
+        return "cuda:0" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+_DEVICE = _pick_device()
+_pose_model = None
+_detector = None
+
+
+def _load_models():
+    """Load ViTPose + person detector once (heavy); reused across requests."""
+    global _pose_model, _detector
+    if _pose_model is not None:
+        return
+
+    for path in (_POSE_CONFIG, _POSE_CKPT, _POSE_METAINFO):
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Pose model asset missing: {path}. The checkpoint is gitignored -- "
+                f"copy best_coco_AP_epoch_24.pth into {_MODEL_DIR}."
+            )
+
+    model = init_model(_POSE_CONFIG, _POSE_CKPT, device=_DEVICE)
+
+    # init_model resolves dataset_meta from the checkpoint, else from the config's
+    # *train* dataloader -- which inherits plain 17-keypoint COCO from the base
+    # config. That mismatch silently produces wrong flip_indices against our
+    # 18-channel head, so pin the metainfo explicitly instead of trusting it.
+    model.dataset_meta = parse_pose_metainfo(dict(from_file=_POSE_METAINFO))
+    n = model.dataset_meta["num_keypoints"]
+    if n != NUM_KEYPOINTS:
+        raise RuntimeError(f"Expected {NUM_KEYPOINTS}-keypoint metainfo, got {n}.")
+
+    model.cfg.model.test_cfg["flip_test"] = FLIP_TEST
+
+    _pose_model = model
+    _detector = DetInferencer(model="rtmdet_tiny_8xb32-300e_coco",
+                              device=_DEVICE, show_progress=False)
+
+
+def _detect_person(frame_bgr, last_box=None):
+    """Return one xyxy person box.
+
+    The box is passed to the pose model as-is: GetBBoxCenterScale already
+    applies its own 1.25 padding, and the model was trained on unpadded boxes,
+    so expanding it here would shrink the athlete relative to training crops.
+
+    If no person is found, reuse the previous box rather than falling back to
+    the whole frame -- a full 16:9 frame letterboxed into the model's 3:4 input
+    leaves the athlete too small to localise.
+    """
+    o = _detector(frame_bgr, return_datasamples=True, no_save_vis=True)["predictions"][0].pred_instances
+    b = o.bboxes.cpu().numpy(); s = o.scores.cpu().numpy(); l = o.labels.cpu().numpy()
+    m = (l == 0) & (s > 0.3)                       # class 0 = person
+    if not m.any():
+        if last_box is not None:
+            return last_box
+        h, w = frame_bgr.shape[:2]
+        return np.array([[0, 0, w, h]], dtype=float)
+    b = b[m]; s = s[m]
+    return b[s.argmax()][None].astype(float)       # highest-confidence person
+
 
 # Skeleton connections for 18 keypoints
 CONNECTIONS = [
@@ -24,6 +127,12 @@ def calculate_angle(p1: list, p2: list, p3: list) -> dict:
     x1, y1, conf1 = p1
     x2, y2, conf2 = p2
     x3, y3, conf3 = p3
+
+    # A missing joint is written out as [0, 0, 0]. That is a non-empty list, so
+    # the truthiness guard above lets it through -- without this check the angle
+    # gets measured against the origin and reported as a real value.
+    if conf1 <= 0 or conf2 <= 0 or conf3 <= 0:
+        return {"angle": None, "confidence": 0.0}
 
     v1 = [x1 - x2, y1 - y2]
     v2 = [x3 - x2, y3 - y2]
@@ -113,62 +222,64 @@ def draw_keypoints_on_frame(frame, keypoints, color_line=(0, 255, 0), color_pt=(
             if len(start_kp) >= 3 and len(end_kp) >= 3:
                 start_x, start_y, start_conf = start_kp
                 end_x, end_y, end_conf = end_kp
-                if start_conf > 0.5 and end_conf > 0.5:
+                if (start_conf > MIN_KEYPOINT_CONFIDENCE
+                        and end_conf > MIN_KEYPOINT_CONFIDENCE):
                     start_pos = (int(start_x * width), int(start_y * height))
                     end_pos = (int(end_x * width), int(end_y * height))
                     cv2.line(frame, start_pos, end_pos, color_line, 2)
     for kp in keypoints:
         if len(kp) >= 3:
             x, y, conf = kp
-            if conf > 0.5:
+            if conf > MIN_KEYPOINT_CONFIDENCE:
                 pos = (int(x * width), int(y * height))
                 cv2.circle(frame, pos, 4, color_pt, -1)
     return frame
 
 
-_MP_MAPPING = [0, 11, 12, 13, 14, 15, 16, 19, 20, 23, 24, 25, 26, 27, 28, 31, 32]
-
-
 def _run_inference(video_path: str) -> dict:
-    model_path = 'pose_landmarker.task'
-    base_options = python.BaseOptions(model_asset_path=model_path)
-    options = vision.PoseLandmarkerOptions(
-        base_options=base_options,
-        output_segmentation_masks=False,
-        running_mode=vision.RunningMode.VIDEO
-    )
-    detector = vision.PoseLandmarker.create_from_options(options)
+    """Run ViTPose per frame; returns the SAME structure MediaPipe did:
+       18 keypoints as [x, y, conf], x/y normalised 0-1, project keypoint order."""
+    _load_models()
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
 
-    # STRICTLY ENFORCE 30 FPS (Ignores corrupted headers completely)
+    # STRICTLY ENFORCE 30 FPS (ignores corrupted headers completely)
     fps = 30.0
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_idx = 0
     frame_data = []
+    last_box = None
+    first_error = None
 
     while True:
-        success, frame = cap.read()
+        success, frame = cap.read()                 # BGR frame
         if not success:
             break
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        
-        # Lock inference timestamps exactly to 30fps
-        timestamp_ms = int(frame_idx * (1000 / fps))
-        detection_result = detector.detect_for_video(mp_image, timestamp_ms)
 
-        if detection_result.pose_landmarks:
-            landmarks = detection_result.pose_landmarks[0]
-            kp = [[lm.x, lm.y, lm.presence] for lm in landmarks]
-            neck = [(kp[11][0] + kp[12][0]) / 2.0,
-                    (kp[11][1] + kp[12][1]) / 2.0,
-                    min(kp[11][2], kp[12][2])]
-            custom_18 = [kp[0], neck] + [kp[i] for i in _MP_MAPPING[1:]]
-        else:
+        # Normalise against the real frame, not the (sometimes wrong) header.
+        h, w = frame.shape[:2]
+        if frame_idx == 0:
+            video_width, video_height = w, h
+
+        if last_box is None or frame_idx % DET_EVERY == 0:
+            last_box = _detect_person(frame, last_box)
+
+        try:
+            r = inference_topdown(_pose_model, frame, last_box, bbox_format="xyxy")[0].pred_instances
+            kp = r.keypoints[0]                      # (18, 2) pixels
+            sc = r.keypoint_scores[0]                # (18,)
+            custom_18 = [[float(kp[i, 0]) / w,
+                          float(kp[i, 1]) / h,
+                          float(sc[i])] for i in range(NUM_KEYPOINTS)]
+        except Exception as e:
+            # Don't let a config/shape error masquerade as "no person detected"
+            # for every single frame -- surface the first one.
+            if first_error is None:
+                first_error = e
+                print(f"[pose_estimator] inference failed on frame {frame_idx}: {e!r}")
             custom_18 = None
 
         frame_data.append({
@@ -179,7 +290,12 @@ def _run_inference(video_path: str) -> dict:
         frame_idx += 1
 
     cap.release()
-    detector.close()
+
+    if frame_idx > 0 and all(f["keypoints"] is None for f in frame_data):
+        raise RuntimeError(
+            f"ViTPose produced no keypoints for any of the {frame_idx} frames."
+        ) from first_error
+
     return {
         "fps": fps,
         "total_frames": frame_idx,
@@ -193,7 +309,7 @@ def _render_overlay(video_path: str, frames: list, output_path: str):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
-        
+
     # STRICTLY ENFORCE 30 FPS OUTPUT WRITER
     fps = 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))

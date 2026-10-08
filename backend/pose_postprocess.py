@@ -91,9 +91,19 @@ def _interp_gaps(series, max_gap):
             gap_len = end - start
             has_left = start - 1 >= 0 and valid[start - 1]
             has_right = end < len(s) and valid[end]
-            if has_left and has_right and gap_len <= max_gap:
+            if gap_len > max_gap:
+                pass                        # too long to guess -> leave missing
+            elif has_left and has_right:
                 li, ri = start - 1, end
                 s[start:end] = np.interp(np.arange(start, end), [li, ri], [s[li], s[ri]])
+                healed[start:end] = True
+            elif has_left or has_right:
+                # Gap runs off the start or end of the clip, so there is no
+                # anchor on one side to interpolate towards. Hold the nearest
+                # known value instead of dropping the joint entirely -- without
+                # this, a joint occluded on the first/last frames is emitted as
+                # [0, 0, 0] and silently vanishes from the overlay.
+                s[start:end] = s[start - 1] if has_left else s[end]
                 healed[start:end] = True
         else:
             t += 1
@@ -120,8 +130,10 @@ def _detect_cuts(fx, fy, jump_threshold):
     T = len(fx)
     cuts = np.zeros(T, dtype=bool)
     disp = np.sqrt(np.diff(fx) ** 2 + np.diff(fy) ** 2)   # length T-1
-    big = disp > jump_threshold
-    cuts[1:][np.nan_to_num(big)] = True
+    # NaN displacement (joint missing either side) is not a swap, so zero it
+    # before comparing rather than relying on NaN-comparison semantics.
+    big = np.nan_to_num(disp) > jump_threshold
+    cuts[1:][big] = True
     return cuts
 
 

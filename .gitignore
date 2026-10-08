@@ -52,5 +52,8 @@ wheels/
 .venv/
 venv/
 
+# Model weights (too large for git; copy backend/models/*.pth in manually)
+*.pth
+
 # Batch launcher
 start-all.bat

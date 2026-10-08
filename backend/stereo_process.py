@@ -100,8 +100,11 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
     roTmp = output_path_right or tempfile.mktemp(suffix="_Ro.mp4")
     try:
         # left overlay goes to output_path (the displayed processed video)
-        resL = process_video_with_overlays(lp, output_path, apply_healing=False)
-        resR = process_video_with_overlays(rp, roTmp, apply_healing=False)
+        # Heal each view before triangulating -- a joint dropped in either view
+        # removes the 3D point entirely, so filling short occlusions here
+        # directly improves 3D coverage.
+        resL = process_video_with_overlays(lp, output_path, apply_healing=True)
+        resR = process_video_with_overlays(rp, roTmp, apply_healing=True)
 
         framesL = resL.get("frames", [])
         framesR = resR.get("frames", [])
