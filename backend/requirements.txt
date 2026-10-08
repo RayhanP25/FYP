@@ -1,4 +1,4 @@
-# ---- Web / API ----
+# ---- Web / API (unchanged) ----
 pymongo==4.16.0
 fastapi==0.135.1
 uvicorn==0.41.0
@@ -8,37 +8,19 @@ python-multipart==0.0.9
 minio==7.2.20
 opencv-python==4.10.0.84
 python-dotenv
-obsws_python
-sounddevice
-
-# ---- Tests ----
-pytest
-pytest-asyncio
-mongomock
 
 # ---- Pose model: ViTPose (MMPose) ----
-# NumPy MUST stay < 2 -- the compiled mmcv / torch wheels break on NumPy 2.x.
+# mediapipe has been REMOVED (it could not be trained to our 18-keypoint skeleton).
+# NumPy MUST stay < 2 -- the compiled MMPose/torch/mmcv wheels break on NumPy 2.x.
 numpy<2
 
-# The MMPose stack is NOT pip-installable from this file. Requires Python 3.11
-# (no mmcv / xtcocotools Windows wheels exist for 3.12+). Install in this order,
-# into the backend venv, BEFORE installing this file:
+# The MMPose stack does NOT install cleanly with plain `pip install`. Install it the
+# SAME way as the training environment, AFTER installing torch:
 #
-#   pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
-#   pip install -U openmim
-#   mim install mmengine "mmcv==2.1.0" "mmdet==3.3.0" "mmpose==1.3.2" "mmpretrain==1.2.0"
+#   1) Install torch matching your machine (CUDA build for GPU, or CPU) from
+#      https://pytorch.org/get-started/locally/
+#   2) pip install -U openmim
+#   3) mim install mmengine "mmcv>=2.0.1" "mmdet>=3.1.0" "mmpose>=1.3.0"
 #
-# Those versions are locked to each other: mmdet 3.3.0 is the first release with
-# DetInferencer(show_progress=...) and it requires mmcv<2.2.0; the only mmcv 2.1.0
-# wheel is built against torch 2.1.0. mmpretrain supplies the VisionTransformer
-# backbone the ViTPose config refers to as `mmpretrain.VisionTransformer`.
-#
-# If `mim install mmpose` fails while building `chumpy`, install mmpose without
-# deps instead -- chumpy is only used by SMPL code this project never imports:
-#   pip install mmpose==1.3.2 --no-deps
-#   pip install json_tricks munkres xtcocotools scipy
-#
-# Model weights are gitignored. Copy best_coco_AP_epoch_24.pth into backend/models/
-# (alongside vitpose_base_512_v2.py and metainfo_18kp.py) before running the API.
-# The person detector (rtmdet_tiny) downloads its weights on first use -- the first
-# video processed needs an internet connection.
+# (Use the exact torch / mmcv / mmpose versions that already work in the training
+#  env to avoid version-mismatch errors.)

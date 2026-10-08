@@ -1,25 +1,25 @@
 """Inference-only config for the ViTPose-Base @512 (v2) champion model.
 
-Same architecture as the training config, with training-only pieces (optimizer,
-schedules, evaluators) removed.
+This is the same architecture as the training config, but with all paths made
+relative to this file so it works inside the backend (no D:\\DK\\... paths), and
+with training-only pieces (optimizer, schedules, evaluators) removed.
 
-Lives in backend/models/ beside:
-  - best_coco_AP_epoch_24.pth   (the trained checkpoint, gitignored)
+Place beside this file, in the same backend/models/ folder:
+  - best_coco_AP_epoch_24.pth   (the trained checkpoint)
   - metainfo_18kp.py            (the 18-keypoint metainfo, copied from training)
 
-NOTE: this file must NOT contain `import` statements. mmengine switches to
-"lazy import" config parsing as soon as it sees one, which is incompatible with
-the plain `_base_ = [...]` string inheritance used below. That means the
-metainfo path here cannot be made absolute -- it only resolves when the current
-working directory is this folder. pose_estimator._load_models() therefore sets
-`model.dataset_meta` explicitly from an absolute path after init_model(), and
-that is the authoritative source of the 18-keypoint metainfo.
+If init_model ever errors on this file, the guaranteed-safe fallback is to copy
+your working rtmpose/vitpose_base_512_v2.py here and change only three lines:
+the METAINFO path -> local metainfo_18kp.py, remove the D:\\DK RTMPOSE_DIR, and
+set load_from = None.
 """
 _base_ = ['mmpose::body_2d_keypoint/topdown_heatmap/coco/'
           'td-hm_ViTPose-base_8xb64-210e_coco-256x192.py']
 
 NUM_KPTS = 18
-METAINFO = dict(from_file='metainfo_18kp.py')
+# {{fileDirname}} = the folder of THIS config file (filled in by mmengine when it loads
+# the config; __file__ is not available inside mmengine configs).
+METAINFO = dict(from_file='{{fileDirname}}/metainfo_18kp.py')
 
 # same decoder/head as training (UDP heatmap, 512x384 input)
 codec = dict(type='UDPHeatmap', input_size=(384, 512), heatmap_size=(96, 128), sigma=2)
@@ -33,6 +33,7 @@ val_pipeline = [
     dict(type='PackPoseInputs'),
 ]
 
+# init_model reads the 18-keypoint metainfo from here to set model.dataset_meta.
 test_dataloader = dict(
     batch_size=1, num_workers=0, persistent_workers=False, drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
@@ -40,9 +41,6 @@ test_dataloader = dict(
                  ann_file='', data_prefix=dict(img=''), metainfo=METAINFO,
                  test_mode=True, pipeline=val_pipeline))
 val_dataloader = test_dataloader
-# init_model reads dataset_meta from the *train* dataloader when the checkpoint
-# carries none, so keep this in sync or it silently falls back to 17-kpt COCO.
-train_dataloader = dict(dataset=dict(metainfo=METAINFO))
 
 # not used for inference
 val_evaluator = None

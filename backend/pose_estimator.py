@@ -8,34 +8,11 @@ import math
 # x/y normalised 0-1, in the project's keypoint order -- so triangulation,
 # angles, healing, storage and the frontend all keep working unchanged.
 from mmpose.apis import init_model, inference_topdown
-from mmpose.datasets.datasets.utils import parse_pose_metainfo
 from mmdet.apis import DetInferencer
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_MODEL_DIR = os.path.join(_HERE, "models")
-_POSE_CONFIG = os.path.join(_MODEL_DIR, "vitpose_base_512_v2.py")
-_POSE_CKPT = os.path.join(_MODEL_DIR, "best_coco_AP_epoch_24.pth")
-_POSE_METAINFO = os.path.join(_MODEL_DIR, "metainfo_18kp.py")
-
-NUM_KEYPOINTS = 18
-
-# Re-detect the person every N frames. Keep this at 1: ViTPose is a top-down
-# model, so it only sees the crop defined by this box. Reusing a stale box on a
-# moving athlete crops limbs out and the keypoints land wrong -- and the person
-# detector is only ~5% of the per-frame cost, so skipping it buys almost nothing.
-DET_EVERY = int(os.environ.get("POSE_DET_EVERY", "1"))
-# Horizontal-flip test averaging. Matches how the model was evaluated, but costs
-# a second forward pass per frame. Set POSE_FLIP_TEST=0 to halve inference time.
-FLIP_TEST = os.environ.get("POSE_FLIP_TEST", "1") not in ("0", "false", "False")
-
-# Minimum score for a keypoint to be considered usable (drawing, triangulation).
-# This is NOT the old MediaPipe 0.5: MediaPipe reported a `presence` logit that
-# sat near 1.0 for every visible landmark, so 0.5 almost never rejected anything.
-# ViTPose reports the UDP heatmap peak instead -- correctly located joints often
-# score 0.2-0.4 (toes, fingers, motion blur, self-occlusion), so reusing 0.5 here
-# deletes good keypoints. 0.3 is MMPose's own default visualisation threshold
-# (kpt_thr) for this score type.
-MIN_KEYPOINT_CONFIDENCE = float(os.environ.get("POSE_MIN_CONF", "0.3"))
+_POSE_CONFIG = os.path.join(_HERE, "models", "vitpose_base_512_v2.py")
+_POSE_CKPT   = os.path.join(_HERE, "models", "best_coco_AP_epoch_24.pth")
 
 
 def _pick_device():
@@ -50,6 +27,16 @@ def _pick_device():
 
 
 _DEVICE = _pick_device()
+
+# Confidence thresholds. MediaPipe's score meant "visible"; ViTPose's score is the
+# heatmap peak, which is LOWER for occluded joints even when the predicted position
+# is still good (studio val: occluded arm joints 28 mm vs 27 mm for all arm joints).
+# So we keep low-confidence joints and draw them differently instead of hiding them.
+#   >= POSE_SURE_CONF : drawn normally (red point, green line)
+#   >= POSE_MIN_CONF  : drawn as "uncertain / probably occluded" (yellow, thinner)
+#   <  POSE_MIN_CONF  : not drawn (too unreliable)
+POSE_MIN_CONF = float(os.environ.get("POSE_MIN_CONF", "0.2"))
+POSE_SURE_CONF = float(os.environ.get("POSE_SURE_CONF", "0.5"))
 _pose_model = None
 _detector = None
 
@@ -57,55 +44,25 @@ _detector = None
 def _load_models():
     """Load ViTPose + person detector once (heavy); reused across requests."""
     global _pose_model, _detector
-    if _pose_model is not None:
-        return
-
-    for path in (_POSE_CONFIG, _POSE_CKPT, _POSE_METAINFO):
-        if not os.path.exists(path):
-            raise FileNotFoundError(
-                f"Pose model asset missing: {path}. The checkpoint is gitignored -- "
-                f"copy best_coco_AP_epoch_24.pth into {_MODEL_DIR}."
-            )
-
-    model = init_model(_POSE_CONFIG, _POSE_CKPT, device=_DEVICE)
-
-    # init_model resolves dataset_meta from the checkpoint, else from the config's
-    # *train* dataloader -- which inherits plain 17-keypoint COCO from the base
-    # config. That mismatch silently produces wrong flip_indices against our
-    # 18-channel head, so pin the metainfo explicitly instead of trusting it.
-    model.dataset_meta = parse_pose_metainfo(dict(from_file=_POSE_METAINFO))
-    n = model.dataset_meta["num_keypoints"]
-    if n != NUM_KEYPOINTS:
-        raise RuntimeError(f"Expected {NUM_KEYPOINTS}-keypoint metainfo, got {n}.")
-
-    model.cfg.model.test_cfg["flip_test"] = FLIP_TEST
-
-    _pose_model = model
-    _detector = DetInferencer(model="rtmdet_tiny_8xb32-300e_coco",
-                              device=_DEVICE, show_progress=False)
+    if _pose_model is None:
+        _pose_model = init_model(_POSE_CONFIG, _POSE_CKPT, device=_DEVICE)
+        _detector = DetInferencer(model="rtmdet_tiny_8xb32-300e_coco",
+                                  device=_DEVICE, show_progress=False)
 
 
-def _detect_person(frame_bgr, last_box=None):
-    """Return one xyxy person box.
-
-    The box is passed to the pose model as-is: GetBBoxCenterScale already
-    applies its own 1.25 padding, and the model was trained on unpadded boxes,
-    so expanding it here would shrink the athlete relative to training crops.
-
-    If no person is found, reuse the previous box rather than falling back to
-    the whole frame -- a full 16:9 frame letterboxed into the model's 3:4 input
-    leaves the athlete too small to localise.
-    """
+def _detect_person(frame_bgr):
+    """Return one xyxy person box; fall back to the full frame if none found."""
     o = _detector(frame_bgr, return_datasamples=True, no_save_vis=True)["predictions"][0].pred_instances
     b = o.bboxes.cpu().numpy(); s = o.scores.cpu().numpy(); l = o.labels.cpu().numpy()
     m = (l == 0) & (s > 0.3)                       # class 0 = person
     if not m.any():
-        if last_box is not None:
-            return last_box
         h, w = frame_bgr.shape[:2]
         return np.array([[0, 0, w, h]], dtype=float)
     b = b[m]; s = s[m]
-    return b[s.argmax()][None].astype(float)       # highest-confidence person
+    x1, y1, x2, y2 = b[s.argmax()]                 # highest-confidence person
+    bw, bh = x2 - x1, y2 - y1
+    return np.array([[max(0, x1 - 0.1 * bw), max(0, y1 - 0.1 * bh),
+                      x2 + 0.1 * bw, y2 + 0.1 * bh]], dtype=float)
 
 
 # Skeleton connections for 18 keypoints
@@ -128,12 +85,6 @@ def calculate_angle(p1: list, p2: list, p3: list) -> dict:
     x2, y2, conf2 = p2
     x3, y3, conf3 = p3
 
-    # A missing joint is written out as [0, 0, 0]. That is a non-empty list, so
-    # the truthiness guard above lets it through -- without this check the angle
-    # gets measured against the origin and reported as a real value.
-    if conf1 <= 0 or conf2 <= 0 or conf3 <= 0:
-        return {"angle": None, "confidence": 0.0}
-
     v1 = [x1 - x2, y1 - y2]
     v2 = [x3 - x2, y3 - y2]
 
@@ -149,7 +100,9 @@ def calculate_angle(p1: list, p2: list, p3: list) -> dict:
     angle_rad = math.acos(cos_angle)
     angle_deg = math.degrees(angle_rad)
 
-    angle_confidence = conf1 * conf2 * conf3
+    # weakest of the three joints (was the product, which hid most angles once one
+    # joint was partly occluded: 0.8*0.8*0.8 = 0.51)
+    angle_confidence = min(conf1, conf2, conf3)
     return {"angle": angle_deg, "confidence": angle_confidence}
 
 def detect_facing_direction(keypoints: list) -> str:
@@ -211,7 +164,11 @@ def calculate_frame_angles(keypoints: list) -> dict:
         angles["right_ankle"] = to_anatomical(calculate_angle(normalized_kp[13], normalized_kp[15], normalized_kp[17]))
     return angles
 
-def draw_keypoints_on_frame(frame, keypoints, color_line=(0, 255, 0), color_pt=(0, 0, 255)):
+def draw_keypoints_on_frame(frame, keypoints, color_line=(0, 255, 0), color_pt=(0, 0, 255),
+                            color_unsure=(0, 215, 255)):
+    """Sure joints (conf >= POSE_SURE_CONF): red points, green lines.
+    Uncertain / probably occluded joints (POSE_MIN_CONF <= conf < POSE_SURE_CONF):
+    yellow, thinner -- shown instead of hidden. Below POSE_MIN_CONF: not drawn."""
     if keypoints is None:
         return frame
     height, width = frame.shape[:2]
@@ -222,17 +179,20 @@ def draw_keypoints_on_frame(frame, keypoints, color_line=(0, 255, 0), color_pt=(
             if len(start_kp) >= 3 and len(end_kp) >= 3:
                 start_x, start_y, start_conf = start_kp
                 end_x, end_y, end_conf = end_kp
-                if (start_conf > MIN_KEYPOINT_CONFIDENCE
-                        and end_conf > MIN_KEYPOINT_CONFIDENCE):
+                if start_conf >= POSE_MIN_CONF and end_conf >= POSE_MIN_CONF:
+                    sure = start_conf >= POSE_SURE_CONF and end_conf >= POSE_SURE_CONF
                     start_pos = (int(start_x * width), int(start_y * height))
                     end_pos = (int(end_x * width), int(end_y * height))
-                    cv2.line(frame, start_pos, end_pos, color_line, 2)
+                    cv2.line(frame, start_pos, end_pos, color_line if sure else color_unsure, 2 if sure else 1)
     for kp in keypoints:
         if len(kp) >= 3:
             x, y, conf = kp
-            if conf > MIN_KEYPOINT_CONFIDENCE:
+            if conf >= POSE_MIN_CONF:
                 pos = (int(x * width), int(y * height))
-                cv2.circle(frame, pos, 4, color_pt, -1)
+                if conf >= POSE_SURE_CONF:
+                    cv2.circle(frame, pos, 4, color_pt, -1)
+                else:
+                    cv2.circle(frame, pos, 4, color_unsure, 1)     # hollow = uncertain
     return frame
 
 
@@ -252,34 +212,24 @@ def _run_inference(video_path: str) -> dict:
     frame_idx = 0
     frame_data = []
     last_box = None
-    first_error = None
+    DET_EVERY = 10                                  # re-detect person every N frames (speed)
 
     while True:
         success, frame = cap.read()                 # BGR frame
         if not success:
             break
 
-        # Normalise against the real frame, not the (sometimes wrong) header.
-        h, w = frame.shape[:2]
-        if frame_idx == 0:
-            video_width, video_height = w, h
-
         if last_box is None or frame_idx % DET_EVERY == 0:
-            last_box = _detect_person(frame, last_box)
+            last_box = _detect_person(frame)
 
         try:
             r = inference_topdown(_pose_model, frame, last_box, bbox_format="xyxy")[0].pred_instances
             kp = r.keypoints[0]                      # (18, 2) pixels
             sc = r.keypoint_scores[0]                # (18,)
-            custom_18 = [[float(kp[i, 0]) / w,
-                          float(kp[i, 1]) / h,
-                          float(sc[i])] for i in range(NUM_KEYPOINTS)]
-        except Exception as e:
-            # Don't let a config/shape error masquerade as "no person detected"
-            # for every single frame -- surface the first one.
-            if first_error is None:
-                first_error = e
-                print(f"[pose_estimator] inference failed on frame {frame_idx}: {e!r}")
+            custom_18 = [[float(kp[i, 0]) / video_width,
+                          float(kp[i, 1]) / video_height,
+                          float(sc[i])] for i in range(18)]
+        except Exception:
             custom_18 = None
 
         frame_data.append({
@@ -290,12 +240,6 @@ def _run_inference(video_path: str) -> dict:
         frame_idx += 1
 
     cap.release()
-
-    if frame_idx > 0 and all(f["keypoints"] is None for f in frame_data):
-        raise RuntimeError(
-            f"ViTPose produced no keypoints for any of the {frame_idx} frames."
-        ) from first_error
-
     return {
         "fps": fps,
         "total_frames": frame_idx,
@@ -314,8 +258,14 @@ def _render_overlay(video_path: str, frames: list, output_path: str):
     fps = 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+    # H.264 ('avc1') so browsers can play the result. On Windows OpenCV needs
+    # openh264-2.5.0-win64.dll for this; without it the writer silently fails, so
+    # fall back to 'mp4v' (still a valid file, but some browsers won't play it).
+    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'avc1'), fps, (w, h))
+    if not out.isOpened():
+        print("WARNING: H.264 encoder not available (openh264 DLL missing) -> writing mp4v instead; "
+              "browsers may not play this video. See README (OpenH264).")
+        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
 
     idx = 0
     while True:

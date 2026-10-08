@@ -72,7 +72,7 @@ const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
             } else {
                 analysisData.frames.forEach((f: FrameData) => {
                     const ad = f.angles?.[angleName];
-                    if (ad && ad.angle !== null && ad.confidence > 0.5) data.push([toX(f.frame_index), ad.angle]);
+                    if (ad && ad.angle !== null && ad.confidence > 0.2) data.push([toX(f.frame_index), ad.angle]);
                 });
             }
             const col = ANGLE_COLORS[angleName] || THEME.textSecondary;
