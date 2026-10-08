@@ -1,4 +1,5 @@
 import os
+import time
 import cv2
 import numpy as np
 import math
@@ -37,6 +38,9 @@ _DEVICE = _pick_device()
 #   <  POSE_MIN_CONF  : not drawn (too unreliable)
 POSE_MIN_CONF = float(os.environ.get("POSE_MIN_CONF", "0.2"))
 POSE_SURE_CONF = float(os.environ.get("POSE_SURE_CONF", "0.5"))
+# Re-run the person detector every N frames; the box is reused between runs.
+# Set POSE_DET_EVERY=1 to detect on every frame (slower, tracks faster movement).
+DET_EVERY = int(os.environ.get("POSE_DET_EVERY", "10"))
 _pose_model = None
 _detector = None
 
@@ -212,7 +216,10 @@ def _run_inference(video_path: str) -> dict:
     frame_idx = 0
     frame_data = []
     last_box = None
-    DET_EVERY = 10                                  # re-detect person every N frames (speed)
+    t_start = time.perf_counter()
+    det_time = 0.0
+    det_runs = 0
+    pose_time = 0.0
 
     while True:
         success, frame = cap.read()                 # BGR frame
@@ -220,10 +227,15 @@ def _run_inference(video_path: str) -> dict:
             break
 
         if last_box is None or frame_idx % DET_EVERY == 0:
+            t_det = time.perf_counter()
             last_box = _detect_person(frame)
+            det_time += time.perf_counter() - t_det
+            det_runs += 1
 
         try:
+            t_pose = time.perf_counter()
             r = inference_topdown(_pose_model, frame, last_box, bbox_format="xyxy")[0].pred_instances
+            pose_time += time.perf_counter() - t_pose
             kp = r.keypoints[0]                      # (18, 2) pixels
             sc = r.keypoint_scores[0]                # (18,)
             custom_18 = [[float(kp[i, 0]) / video_width,
@@ -245,7 +257,15 @@ def _run_inference(video_path: str) -> dict:
         "total_frames": frame_idx,
         "video_width": video_width,
         "video_height": video_height,
-        "frames": frame_data
+        "frames": frame_data,
+        "timing": {
+            "inference_seconds": round(time.perf_counter() - t_start, 2),
+            "detection_seconds": round(det_time, 2),
+            "pose_seconds": round(pose_time, 2),
+            "detections_run": det_runs,
+            "det_every": DET_EVERY,
+            "device": _DEVICE,
+        },
     }
 
 
@@ -288,20 +308,27 @@ def process_video_with_overlays(
     apply_healing: bool = True,
     heal_kwargs: dict = None,
 ) -> dict:
+    t_start = time.perf_counter()
     raw_result = _run_inference(video_path)
 
     if raw_output_path:
         _render_overlay(video_path, raw_result["frames"], raw_output_path)
 
     if not apply_healing:
+        t_ov = time.perf_counter()
         _render_overlay(video_path, raw_result["frames"], output_path)
+        raw_result["timing"]["overlay_seconds"] = round(time.perf_counter() - t_ov, 2)
+        raw_result["timing"]["healing_seconds"] = 0.0
+        raw_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
         return raw_result
 
+    t_heal = time.perf_counter()
     from pose_postprocess import heal_and_smooth
     kwargs = {"healed_confidence": 0.6}
     if heal_kwargs:
         kwargs.update(heal_kwargs)
     healed_result = heal_and_smooth(raw_result, **kwargs)
+    heal_time = time.perf_counter() - t_heal
 
     for i, fr in enumerate(healed_result["frames"]):
         if i < len(raw_result["frames"]):
@@ -309,5 +336,9 @@ def process_video_with_overlays(
         else:
             fr["angles_raw"] = {}
 
+    t_ov = time.perf_counter()
     _render_overlay(video_path, healed_result["frames"], output_path)
+    healed_result["timing"]["healing_seconds"] = round(heal_time, 2)
+    healed_result["timing"]["overlay_seconds"] = round(time.perf_counter() - t_ov, 2)
+    healed_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
     return healed_result

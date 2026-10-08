@@ -15,6 +15,7 @@ working on the left view) plus a "frames_3d" list for the 3D viewer.
 
 import os
 import tempfile
+import time
 import numpy as np
 import cv2
 
@@ -90,12 +91,14 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
                         can store it and let the user switch between views.
     calib_path        : calibration.npz from stereo_calibrate.py
     """
+    t_start = time.perf_counter()
     if not os.path.exists(calib_path):
         raise RuntimeError(
             f"calibration.npz not found at {calib_path}. Run stereo_calibrate.py first.")
     calib = load_calibration(calib_path)
 
     lp, rp, fps = _split_to_temp(input_path, target_w)
+    t_split = time.perf_counter() - t_start
     keep_right = output_path_right is not None
     roTmp = output_path_right or tempfile.mktemp(suffix="_Ro.mp4")
     try:
@@ -105,6 +108,7 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         # directly improves 3D coverage.
         resL = process_video_with_overlays(lp, output_path, apply_healing=True)
         resR = process_video_with_overlays(rp, roTmp, apply_healing=True)
+        t_pose_done = time.perf_counter()
 
         framesL = resL.get("frames", [])
         framesR = resR.get("frames", [])
@@ -133,6 +137,7 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
             frames_3d.append({"frame_index": i,
                               "keypoints_3d": kp_list,
                               "angles_3d": angles})
+        t_triang = time.perf_counter()
     finally:
         cleanup = [lp, rp] if keep_right else [lp, rp, roTmp]
         for p in cleanup:
@@ -146,6 +151,13 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         "units": "mm",
         "frames": framesL[:n],          # 2D LEFT view -> keeps the existing chart working
         "frames_3d": frames_3d,         # triangulated 3D + true 3D angles
+        "timing": {
+            "split_seconds": round(t_split, 2),
+            "left_view": resL.get("timing"),
+            "right_view": resR.get("timing"),
+            "triangulation_seconds": round(t_triang - t_pose_done, 2),
+            "total_seconds": round(time.perf_counter() - t_start, 2),
+        },
         "calibration_rms": float(np.asarray(calib.get("rms", 0)).item())
             if "rms" in calib else None,
     }

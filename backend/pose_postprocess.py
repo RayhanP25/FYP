@@ -137,7 +137,7 @@ def _detect_cuts(fx, fy, jump_threshold):
     return cuts
 
 
-def heal_and_smooth(result, conf_threshold=0.5, max_gap=15, window_length=7,
+def heal_and_smooth(result, conf_threshold=0.5, max_gap=30, window_length=7,
                     polyorder=2, jump_threshold=0.08, healed_confidence=0.5,
                     recompute_angles=True, **_legacy):
     """

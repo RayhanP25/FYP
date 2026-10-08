@@ -4,7 +4,7 @@ import { api } from '@/api/axiosInstance';
 import { toast } from 'react-toastify';
 import Button from '../ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, Wand2 } from 'lucide-react';
+import { Loader2, Wand2, RefreshCw } from 'lucide-react';
 
 interface VideoPlayerProps {
     videoId: string;
@@ -96,11 +96,14 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
         } catch (err) { setError('Failed to load media stream.'); }
     }, [videoId]);
 
-    const analyzePose = async () => {
+    const analyzePose = async (force = false) => {
         try {
             setIsAnalyzing(true);
-            const response = await api.post(`/api/process-video/${videoId}`);
-            toast.success('Pose analysis completed!');
+            const response = await api.post(`/api/process-video/${videoId}${force ? '?force=true' : ''}`);
+            const secs = response.data?.timing?.total_seconds;
+            toast.success(secs != null
+                ? `Pose analysis completed in ${secs}s`
+                : 'Pose analysis completed!');
             setIsAnalyzed(true);
             if (response.data.status === 'completed' || response.data.status === 'already_processed') await refreshVideoUrl();
             await checkRightView();
@@ -134,11 +137,17 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                 </div>
             )}
             
-            {isAnalyzed === false && (
+            {isAnalyzed !== null && (
                 <div className="absolute top-4 right-4 z-10">
-                    <Button onClick={analyzePose} disabled={isAnalyzing} className="bg-primary/90 backdrop-blur-sm text-text-inverse hover:bg-primary transition-colors rounded-lg px-4 py-2 flex items-center gap-2 text-sm">
-                        {isAnalyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing AI...</> : <><Wand2 className="w-4 h-4" /> Extract Kinematics</>}
-                    </Button>
+                    {!isAnalyzed ? (
+                        <Button onClick={() => analyzePose()} disabled={isAnalyzing} className="bg-primary/90 backdrop-blur-sm text-text-inverse hover:bg-primary transition-colors rounded-lg px-4 py-2 flex items-center gap-2 text-sm">
+                            {isAnalyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing AI...</> : <><Wand2 className="w-4 h-4" /> Extract Kinematics</>}
+                        </Button>
+                    ) : (
+                        <Button onClick={() => analyzePose(true)} disabled={isAnalyzing} className="bg-background/90 backdrop-blur-sm border border-border text-text hover:bg-border transition-colors rounded-lg px-4 py-2 flex items-center gap-2 text-sm">
+                            {isAnalyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Re-analyzing...</> : <><RefreshCw className="w-4 h-4" /> Re-analyze</>}
+                        </Button>
+                    )}
                 </div>
             )}
         </div>
