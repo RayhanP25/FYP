@@ -1,17 +1,4 @@
-"""
-pose_postprocess.py
--------------------
-Temporal post-processing for the SportPose 18-point pipeline.
-
-Pipeline (per keypoint, independently for x and y):
-    1. Confidence gating          -> low-presence joints treated as missing
-    2. Gap-limited interpolation  -> short occlusions filled; long gaps left missing
-    3. Discontinuity-aware zero-phase smoothing -> Savitzky-Golay (no lag,
-       preserves fast peaks) that BREAKS at large frame-to-frame jumps so it
-       never averages across a left/right limb swap.
-
-Offline batch processing => non-causal smoother => NO skeleton lag.
-"""
+"""Post-process pose keypoints by filling gaps and smoothing them."""
 
 import numpy as np
 
@@ -56,6 +43,29 @@ def _smooth(series, window=7, poly=2, cuts=None):
         while t < n and not np.isnan(series[t]) and not cuts[t]:
             t += 1
         out[start:t] = _smooth_segment(series[start:t], window, poly)
+    return out
+
+
+def _gaussian_smooth(series, sigma, cuts):
+    out = series.copy()
+    radius = max(1, int(np.ceil(3 * sigma)))
+    t = 0
+    while t < len(series):
+        if np.isnan(series[t]):
+            t += 1
+            continue
+        start = t
+        t += 1
+        while t < len(series) and not np.isnan(series[t]) and not cuts[t]:
+            t += 1
+        segment = series[start:t]
+        if len(segment) < 2:
+            continue
+        offsets = np.arange(-radius, radius + 1)
+        weights = np.exp(-0.5 * (offsets / sigma) ** 2)
+        weights /= weights.sum()
+        padded = np.pad(segment, (radius, radius), mode="reflect")
+        out[start:t] = np.convolve(padded, weights, mode="valid")
     return out
 
 
@@ -139,7 +149,7 @@ def _detect_cuts(fx, fy, jump_threshold):
 
 def heal_and_smooth(result, conf_threshold=0.5, max_gap=30, window_length=7,
                     polyorder=2, jump_threshold=0.08, healed_confidence=0.5,
-                    recompute_angles=True, **_legacy):
+                    recompute_angles=True):
     """
     jump_threshold : normalised-coordinate distance above which a frame-to-frame
                      move is treated as a limb swap and smoothing is broken
@@ -151,6 +161,7 @@ def heal_and_smooth(result, conf_threshold=0.5, max_gap=30, window_length=7,
     xs[gate] = np.nan; ys[gate] = np.nan
 
     healed_count = long_gap_count = swap_breaks = 0
+    sigma = max(1.0, float(result.get("fps") or 30.0) * 0.08)
     out_xs = xs.copy(); out_ys = ys.copy()
     healed_mask = np.zeros_like(xs, dtype=bool)
 
@@ -163,8 +174,8 @@ def heal_and_smooth(result, conf_threshold=0.5, max_gap=30, window_length=7,
         healed_count += int(h.sum())
         cuts = _detect_cuts(fx, fy, jump_threshold)
         swap_breaks += int(cuts.sum())
-        out_xs[:, j] = _smooth(fx, window_length, polyorder, cuts)
-        out_ys[:, j] = _smooth(fy, window_length, polyorder, cuts)
+        out_xs[:, j] = _gaussian_smooth(_smooth(fx, window_length, polyorder, cuts), sigma, cuts)
+        out_ys[:, j] = _gaussian_smooth(_smooth(fy, window_length, polyorder, cuts), sigma, cuts)
 
     new_frames = []
     for t, fr in enumerate(frames):
@@ -196,9 +207,10 @@ def heal_and_smooth(result, conf_threshold=0.5, max_gap=30, window_length=7,
               "healed_ratio": round(healed_count / total, 4),
               "long_gaps_left_missing": long_gap_count,
               "swap_breaks_protected": swap_breaks,
-              "smoother": "savitzky_golay_zero_phase_swap_aware",
+              "smoother": "savitzky_golay_gaussian_zero_phase_swap_aware",
               "params": {"conf_threshold": conf_threshold, "max_gap": max_gap,
                          "window_length": window_length if window_length % 2 else window_length + 1,
-                         "polyorder": polyorder, "jump_threshold": jump_threshold}}
+                         "polyorder": polyorder, "jump_threshold": jump_threshold,
+                         "gaussian_sigma_frames": sigma}}
     nr = dict(result); nr["frames"] = new_frames; nr["healing_report"] = report
     return nr

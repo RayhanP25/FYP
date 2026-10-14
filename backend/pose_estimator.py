@@ -3,11 +3,6 @@ import time
 import cv2
 import numpy as np
 import math
-
-# --- ViTPose (MMPose) engine -------------------------------------------------
-# Replaces MediaPipe. Output format is unchanged: 18 keypoints [x, y, conf],
-# x/y normalised 0-1, in the project's keypoint order -- so triangulation,
-# angles, healing, storage and the frontend all keep working unchanged.
 from mmpose.apis import init_model, inference_topdown
 from mmdet.apis import DetInferencer
 
@@ -29,17 +24,9 @@ def _pick_device():
 
 _DEVICE = _pick_device()
 
-# Confidence thresholds. MediaPipe's score meant "visible"; ViTPose's score is the
-# heatmap peak, which is LOWER for occluded joints even when the predicted position
-# is still good (studio val: occluded arm joints 28 mm vs 27 mm for all arm joints).
-# So we keep low-confidence joints and draw them differently instead of hiding them.
-#   >= POSE_SURE_CONF : drawn normally (red point, green line)
-#   >= POSE_MIN_CONF  : drawn as "uncertain / probably occluded" (yellow, thinner)
-#   <  POSE_MIN_CONF  : not drawn (too unreliable)
-POSE_MIN_CONF = float(os.environ.get("POSE_MIN_CONF", "0.2"))
-POSE_SURE_CONF = float(os.environ.get("POSE_SURE_CONF", "0.5"))
+POSE_MIN_CONF = float(os.environ.get("POSE_MIN_CONF", "0.3"))
+POSE_SURE_CONF = float(os.environ.get("POSE_SURE_CONF", "0.7"))
 # Re-run the person detector every N frames; the box is reused between runs.
-# Set POSE_DET_EVERY=1 to detect on every frame (slower, tracks faster movement).
 DET_EVERY = int(os.environ.get("POSE_DET_EVERY", "10"))
 _pose_model = None
 _detector = None
@@ -67,6 +54,13 @@ def _detect_person(frame_bgr):
     bw, bh = x2 - x1, y2 - y1
     return np.array([[max(0, x1 - 0.1 * bw), max(0, y1 - 0.1 * bh),
                       x2 + 0.1 * bw, y2 + 0.1 * bh]], dtype=float)
+
+
+def _capture_fps(cap, default=30.0):
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    if fps <= 0.0 or not np.isfinite(fps):
+        return default
+    return fps
 
 
 # Skeleton connections for 18 keypoints
@@ -104,8 +98,6 @@ def calculate_angle(p1: list, p2: list, p3: list) -> dict:
     angle_rad = math.acos(cos_angle)
     angle_deg = math.degrees(angle_rad)
 
-    # weakest of the three joints (was the product, which hid most angles once one
-    # joint was partly occluded: 0.8*0.8*0.8 = 0.51)
     angle_confidence = min(conf1, conf2, conf3)
     return {"angle": angle_deg, "confidence": angle_confidence}
 
@@ -209,14 +201,13 @@ def _run_inference(video_path: str) -> dict:
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
 
-    # STRICTLY ENFORCE 30 FPS (ignores corrupted headers completely)
-    fps = 30.0
+    # Preserve the source FPS when possible; fall back to 30 for broken headers.
+    fps = _capture_fps(cap)
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_idx = 0
     frame_data = []
     last_box = None
-    t_start = time.perf_counter()
     det_time = 0.0
     det_runs = 0
     pose_time = 0.0
@@ -259,7 +250,6 @@ def _run_inference(video_path: str) -> dict:
         "video_height": video_height,
         "frames": frame_data,
         "timing": {
-            "inference_seconds": round(time.perf_counter() - t_start, 2),
             "detection_seconds": round(det_time, 2),
             "pose_seconds": round(pose_time, 2),
             "detections_run": det_runs,
@@ -269,13 +259,39 @@ def _run_inference(video_path: str) -> dict:
     }
 
 
-def _render_overlay(video_path: str, frames: list, output_path: str):
+def _overlay_confidences(frames):
+    scores = np.zeros((len(frames), 18), dtype=float)
+    for i, fr in enumerate(frames):
+        if fr.get("keypoints"):
+            for j, kp in enumerate(fr["keypoints"][:18]):
+                if kp and len(kp) >= 3:
+                    scores[i, j] = kp[2]
+    if not len(frames):
+        return scores
+    padded = np.pad(scores, ((2, 2), (0, 0)), mode="edge")
+    filtered = np.stack([np.median(padded[i:i + 5], axis=0)
+                         for i in range(len(frames))])
+    visible = np.zeros(18, dtype=bool)
+    sure = np.zeros(18, dtype=bool)
+    displayed = np.zeros_like(scores)
+    for i, row in enumerate(filtered):
+        visible = np.where(visible, row >= POSE_MIN_CONF - 0.05,
+                           row >= POSE_MIN_CONF + 0.05)
+        sure = visible & np.where(sure, row >= POSE_SURE_CONF - 0.05,
+                                  row >= POSE_SURE_CONF + 0.05)
+        displayed[i, visible] = POSE_MIN_CONF
+        displayed[i, sure] = POSE_SURE_CONF
+    return displayed
+
+
+def _render_overlay(video_path: str, frames: list, output_path: str, fps: float = None,
+                    stabilize_confidence: bool = False):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
 
-    # STRICTLY ENFORCE 30 FPS OUTPUT WRITER
-    fps = 30.0
+    if fps is None:
+        fps = _capture_fps(cap)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     # H.264 ('avc1') so browsers can play the result. On Windows OpenCV needs
@@ -287,12 +303,16 @@ def _render_overlay(video_path: str, frames: list, output_path: str):
               "browsers may not play this video. See README (OpenH264).")
         out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
 
+    display_scores = _overlay_confidences(frames) if stabilize_confidence else None
     idx = 0
     while True:
         success, frame = cap.read()
         if not success:
             break
         kp = frames[idx]["keypoints"] if idx < len(frames) else None
+        if kp is not None and display_scores is not None and idx < len(display_scores):
+            kp = [[p[0], p[1], display_scores[idx, j] if p[2] > 0 else 0.0]
+                  for j, p in enumerate(kp)]
         frame = draw_keypoints_on_frame(frame, kp)
         out.write(frame)
         idx += 1
@@ -312,11 +332,11 @@ def process_video_with_overlays(
     raw_result = _run_inference(video_path)
 
     if raw_output_path:
-        _render_overlay(video_path, raw_result["frames"], raw_output_path)
+        _render_overlay(video_path, raw_result["frames"], raw_output_path, fps=raw_result["fps"])
 
     if not apply_healing:
         t_ov = time.perf_counter()
-        _render_overlay(video_path, raw_result["frames"], output_path)
+        _render_overlay(video_path, raw_result["frames"], output_path, fps=raw_result["fps"])
         raw_result["timing"]["overlay_seconds"] = round(time.perf_counter() - t_ov, 2)
         raw_result["timing"]["healing_seconds"] = 0.0
         raw_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
@@ -337,7 +357,8 @@ def process_video_with_overlays(
             fr["angles_raw"] = {}
 
     t_ov = time.perf_counter()
-    _render_overlay(video_path, healed_result["frames"], output_path)
+    _render_overlay(video_path, healed_result["frames"], output_path, fps=raw_result["fps"],
+                    stabilize_confidence=True)
     healed_result["timing"]["healing_seconds"] = round(heal_time, 2)
     healed_result["timing"]["overlay_seconds"] = round(time.perf_counter() - t_ov, 2)
     healed_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)

@@ -54,10 +54,10 @@ def triangulate_pair(ptsL, ptsR, calib):
     return X3
 
 
-#: See pose_estimator.MIN_KEYPOINT_CONFIDENCE -- ViTPose heatmap scores run much
-#: lower than the MediaPipe `presence` values this used to be tuned for, so the
-#: old 0.5 default discarded correctly-located joints before triangulation.
-DEFAULT_CONF_THRESHOLD = float(os.environ.get("POSE_MIN_CONF", "0.3"))
+#: Stereo gate: only triangulate joints confident in BOTH views. Measured score
+#: distribution is bimodal (~91% of detections score >=0.7), so 0.5 discards the
+#: real-failure tail while healed joints (re-emitted at 0.6) still pass.
+DEFAULT_CONF_THRESHOLD = float(os.environ.get("POSE_TRIANGULATE_CONF", "0.5"))
 
 
 def triangulate_keypoints(kp_left, kp_right, calib, conf_threshold=DEFAULT_CONF_THRESHOLD):

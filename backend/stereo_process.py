@@ -106,8 +106,8 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         # Heal each view before triangulating -- a joint dropped in either view
         # removes the 3D point entirely, so filling short occlusions here
         # directly improves 3D coverage.
-        resL = process_video_with_overlays(lp, output_path, apply_healing=True)
-        resR = process_video_with_overlays(rp, roTmp, apply_healing=True)
+        resL = process_video_with_overlays(lp, output_path, apply_healing=False)
+        resR = process_video_with_overlays(rp, roTmp, apply_healing=False)
         t_pose_done = time.perf_counter()
 
         framesL = resL.get("frames", [])
