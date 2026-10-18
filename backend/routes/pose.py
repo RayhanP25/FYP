@@ -69,7 +69,10 @@ async def process_video(
         else:
             # If it's stereo but calibration is missing, fall back to 2D so it
             # still works (analyses the left half is not split here -- whole frame).
-            result = process_video_with_overlays(temp_input_path, temp_output_path, apply_healing=False)
+            # Healing is required with ViTPose: unlike MediaPipe's VIDEO running
+            # mode it has no frame-to-frame tracker, so occluded joints must be
+            # gated and interpolated temporally here instead.
+            result = process_video_with_overlays(temp_input_path, temp_output_path, apply_healing=True)
     except Exception as e:
         os.unlink(temp_input_path)
         if os.path.exists(temp_output_path):
@@ -148,6 +151,7 @@ async def process_video(
         "fps": result["fps"],
         "has_3d": "frames_3d" in result,
         "healing_report": result.get("healing_report"),
+        "timing": result.get("timing"),
     }
 
 

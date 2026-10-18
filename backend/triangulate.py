@@ -15,6 +15,8 @@ Method:
     3. Output 3D is in the LEFT camera's coordinate frame, in mm.
 """
 
+import os
+
 import numpy as np
 import cv2
 
@@ -52,10 +54,16 @@ def triangulate_pair(ptsL, ptsR, calib):
     return X3
 
 
-def triangulate_keypoints(kp_left, kp_right, calib, conf_threshold=0.5):
+#: Stereo gate: only triangulate joints confident in BOTH views. Measured score
+#: distribution is bimodal (~91% of detections score >=0.7), so 0.5 discards the
+#: real-failure tail while healed joints (re-emitted at 0.6) still pass.
+DEFAULT_CONF_THRESHOLD = float(os.environ.get("POSE_TRIANGULATE_CONF", "0.5"))
+
+
+def triangulate_keypoints(kp_left, kp_right, calib, conf_threshold=DEFAULT_CONF_THRESHOLD):
     """
     kp_left / kp_right: 18-point lists of [x_norm, y_norm, conf] from each view
-    (MediaPipe normalised 0-1 coords), plus the pixel size of each view.
+    (normalised 0-1 coords), plus the pixel size of each view.
     Returns (18,3) array in mm; rows are NaN where either view lacked the joint.
 
     NOTE: the keypoints are stored NORMALISED (0-1). We convert to pixels using

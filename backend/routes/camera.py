@@ -7,9 +7,13 @@ Supports two source modes (set CAMERA_MODE in backend/.env):
                           its own WiFi stream, so there is no USB-bus contention.
     CAMERA_MODE="USB"  -> two USB webcams via CAMERA_LEFT_INDEX / CAMERA_RIGHT_INDEX
 
-One background thread grabs both sources back-to-back (grab()+grab() then
-retrieve()+retrieve()) to minimise the L/R capture offset, and publishes the
-latest synchronized (left, right, timestamp) pair. Live preview = MJPEG in an
+Each camera has its OWN reader thread (so one slow read never blocks the other)
+and publishes its latest frame with a capture timestamp. On Windows USB cameras
+are opened with Media Foundation (CAP_MSMF): DirectShow ignored the MJPG request,
+left the cameras in uncompressed YUY2 and capped them at ~10 fps (measured
+2026-10-08 with cam_fps_test.py: DSHOW 10.2 fps, MSMF 30.0 fps per camera).
+The recorder writes one frame per NEW left-camera frame (no wall-clock filler),
+and the live preview is sent at a lower rate/size so it does not starve capture. Live preview = MJPEG in an
 <img>. Recording writes a side-by-side MP4, uploads to MinIO, makes a videos doc.
 """
 
@@ -41,6 +45,11 @@ CAP_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "480"))
 CAP_FPS = int(os.getenv("CAMERA_FPS", "30"))
 OPEN_TIMEOUT = float(os.getenv("CAMERA_OPEN_TIMEOUT_SEC", "10"))
 BUCKET = os.getenv("MINIO_BUCKET", "sport-pose-videos")
+# Windows capture API for USB cameras: "msmf" (default, gets MJPG -> 30 fps) or "dshow"
+CAMERA_API = os.getenv("CAMERA_API", "msmf").lower()
+# Live preview: lower rate + size than the recording, so it doesn't steal CPU from capture
+PREVIEW_FPS = float(os.getenv("PREVIEW_FPS", "15"))
+PREVIEW_SCALE = float(os.getenv("PREVIEW_SCALE", "0.5"))
 
 
 def _sources():
@@ -75,7 +84,10 @@ def _open_source(source, timeout):
         if isinstance(source, str):
             cap = cv2.VideoCapture(source)
         else:
-            backend = cv2.CAP_DSHOW if os.name == "nt" else 0
+            if os.name == "nt":
+                backend = cv2.CAP_DSHOW if CAMERA_API == "dshow" else cv2.CAP_MSMF
+            else:
+                backend = 0
             cap = cv2.VideoCapture(source, backend)
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAP_WIDTH)
@@ -88,6 +100,15 @@ def _open_source(source, timeout):
     th.start()
     th.join(timeout)
     if th.is_alive():
+        # The open is still blocked inside cv2. Reap it in the background so the
+        # camera is released once the call finally returns instead of being held
+        # forever by this abandoned thread.
+        def reaper():
+            th.join()
+            cap = box.get("cap")
+            if cap is not None:
+                cap.release()
+        threading.Thread(target=reaper, daemon=True).start()
         return None
     cap = box.get("cap")
     if cap is None or not cap.isOpened():
@@ -108,139 +129,158 @@ def _fail_msg(side, source, label):
             f"Close OBS/Zoom/Teams, or fix CAMERA_LEFT_INDEX / CAMERA_RIGHT_INDEX in .env.")
 
 
+class _CamReader:
+    """One thread per camera: keeps reading as fast as the camera delivers and
+    stores the newest frame + its capture time + a sequence number."""
+
+    def __init__(self, cap, name):
+        self.cap, self.name = cap, name
+        self.lock = threading.Lock()
+        self.frame, self.ts, self.seq = None, 0.0, 0
+        self.running = True
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def _loop(self):
+        while self.running:
+            ok, f = self.cap.read()
+            if not ok:
+                time.sleep(0.005)
+                continue
+            ts = time.time()
+            with self.lock:
+                self.frame, self.ts, self.seq = f, ts, self.seq + 1
+
+    def get(self):
+        with self.lock:
+            return self.frame, self.ts, self.seq
+
+    def stop(self):
+        self.running = False
+        self.thread.join(timeout=1.5)
+        self.cap.release()
+
+
 class StereoManager:
     def __init__(self):
         self.lock = threading.Lock()
-        self.capL = self.capR = None
+        self.readerL = self.readerR = None
         self.running = False
-        self.thread = None
-        self.latest = None
-        self._lastL = None
-        self._lastR = None
 
     def start(self):
         with self.lock:
             if self.running:
                 return
             srcL, srcR, label = _sources()
-            self.capL = _open_source(srcL, OPEN_TIMEOUT)
-            if self.capL is None:
-                raise HTTPException(status_code=503, detail=_fail_msg("left", srcL, label))
-            self.capR = _open_source(srcR, OPEN_TIMEOUT)
-            if self.capR is None:
-                self.capL.release(); self.capL = None
-                raise HTTPException(status_code=503, detail=_fail_msg("right", srcR, label))
-            self.running = True
-            self.thread = threading.Thread(target=self._loop, daemon=True)
-            self.thread.start()
+            # Open both cameras in parallel: MSMF opens can take 15-25s each on
+            # Windows, so sequential opens can exceed the frontend's timeout.
+            caps = {}
 
-    def _loop(self):
-        # Sequential reads + last-good-frame caching. On a single shared USB bus
-        # two cameras cannot be grabbed simultaneously, so we read them one after
-        # another and keep the latest good frame from each side. Sync is therefore
-        # software-level (a few ms apart), not hardware genlock.
-        while self.running:
-            okL, fL = self.capL.read()
-            if okL:
-                self._lastL = fL
-            okR, fR = self.capR.read()
-            if okR:
-                self._lastR = fR
-            ts = time.time()
-            if self._lastL is not None and self._lastR is not None:
-                with self.lock:
-                    self.latest = (self._lastL, self._lastR, ts)
-            else:
-                time.sleep(0.01)
+            def open_side(key, src):
+                caps[key] = _open_source(src, OPEN_TIMEOUT)
+
+            threads = [threading.Thread(target=open_side, args=("L", srcL), daemon=True),
+                       threading.Thread(target=open_side, args=("R", srcR), daemon=True)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            capL, capR = caps.get("L"), caps.get("R")
+            if capL is None:
+                if capR is not None:
+                    capR.release()
+                raise HTTPException(status_code=503, detail=_fail_msg("left", srcL, label))
+            if capR is None:
+                capL.release()
+                raise HTTPException(status_code=503, detail=_fail_msg("right", srcR, label))
+            self.readerL = _CamReader(capL, "left")
+            self.readerR = _CamReader(capR, "right")
+            self.running = True
 
     def get_latest(self):
-        with self.lock:
-            return self.latest
+        """(left, right, ts_left, seq_left) or None until both cameras delivered a frame."""
+        if not self.running:
+            return None
+        fL, tL, sL = self.readerL.get()
+        fR, _, _ = self.readerR.get()
+        if fL is None or fR is None:
+            return None
+        return fL, fR, tL, sL
 
     def stop(self):
         with self.lock:
             self.running = False
-        if self.thread:
-            self.thread.join(timeout=1.5)
-        with self.lock:
-            if self.capL:
-                self.capL.release()
-            if self.capR:
-                self.capR.release()
-            self.capL = self.capR = None
-            self.latest = None
-            self._lastL = None
-            self._lastR = None
+            for r in (self.readerL, self.readerR):
+                if r is not None:
+                    r.stop()
+            self.readerL = self.readerR = None
 
 
 manager = StereoManager()
 
 
 class Recorder:
+    """Writes one side-by-side frame for every NEW left-camera frame.
+    If the camera really skipped frames (gap > 1.5 frame periods) the last frame is
+    repeated to keep the video's duration correct; those repeats are counted
+    (dup_frames) so a bad recording is visible instead of hidden."""
+
     def __init__(self):
         self.active = False
         self.thread = None
         self.path = None
         self.frames = 0
+        self.dup_frames = 0
+        self.real_fps = 0.0
 
     def start(self):
         if self.active:
             return
+        t0 = time.time()
+        while manager.get_latest() is None and time.time() - t0 < 3:
+            time.sleep(0.05)
         if manager.get_latest() is None:
             raise HTTPException(status_code=409, detail="Feed not ready. Start the live feed first.")
         self.path = tempfile.mktemp(suffix="_stereo.mp4")
-        self.frames = 0
+        self.frames = self.dup_frames = 0
+        self.real_fps = 0.0
         self.active = True
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
 
     def _loop(self):
-        pair = manager.get_latest()
-        combo = _compose(pair[0], pair[1])
+        fL, fR, ts, seq = manager.get_latest()
+        combo = _compose(fL, fR)
         h, w = combo.shape[:2]
         writer = _open_writer(self.path, w, h, CAP_FPS)
-        
-        start_time = time.time()
-        self.frames = 0
-        
+        period = 1.0 / CAP_FPS
+        start_ts, last_seq, real = ts, seq - 1, 0
         while self.active:
-            # 1. Check the true real-world clock
-            expected_frames = int((time.time() - start_time) * CAP_FPS)
-            
-            if self.frames < expected_frames:
-                current_pair = manager.get_latest()
-                if current_pair is not None:
-                    # 2. Compose the CPU-heavy image ONLY ONCE
-                    current_combo = _compose(current_pair[0], current_pair[1])
-                    
-                    # 3. Flush it instantly to catch up to the clock
-                    while self.frames < expected_frames and self.active:
-                        writer.write(current_combo)
-                        self.frames += 1
-            
-            # Tiny sleep to prevent the while-loop from hogging the CPU 
-            # away from the camera capture threads
-            time.sleep(0.005)
-            
-        # 4. FINAL FLUSH: When the user hits 'Stop', write out the very last 
-        # fractions of a second before the file closes to ensure perfect duration.
-        final_expected = int((time.time() - start_time) * CAP_FPS)
-        if self.frames < final_expected:
-            current_pair = manager.get_latest()
-            if current_pair is not None:
-                final_combo = _compose(current_pair[0], current_pair[1])
-                while self.frames < final_expected:
-                    writer.write(final_combo)
-                    self.frames += 1
-                    
+            pair = manager.get_latest()
+            if pair is None or pair[3] == last_seq:
+                time.sleep(0.002)                     # wait for the next real frame
+                continue
+            fL, fR, ts, seq = pair
+            last_seq = seq
+            combo = _compose(fL, fR)
+            # frames this timestamp should be at; fill only genuine camera gaps
+            target = int(round((ts - start_ts) / period)) + 1
+            n = max(1, target - self.frames) if target - self.frames > 1.5 else 1
+            for _ in range(n):
+                writer.write(combo)
+            self.frames += n
+            self.dup_frames += n - 1
+            real += 1
         writer.release()
+        dur = max(1e-6, self.frames / CAP_FPS)
+        self.real_fps = real / dur
 
     def stop(self):
         if not self.active:
             raise HTTPException(status_code=409, detail="Not recording.")
         self.active = False
         if self.thread:
-            self.thread.join(timeout=3)
+            self.thread.join(timeout=5)
         return self.path, self.frames
 
 
@@ -270,15 +310,19 @@ def status(current_user: dict = Depends(get_current_user)):
 async def _mjpeg_generator():
     # ASYNC generator: never blocks the event loop, is cancellable, and lets
     # the server shut down / reload cleanly even while a preview is open.
+    # Sent at PREVIEW_FPS and PREVIEW_SCALE (default 15 fps, half size) so the
+    # preview does not compete with capture/recording for CPU.
     boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-    interval = 1.0 / CAP_FPS
+    interval = 1.0 / max(1.0, PREVIEW_FPS)
     while manager.running:
         pair = manager.get_latest()
         if pair is None:
             await asyncio.sleep(0.03)
             continue
-        ok, jpg = cv2.imencode(".jpg", _compose(pair[0], pair[1]),
-                               [cv2.IMWRITE_JPEG_QUALITY, 80])
+        img = _compose(pair[0], pair[1])
+        if PREVIEW_SCALE != 1.0:
+            img = cv2.resize(img, None, fx=PREVIEW_SCALE, fy=PREVIEW_SCALE, interpolation=cv2.INTER_AREA)
+        ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
         if ok:
             yield boundary + jpg.tobytes() + b"\r\n"
         await asyncio.sleep(interval)
@@ -303,6 +347,7 @@ def start_recording(current_user: dict = Depends(get_current_user)):
 @router.post("/stop-recording")
 def stop_recording(current_user: dict = Depends(get_current_user)):
     path, frames = recorder.stop()
+    dup_frames, real_fps = recorder.dup_frames, round(recorder.real_fps, 1)
     object_name = f"stereo_{uuid.uuid4()}.mp4"
     file_size = os.path.getsize(path) if os.path.exists(path) else 0
     try:
@@ -330,7 +375,10 @@ def stop_recording(current_user: dict = Depends(get_current_user)):
         "layout": "side_by_side",
         "fps": CAP_FPS,
         "frames": frames,
+        "dup_frames": dup_frames,      # frames repeated to fill real camera gaps
+        "real_fps": real_fps,          # new images per second actually captured
     }
     result = client[database_name]["videos"].insert_one(doc)
     return {"status": "saved", "video_id": str(result.inserted_id),
-            "object_name": object_name, "frames": frames}
+            "object_name": object_name, "frames": frames,
+            "dup_frames": dup_frames, "real_fps": real_fps}
