@@ -1,11 +1,7 @@
 """
 camera.py  -- native synchronized stereo capture (no OBS required)
 
-Supports two source modes (set CAMERA_MODE in backend/.env):
-    CAMERA_MODE="WEB"  -> two phone/IP cameras via PHONE_1_IP / PHONE_2_IP
-                          (e.g. DroidCam  http://<ip>:4747/video). Each phone is
-                          its own WiFi stream, so there is no USB-bus contention.
-    CAMERA_MODE="USB"  -> two USB webcams via CAMERA_LEFT_INDEX / CAMERA_RIGHT_INDEX
+Uses two USB webcams via CAMERA_LEFT_INDEX / CAMERA_RIGHT_INDEX.
 
 Each camera has its OWN reader thread (so one slow read never blocks the other)
 and publishes its latest frame with a capture timestamp. On Windows USB cameras
@@ -35,9 +31,6 @@ from routes.users import get_current_user
 
 router = APIRouter(prefix="/camera", tags=["camera"])
 
-CAMERA_MODE = os.getenv("CAMERA_MODE", "USB").upper()
-PHONE_1_IP = os.getenv("PHONE_1_IP", "")
-PHONE_2_IP = os.getenv("PHONE_2_IP", "")
 LEFT_INDEX = int(os.getenv("CAMERA_LEFT_INDEX", "0"))
 RIGHT_INDEX = int(os.getenv("CAMERA_RIGHT_INDEX", "1"))
 CAP_WIDTH = int(os.getenv("CAMERA_WIDTH", "640"))
@@ -50,15 +43,6 @@ CAMERA_API = os.getenv("CAMERA_API", "msmf").lower()
 # Live preview: lower rate + size than the recording, so it doesn't steal CPU from capture
 PREVIEW_FPS = float(os.getenv("PREVIEW_FPS", "15"))
 PREVIEW_SCALE = float(os.getenv("PREVIEW_SCALE", "0.5"))
-
-
-def _sources():
-    if CAMERA_MODE == "WEB":
-        if not PHONE_1_IP or not PHONE_2_IP:
-            raise HTTPException(status_code=500,
-                                detail="CAMERA_MODE=WEB but PHONE_1_IP / PHONE_2_IP are not set in .env")
-        return PHONE_1_IP, PHONE_2_IP, "phone"
-    return LEFT_INDEX, RIGHT_INDEX, "usb"
 
 
 def _compose(fL, fR):
@@ -77,22 +61,19 @@ def _open_writer(path, w, h, fps):
     raise RuntimeError("No usable video codec (avc1/mp4v both failed)")
 
 
-def _open_source(source, timeout):
+def _open_source(index, timeout):
     box = {}
 
     def worker():
-        if isinstance(source, str):
-            cap = cv2.VideoCapture(source)
+        if os.name == "nt":
+            backend = cv2.CAP_DSHOW if CAMERA_API == "dshow" else cv2.CAP_MSMF
         else:
-            if os.name == "nt":
-                backend = cv2.CAP_DSHOW if CAMERA_API == "dshow" else cv2.CAP_MSMF
-            else:
-                backend = 0
-            cap = cv2.VideoCapture(source, backend)
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAP_WIDTH)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAP_HEIGHT)
-            cap.set(cv2.CAP_PROP_FPS, CAP_FPS)
+            backend = 0
+        cap = cv2.VideoCapture(index, backend)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAP_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAP_HEIGHT)
+        cap.set(cv2.CAP_PROP_FPS, CAP_FPS)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         box["cap"] = cap
 
@@ -120,12 +101,8 @@ def _open_source(source, timeout):
     return cap
 
 
-def _fail_msg(side, source, label):
-    if label == "phone":
-        return (f"Could not connect to the {side} phone camera at {source}. "
-                f"Make sure the DroidCam/IP-Webcam app is running, the phone is on the "
-                f"same WiFi, and the URL opens in a browser. Then retry.")
-    return (f"Could not open the {side} USB camera (index {source}). "
+def _fail_msg(side, index):
+    return (f"Could not open the {side} USB camera (index {index}). "
             f"Close OBS/Zoom/Teams, or fix CAMERA_LEFT_INDEX / CAMERA_RIGHT_INDEX in .env.")
 
 
@@ -171,16 +148,15 @@ class StereoManager:
         with self.lock:
             if self.running:
                 return
-            srcL, srcR, label = _sources()
             # Open both cameras in parallel: MSMF opens can take 15-25s each on
             # Windows, so sequential opens can exceed the frontend's timeout.
             caps = {}
 
-            def open_side(key, src):
-                caps[key] = _open_source(src, OPEN_TIMEOUT)
+            def open_side(key, index):
+                caps[key] = _open_source(index, OPEN_TIMEOUT)
 
-            threads = [threading.Thread(target=open_side, args=("L", srcL), daemon=True),
-                       threading.Thread(target=open_side, args=("R", srcR), daemon=True)]
+            threads = [threading.Thread(target=open_side, args=("L", LEFT_INDEX), daemon=True),
+                       threading.Thread(target=open_side, args=("R", RIGHT_INDEX), daemon=True)]
             for t in threads:
                 t.start()
             for t in threads:
@@ -189,10 +165,10 @@ class StereoManager:
             if capL is None:
                 if capR is not None:
                     capR.release()
-                raise HTTPException(status_code=503, detail=_fail_msg("left", srcL, label))
+                raise HTTPException(status_code=503, detail=_fail_msg("left", LEFT_INDEX))
             if capR is None:
                 capL.release()
-                raise HTTPException(status_code=503, detail=_fail_msg("right", srcR, label))
+                raise HTTPException(status_code=503, detail=_fail_msg("right", RIGHT_INDEX))
             self.readerL = _CamReader(capL, "left")
             self.readerR = _CamReader(capR, "right")
             self.running = True
@@ -290,7 +266,7 @@ recorder = Recorder()
 @router.post("/start-feed")
 def start_feed(current_user: dict = Depends(get_current_user)):
     manager.start()
-    return {"status": "live", "mode": CAMERA_MODE, "fps": CAP_FPS}
+    return {"status": "live", "mode": "USB", "fps": CAP_FPS}
 
 
 @router.post("/stop-feed")
@@ -304,7 +280,7 @@ def stop_feed(current_user: dict = Depends(get_current_user)):
 @router.get("/status")
 def status(current_user: dict = Depends(get_current_user)):
     return {"live": manager.running, "recording": recorder.active,
-            "mode": CAMERA_MODE, "fps": CAP_FPS}
+            "mode": "USB", "fps": CAP_FPS}
 
 
 async def _mjpeg_generator():
@@ -370,7 +346,6 @@ def stop_recording(current_user: dict = Depends(get_current_user)):
         "content_type": "video/mp4",
         "file_size": file_size,
         "uploaded_at": now,
-        # extra metadata (safe to keep)
         "source": "stereo_camera",
         "layout": "side_by_side",
         "fps": CAP_FPS,
