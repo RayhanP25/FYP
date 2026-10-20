@@ -1,58 +1,12 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { Search, FileVideo, Play, Trash2, AlertTriangle, X } from 'lucide-react';
+import { Search, FileVideo, Trash2, AlertTriangle, X } from 'lucide-react';
 import { getMyVideos, getVideoUrl, deleteVideo } from '@/api/videoApi';
 import { toast } from 'react-toastify';
 import * as Dialog from '@radix-ui/react-dialog';
 import Button from '@/components/ui/button';
 
-const VideoThumbnail = ({ videoId }: { videoId: string }) => {
-    const [thumbnailUrl, setThumbnailUrl] = useState<string>('');
-    const [isLoading, setIsLoading] = useState(true);
-
-    useEffect(() => {
-        const fetchThumbnail = async () => {
-            setIsLoading(true);
-            try {
-                const videoData = await getVideoUrl(videoId);
-                setThumbnailUrl(videoData.presigned_url);
-            } catch (error) {
-                console.error('Failed to fetch video URL:', error);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchThumbnail();
-    }, [videoId]);
-
-    return (
-        <div className="w-16 h-10 rounded-md overflow-hidden bg-background-main">
-            {isLoading ? (
-                <div className="w-full h-full bg-primary/10 flex items-center justify-center">
-                    <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-                </div>
-            ) : thumbnailUrl ? (
-                <div className="relative w-full h-full">
-                    <video
-                        className="w-full h-full object-cover"
-                        style={{ objectPosition: 'center' }}
-                        muted
-                        preload="metadata"
-                    >
-                        <source src={thumbnailUrl} />
-                    </video>
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <Play className="w-3 h-3 text-white opacity-80" />
-                    </div>
-                </div>
-            ) : (
-                <div className="w-full h-full bg-primary/10 flex items-center justify-center">
-                    <FileVideo className="w-4 h-4 text-primary" />
-                </div>
-            )}
-        </div>
-    );
-};
+import VideoThumbnail from './videoThumbnail';
 
 interface PastVideosProps {
     onVideoSelect?: (videoId: string, videoUrl: string) => void;

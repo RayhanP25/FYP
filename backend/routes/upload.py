@@ -122,9 +122,20 @@ async def get_my_videos(current_user: dict = Depends(get_current_user)):
     # Convert ObjectId to string and format response.
     # Use .get() with fallbacks so a document missing a field (e.g. a camera
     # recording) can never crash the whole list.
+    analysis_modes = {
+        a["video_id"]: (a.get("result") or {}).get("mode")
+        for a in client[database_name]["pose_analysis"].find(
+            {"user_id": str(current_user["_id"])}, {"video_id": 1, "result.mode": 1})
+    }
+
     result = []
     for video in videos:
+        vid = str(video["_id"])
+        has_right = bool(video.get("processed_object_name_right"))
         result.append({
+            "has_analysis": vid in analysis_modes,
+            "is_stereo": analysis_modes.get(vid) == "stereo_3d" or has_right,
+            "has_right_view": has_right,
             "video_id": str(video["_id"]),
             "original_filename": video.get("original_filename")
                 or video.get("filename")

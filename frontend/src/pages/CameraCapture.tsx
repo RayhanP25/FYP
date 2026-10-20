@@ -17,7 +17,6 @@ export default function CameraCapture() {
 
     const backendUrl = api.defaults.baseURL || 'http://localhost:8000';
 
-    // Reflect real backend state on mount (e.g. after a page refresh)
     useEffect(() => {
         api.get('/api/camera/status')
             .then(({ data }) => {
@@ -26,7 +25,7 @@ export default function CameraCapture() {
                 setMode(data.mode || 'IDLE');
                 if (data.live) setStreamKey((k) => k + 1);
             })
-            .catch(() => { /* not started yet */ });
+            .catch(() => {});
     }, []);
 
     const toggleStream = async () => {

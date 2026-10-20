@@ -6,6 +6,9 @@ export interface Video {
     content_type: string;
     file_size: number;
     uploaded_at: string;
+    has_analysis?: boolean;
+    is_stereo?: boolean;
+    has_right_view?: boolean;
 }
 
 export interface VideoUploadResponse {
