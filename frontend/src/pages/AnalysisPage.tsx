@@ -4,6 +4,8 @@ import Button from "../components/ui/button"
 import KinematicAnalysis from "@/components/Video/kinematicAnalysis"
 import Skeleton3DViewer from "../components/Skeleton3DViewer"
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '@/api/axiosInstance'
 import { Activity } from "lucide-react"
 
 const AnalysisPage = () => {
@@ -11,6 +13,13 @@ const AnalysisPage = () => {
     const [searchParams] = useSearchParams();
     const videoUrl = searchParams.get('url') || '';
     const navigate = useNavigate();
+
+    const { data: analysis } = useQuery({
+        queryKey: ['analysis', videoId],
+        queryFn: async () => (await api.get(`/api/get-analysis/${videoId}`)).data.result,
+        enabled: !!videoId,
+        retry: false,
+    });
 
     if (!videoId) {
         return (
@@ -29,7 +38,7 @@ const AnalysisPage = () => {
         )
     }
 
-    const isStereo = true; // Switch back to checking your DB mode when ready
+    const isStereo = !!analysis?.frames_3d?.length;
 
     return (
         <AppLayout>

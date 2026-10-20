@@ -40,7 +40,7 @@ const Sidebar = () => {
                         <SidebarItem icon={Home} text="Dashboard" href="/home" />
                         <SidebarItem icon={Video} text="Videos" href="/video-test" />
                         <SidebarItem icon={Camera} text="Camera" href="/camera-capture" />
-                        <SidebarItem icon={BarChart3} text="Analysis" href="/kinematic-analysis" />
+                        <SidebarItem icon={BarChart3} text="Analysis" href="/analysis" />
                         {user?.role === 'admin' && (
                             <SidebarItem icon={Users} text="Users" href="/view-users" />
                         )}

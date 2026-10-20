@@ -10,12 +10,13 @@ const Header = () => {
     '/video-test': 'Videos',
     '/camera-capture': 'Camera',
     '/kinematic-analysis': 'Analysis',
+    '/analysis': 'Analysis',
     '/view-users': 'Users',
     '/user-profile': 'Profile',
     '/settings': 'Settings',
   };
 
-  const getBreadcrumb = () => BREADCRUMB_MAP[location.pathname] || 'Dashboard';
+  const getBreadcrumb = () => BREADCRUMB_MAP[Object.keys(BREADCRUMB_MAP).find((p) => location.pathname === p || location.pathname.startsWith(p + '/')) ?? ''] || 'Dashboard';
 
   return (
     <header className="bg-background-main border-b border-border">

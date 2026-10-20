@@ -11,6 +11,8 @@ import type { JSX } from 'react';
 import CameraCapture from '../pages/CameraCapture';
 import VideosPage from '../pages/VideosPage';
 import AnalysisPage from '../pages/AnalysisPage';
+import AnalysisLibraryPage from '../pages/AnalysisLibraryPage';
+import AnalysisStudioPage from '../pages/AnalysisStudioPage';
 
 const AuthLoading = () => (
   <div className="flex h-screen items-center justify-center bg-background text-text-secondary">
@@ -83,6 +85,14 @@ const AppRoutes = () => {
     {
       path: '/video-test',
       element: <PrivateRoute element={<VideosPage />} />,
+    },
+    {
+      path: '/analysis',
+      element: <PrivateRoute element={<AnalysisLibraryPage />} />,
+    },
+    {
+      path: '/analysis/:videoId',
+      element: <PrivateRoute element={<AnalysisStudioPage />} />,
     },
     {
       // Matches the exact video ID when you click a video

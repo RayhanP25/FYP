@@ -9,7 +9,7 @@ interface SidebarElementProps {
 
 const SidebarItem = ({ icon: Icon, text, href }: SidebarElementProps) => {
     const location = useLocation();
-    const isActive = location.pathname === href;
+    const isActive = location.pathname === href || location.pathname.startsWith(href + '/');
 
     return (
         <Link
