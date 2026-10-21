@@ -6,6 +6,8 @@ import math
 from mmpose.apis import init_model, inference_topdown
 from mmdet.apis import DetInferencer
 
+import video_io
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _POSE_CONFIG = os.path.join(_HERE, "models", "vitpose_base_512_v2.py")
 _POSE_CKPT   = os.path.join(_HERE, "models", "best_coco_AP_epoch_24.pth")
@@ -36,6 +38,12 @@ def _load_models():
     """Load ViTPose + person detector once (heavy); reused across requests."""
     global _pose_model, _detector
     if _pose_model is None:
+        if _DEVICE.startswith("cuda"):
+            import torch
+            torch.backends.cudnn.benchmark = True      # fixed-size crops -> pick the fastest kernels once
+            print(f"pose: running on GPU {torch.cuda.get_device_name(0)}")
+        else:
+            print("pose: WARNING running on CPU -- PyTorch in this environment cannot see CUDA")
         _pose_model = init_model(_POSE_CONFIG, _POSE_CKPT, device=_DEVICE)
         _detector = DetInferencer(model="rtmdet_tiny_8xb32-300e_coco",
                                   device=_DEVICE, show_progress=False)
@@ -197,7 +205,7 @@ def _run_inference(video_path: str) -> dict:
        18 keypoints as [x, y, conf], x/y normalised 0-1, project keypoint order."""
     _load_models()
 
-    cap = cv2.VideoCapture(video_path)
+    cap = video_io.VideoReader(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
 
@@ -286,7 +294,7 @@ def _overlay_confidences(frames):
 
 def _render_overlay(video_path: str, frames: list, output_path: str, fps: float = None,
                     stabilize_confidence: bool = False):
-    cap = cv2.VideoCapture(video_path)
+    cap = video_io.VideoReader(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
 
@@ -294,14 +302,8 @@ def _render_overlay(video_path: str, frames: list, output_path: str, fps: float 
         fps = _capture_fps(cap)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    # H.264 ('avc1') so browsers can play the result. On Windows OpenCV needs
-    # openh264-2.5.0-win64.dll for this; without it the writer silently fails, so
-    # fall back to 'mp4v' (still a valid file, but some browsers won't play it).
-    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'avc1'), fps, (w, h))
-    if not out.isOpened():
-        print("WARNING: H.264 encoder not available (openh264 DLL missing) -> writing mp4v instead; "
-              "browsers may not play this video. See README (OpenH264).")
-        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+    # Browser-playable H.264: NVENC on the GPU when available, else CPU (see video_io.py).
+    out = video_io.open_writer(output_path, w, h, fps)
 
     display_scores = _overlay_confidences(frames) if stabilize_confidence else None
     idx = 0

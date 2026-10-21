@@ -169,7 +169,7 @@ class Coverage:
         ws = [p["width"] for p in self.pairs]
         spread = (max(ws) / min(ws)) if ws else 0
         cov = [c.mean() for c in self.cells]
-        ok = dict(n=n >= 25, area=min(cov) >= 0.75, th=th >= 6, tv=tv >= 6, spread=spread >= 1.6)
+        ok = dict(n=n >= 25, area=min(cov) >= 0.75, tilt=th >= 6 and tv >= 6, spread=spread >= 1.6)  # one flag per line
         lines = [f"pairs {n} (aim 25-40)",
                  f"image covered L {100 * cov[0]:.0f}% R {100 * cov[1]:.0f}% (aim 75%+)",
                  f"tilted left/right {th}, up/down {tv} (aim 6+ each)",
@@ -354,18 +354,27 @@ def load(path=OUT):
     return {k: d[k] for k in d.files}
 
 
-def render_preview(fL, fR, cov, msg=""):
-    """Side-by-side preview: board corners per view, coverage grid and status lines. Shared by the terminal and the web page."""
+def render_preview(fL, fR, cov, msg="", det=None):
+    """Side-by-side preview: board corners per view, coverage grid and status lines. Shared by the terminal and the web page.
+    det: optional ((foundL, cornersL), (foundR, cornersR)) already computed elsewhere (the web page detects in a
+    background thread so the stream is not held back by the ~150 ms per view that findChessboardCorners takes)."""
     sc, disp_w = 0.33, 800
-    fdL, cL = find_corners(gray(fL), fast_scale=sc)
-    fdR, cR = find_corners(gray(fR), fast_scale=sc)
-    ds = disp_w / fL.shape[1]
-    dL = cv2.resize(fL, None, fx=ds, fy=ds); dR = cv2.resize(fR, None, fx=ds, fy=ds)
-    cov.draw(dL, 0, ds); cov.draw(dR, 1, ds)
+    if det is None:
+        det = (find_corners(gray(fL), fast_scale=sc), find_corners(gray(fR), fast_scale=sc))
+    (fdL, cL), (fdR, cR) = det
+    # Scale each view on its own: the two cameras can deliver different sizes or channel counts,
+    # and cv2.hconcat needs equal heights and types.
+    fL3 = fL if fL.ndim == 3 else cv2.cvtColor(fL, cv2.COLOR_GRAY2BGR)
+    fR3 = fR if fR.ndim == 3 else cv2.cvtColor(fR, cv2.COLOR_GRAY2BGR)
+    dsL = disp_w / fL3.shape[1]
+    dL = cv2.resize(fL3, None, fx=dsL, fy=dsL)
+    dsR = dL.shape[0] / fR3.shape[0]
+    dR = cv2.resize(fR3, (max(1, round(fR3.shape[1] * dsR)), dL.shape[0]))
+    cov.draw(dL, 0, dsL); cov.draw(dR, 1, dsR)
     if fdL:
-        cv2.drawChessboardCorners(dL, CHECKERBOARD, (cL * ds).astype(np.float32), True)
+        cv2.drawChessboardCorners(dL, CHECKERBOARD, (cL * dsL).astype(np.float32), True)
     if fdR:
-        cv2.drawChessboardCorners(dR, CHECKERBOARD, (cR * ds).astype(np.float32), True)
+        cv2.drawChessboardCorners(dR, CHECKERBOARD, (cR * dsR).astype(np.float32), True)
     disp = cv2.hconcat([dL, dR])
     lines, ok = cov.summary()
     col = (0, 200, 0) if (fdL and fdR) else (0, 0, 255)

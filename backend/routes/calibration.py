@@ -14,6 +14,7 @@ import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import cv2
@@ -30,7 +31,7 @@ router = APIRouter(prefix="/calibration", tags=["calibration"])
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CALIB_PATH = os.path.join(BACKEND_DIR, "calibration.npz")
 SESSIONS_DIR = os.path.join(BACKEND_DIR, "calib_sessions")
-PREVIEW_FPS = float(os.getenv("CALIB_PREVIEW_FPS", "10"))
+PREVIEW_FPS = float(os.getenv("CALIB_PREVIEW_FPS", "30"))
 AIM_PAIRS = 25
 
 
@@ -133,19 +134,49 @@ def status(current_user: dict = Depends(require_admin)):
                 job=state.job, message=state.message if time.time() - state.message_t < 6 else "")
 
 
+class _BoardDetector:
+    """Finds the board in the newest pair on a background thread, both views in parallel (OpenCV releases the GIL)."""
+    def __init__(self):
+        self.det = ((False, None), (False, None))
+        self.running = True
+        self.pool = ThreadPoolExecutor(max_workers=2)
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        seen = None
+        while self.running and manager.running:
+            pair = manager.get_latest()
+            if pair is None or pair[3] == seen:
+                time.sleep(0.01)
+                continue
+            seen = pair[3]
+            jobs = [self.pool.submit(sc.find_corners, sc.gray(f), 0.33) for f in pair[:2]]
+            self.det = tuple(j.result() for j in jobs)
+        self.pool.shutdown(wait=False)
+
+    def stop(self):
+        self.running = False
+
+
 def _preview_frames(s):
     boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
     interval = 1.0 / max(1.0, PREVIEW_FPS)
-    while manager.running and state.session is s:
-        pair = manager.get_latest()
-        if pair is None:
-            time.sleep(0.03)
-            continue
-        msg = state.message if time.time() - state.message_t < 3 else ""
-        ok, jpg = cv2.imencode(".jpg", sc.render_preview(pair[0], pair[1], s.cov, msg), [cv2.IMWRITE_JPEG_QUALITY, 75])
-        if ok:
-            yield boundary + jpg.tobytes() + b"\r\n"
-        time.sleep(interval)
+    detector = _BoardDetector()
+    try:
+        while manager.running and state.session is s:
+            t0 = time.time()
+            pair = manager.get_latest()
+            if pair is None:
+                time.sleep(0.03)
+                continue
+            msg = state.message if time.time() - state.message_t < 3 else ""
+            img = sc.render_preview(pair[0], pair[1], s.cov, msg, det=detector.det)
+            ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            if ok:
+                yield boundary + jpg.tobytes() + b"\r\n"
+            time.sleep(max(0.0, interval - (time.time() - t0)))
+    finally:
+        detector.stop()
 
 
 @router.get("/preview")
@@ -168,6 +199,11 @@ def start_session(current_user: dict = Depends(require_admin)):
         if pair is None:
             raise HTTPException(status_code=503, detail="The cameras are not delivering frames yet. Try again.")
         (h, w), (hr, wr) = pair[0].shape[:2], pair[1].shape[:2]
+        if (w, h) != (wr, hr):
+            raise HTTPException(status_code=409, detail=(
+                f"Left camera delivers {w}x{h} but right delivers {wr}x{hr}. Both must match for stereo "
+                f"calibration -- set CAMERA_WIDTH/CAMERA_HEIGHT in backend/.env to a size both cameras "
+                f"support (e.g. 1280x720 or 640x480) and restart the backend."))
         folder = os.path.join(SESSIONS_DIR, datetime.now().strftime("%Y-%m-%d_%H%M%S"))
         state.session = sc.CalibrationSession(folder, (w, h), (wr, hr), out=CALIB_PATH, meta=dict(
             date=datetime.now().isoformat(timespec="seconds"), session=folder,

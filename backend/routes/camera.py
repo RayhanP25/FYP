@@ -18,13 +18,16 @@ import time
 import asyncio
 import threading
 import tempfile
+import shutil
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import cv2
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+import video_io
 from database import client, database_name
 from minio_client import minio_client
 from routes.users import get_current_user
@@ -41,7 +44,7 @@ BUCKET = os.getenv("MINIO_BUCKET", "sport-pose-videos")
 # Windows capture API for USB cameras: "msmf" (default, gets MJPG -> 30 fps) or "dshow"
 CAMERA_API = os.getenv("CAMERA_API", "msmf").lower()
 # Live preview: lower rate + size than the recording, so it doesn't steal CPU from capture
-PREVIEW_FPS = float(os.getenv("PREVIEW_FPS", "15"))
+PREVIEW_FPS = float(os.getenv("PREVIEW_FPS", "30"))
 PREVIEW_SCALE = float(os.getenv("PREVIEW_SCALE", "0.5"))
 
 
@@ -196,10 +199,19 @@ manager = StereoManager()
 
 
 class Recorder:
-    """Writes one side-by-side frame for every NEW left-camera frame.
-    If the camera really skipped frames (gap > 1.5 frame periods) the last frame is
-    repeated to keep the video's duration correct; those repeats are counted
-    (dup_frames) so a bad recording is visible instead of hidden."""
+    """Records in two stages so 2K stereo keeps up with the cameras.
+
+    1. While recording, every NEW left-camera frame pair is saved as two JPEG stills by a small
+       thread pool (JPEG encoding is fast and runs in parallel; OpenCV releases the GIL).
+    2. On stop, the stills are put into the side-by-side MP4 at CAP_FPS. Real camera gaps
+       (gap > 1.5 frame periods) are filled by repeating the previous frame so the duration stays
+       correct; those repeats are counted (dup_frames) so a bad recording is visible.
+
+    Encoding a 5120x1440 MP4 frame on the CPU is far slower than 30 fps, so doing it live (the old
+    way) fell behind and filled the video with repeats (measured: 0.8 real fps at 2K). Now that cost
+    is paid once after recording, and stop-recording takes a little longer instead."""
+
+    MAX_PENDING = int(os.getenv("RECORD_MAX_PENDING", "90"))   # stills waiting to be written
 
     def __init__(self):
         self.active = False
@@ -207,6 +219,7 @@ class Recorder:
         self.path = None
         self.frames = 0
         self.dup_frames = 0
+        self.dropped = 0
         self.real_fps = 0.0
 
     def start(self):
@@ -218,19 +231,25 @@ class Recorder:
         if manager.get_latest() is None:
             raise HTTPException(status_code=409, detail="Feed not ready. Start the live feed first.")
         self.path = tempfile.mktemp(suffix="_stereo.mp4")
-        self.frames = self.dup_frames = 0
+        self.dir = tempfile.mkdtemp(prefix="rec_")
+        self.stills = []                   # (timestamp, left jpg path, right jpg path), in capture order
+        self.frames = self.dup_frames = self.dropped = 0
         self.real_fps = 0.0
+        self.encoder = None
         self.active = True
-        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.thread.start()
 
-    def _loop(self):
-        fL, fR, ts, seq = manager.get_latest()
-        combo = _compose(fL, fR)
-        h, w = combo.shape[:2]
-        writer = _open_writer(self.path, w, h, CAP_FPS)
-        period = 1.0 / CAP_FPS
-        start_ts, last_seq, real = ts, seq - 1, 0
+    def _save_pair(self, k, fL, fR):
+        pL, pR = os.path.join(self.dir, f"{k:06d}_L.jpg"), os.path.join(self.dir, f"{k:06d}_R.jpg")
+        cv2.imwrite(pL, fL, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        cv2.imwrite(pR, fR, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        return pL, pR
+
+    def _capture_loop(self):
+        pool = ThreadPoolExecutor(max_workers=int(os.getenv("RECORD_WORKERS", "4")))
+        jobs = []
+        last_seq = manager.get_latest()[3] - 1
         while self.active:
             pair = manager.get_latest()
             if pair is None or pair[3] == last_seq:
@@ -238,25 +257,46 @@ class Recorder:
                 continue
             fL, fR, ts, seq = pair
             last_seq = seq
-            combo = _compose(fL, fR)
-            # frames this timestamp should be at; fill only genuine camera gaps
-            target = int(round((ts - start_ts) / period)) + 1
-            n = max(1, target - self.frames) if target - self.frames > 1.5 else 1
-            for _ in range(n):
-                writer.write(combo)
-            self.frames += n
-            self.dup_frames += n - 1
-            real += 1
-        writer.release()
-        dur = max(1e-6, self.frames / CAP_FPS)
-        self.real_fps = real / dur
+            if sum(not j.done() for _, j in jobs[-self.MAX_PENDING - 1:]) >= self.MAX_PENDING:
+                self.dropped += 1                     # disk can't keep up: skip, gap gets filled later
+                continue
+            jobs.append((ts, pool.submit(self._save_pair, len(jobs), fL, fR)))
+        pool.shutdown(wait=True)
+        self.stills = [(ts, *j.result()) for ts, j in jobs]
+
+    def _encode(self):
+        if not self.stills:
+            raise HTTPException(status_code=500, detail="No frames were recorded.")
+        period = 1.0 / CAP_FPS
+        writer = None
+        start_ts, real = self.stills[0][0], 0
+        try:
+            for ts, pL, pR in self.stills:
+                combo = _compose(cv2.imread(pL), cv2.imread(pR))
+                if writer is None:
+                    h, w = combo.shape[:2]
+                    writer = video_io.open_writer(self.path, w, h, CAP_FPS)
+                    self.encoder = writer.encoder
+                target = int(round((ts - start_ts) / period)) + 1
+                n = max(1, target - self.frames) if target - self.frames > 1.5 else 1
+                for _ in range(n):
+                    writer.write(combo)
+                self.frames += n
+                self.dup_frames += n - 1
+                real += 1
+        finally:
+            if writer is not None:
+                writer.release()
+            shutil.rmtree(self.dir, ignore_errors=True)
+        self.real_fps = real / max(1e-6, self.frames / CAP_FPS)
 
     def stop(self):
         if not self.active:
             raise HTTPException(status_code=409, detail="Not recording.")
         self.active = False
         if self.thread:
-            self.thread.join(timeout=5)
+            self.thread.join()
+        self._encode()
         return self.path, self.frames
 
 
@@ -352,8 +392,10 @@ def stop_recording(current_user: dict = Depends(get_current_user)):
         "frames": frames,
         "dup_frames": dup_frames,      # frames repeated to fill real camera gaps
         "real_fps": real_fps,          # new images per second actually captured
+        "dropped_frames": recorder.dropped,  # camera frames skipped because saving fell behind
     }
     result = client[database_name]["videos"].insert_one(doc)
     return {"status": "saved", "video_id": str(result.inserted_id),
             "object_name": object_name, "frames": frames,
-            "dup_frames": dup_frames, "real_fps": real_fps}
+            "dup_frames": dup_frames, "real_fps": real_fps,
+            "dropped_frames": recorder.dropped, "encoder": recorder.encoder}

@@ -7,3 +7,4 @@ python-multipart==0.0.9
 minio==7.2.20
 opencv-python==4.10.0.84
 python-dotenv
+imageio-ffmpeg   # bundled ffmpeg for GPU (NVENC) video encoding, see video_io.py

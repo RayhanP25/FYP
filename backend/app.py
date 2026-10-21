@@ -26,3 +26,10 @@ app.include_router(upload.router, prefix="/api")
 app.include_router(pose.router, prefix="/api")
 app.include_router(camera.router, prefix="/api")
 app.include_router(calibration.router, prefix="/api")
+
+
+@app.on_event("startup")
+def _report_video_backend():
+    # Probes NVENC / libx264 once and logs which one this machine will use.
+    import threading, video_io
+    threading.Thread(target=lambda: print(video_io.describe()), daemon=True).start()

@@ -19,6 +19,7 @@ import time
 import numpy as np
 import cv2
 
+import video_io
 from pose_estimator import process_video_with_overlays
 from triangulate import load_calibration, triangulate_keypoints, angle_3d
 
@@ -47,7 +48,7 @@ def _out_size(fw, fh, target_w):
 
 def _split_to_temp(input_path, target_w):
     """Split a side-by-side video into two temp half-videos (downscaled)."""
-    cap = cv2.VideoCapture(input_path)
+    cap = video_io.VideoReader(input_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     ok, frame = cap.read()
     if not ok:
@@ -60,9 +61,8 @@ def _split_to_temp(input_path, target_w):
 
     lp = tempfile.mktemp(suffix="_L.mp4")
     rp = tempfile.mktemp(suffix="_R.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    wL = cv2.VideoWriter(lp, fourcc, fps, (lw, lh))
-    wR = cv2.VideoWriter(rp, fourcc, fps, (rw, rh))
+    wL = video_io.open_writer(lp, lw, lh, fps)     # NVENC when available
+    wR = video_io.open_writer(rp, rw, rh, fps)
 
     while ok:
         L = frame[:, :half]
