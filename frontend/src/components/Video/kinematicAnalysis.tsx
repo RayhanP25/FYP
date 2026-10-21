@@ -5,7 +5,7 @@ import KinematicChart, { type ChartMode } from './kinematicChart';
 
 interface KinematicAnalysisProps { videoId: string; }
 
-const TABS: [ChartMode, string][] = [['angles', 'Angles'], ['position', 'Position'], ['velocity', 'Velocity']];
+const TABS: [ChartMode, string][] = [['angles', 'Angles'], ['position', 'Position'], ['velocity', 'Velocity'], ['distance', 'Distance']];
 
 const KinematicAnalysis = ({ videoId }: KinematicAnalysisProps) => {
     const [tab, setTab] = useState<ChartMode>('angles');
