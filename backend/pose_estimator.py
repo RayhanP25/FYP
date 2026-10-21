@@ -350,7 +350,7 @@ def process_video_with_overlays(
 
 
 def heal_and_render(raw_result: dict, video_path: str, output_path: str, heal_kwargs: dict = None,
-                    raw_keypoints: list = None) -> dict:
+                    raw_keypoints: list = None, render: bool = True) -> dict:
     """Heal + smooth the raw keypoints, keep the raw ones alongside, and render the overlay video.
     raw_keypoints: per-frame keypoints to store as "keypoints_raw" (default: raw_result's own), so the
     untouched model output stays available for comparison even when the caller edited raw_result
@@ -370,10 +370,11 @@ def heal_and_render(raw_result: dict, video_path: str, output_path: str, heal_kw
         kp_raw = raw_keypoints[i] if raw_keypoints is not None and i < len(raw_keypoints) else src.get("keypoints")
         fr["keypoints_raw"] = kp_raw
 
-    t_ov = time.perf_counter()
-    _render_overlay(video_path, healed_result["frames"], output_path, fps=raw_result["fps"],
-                    stabilize_confidence=True)
     healed_result["timing"] = dict(healed_result.get("timing", {}))
     healed_result["timing"]["healing_seconds"] = round(heal_time, 2)
-    healed_result["timing"]["overlay_seconds"] = round(time.perf_counter() - t_ov, 2)
+    if render:          # stereo renders later, after the 3D refinement has filled hidden joints
+        t_ov = time.perf_counter()
+        _render_overlay(video_path, healed_result["frames"], output_path, fps=raw_result["fps"],
+                        stabilize_confidence=True)
+        healed_result["timing"]["overlay_seconds"] = round(time.perf_counter() - t_ov, 2)
     return healed_result

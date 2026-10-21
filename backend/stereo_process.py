@@ -22,7 +22,8 @@ import cv2
 import video_io
 import copy
 
-from pose_estimator import _run_inference, heal_and_render, calculate_frame_angles
+from pose_estimator import _run_inference, heal_and_render, calculate_frame_angles, _render_overlay
+import stereo_bones
 from triangulate import load_calibration, angle_3d, DEFAULT_CONF_THRESHOLD
 from stereo_refine import fix_swaps, triangulate_checked, reprojection_summary, spike_mask, NUM_KEYPOINTS, SPIKE_MM, JOINT_NAMES
 
@@ -120,9 +121,9 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
                     f["angles"] = calculate_frame_angles(f["keypoints"])
         t_swaps = time.perf_counter()
 
-        # 3. Heal each view (fills short occlusions) and render its overlay video.
-        resL = heal_and_render(rawL, lp, output_path, raw_keypoints=origL)
-        resR = heal_and_render(rawR, rp, roTmp)
+        # 3. Heal each view (fills short occlusions). Overlays are drawn after step 6.
+        resL = heal_and_render(rawL, lp, output_path, raw_keypoints=origL, render=False)
+        resR = heal_and_render(rawR, rp, roTmp, render=False)
         t_heal_done = time.perf_counter()
 
         framesL = resL.get("frames", [])
@@ -145,6 +146,22 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         spikes = spike_mask(P)
         P[spikes] = np.nan
         spike_counts = spikes.sum(axis=0)
+        P_unrefined = P.copy()
+        t_tri_done = time.perf_counter()
+
+        # 6. Bone lengths + the other camera: recover joints only one camera sees, refine every
+        #    frame with soft constant bone lengths, and write the result back into each camera's 2D.
+        bone_report, recovered = stereo_bones.run(P, framesL, framesR, calib, errs)
+        for frames_v in (framesL, framesR):
+            for f in frames_v:
+                if f.get("stereo_filled") and f.get("keypoints"):
+                    f["angles"] = calculate_frame_angles(f["keypoints"])
+        t_bones_done = time.perf_counter()
+
+        # 7. Overlay videos (now showing the filled-in joints too).
+        _render_overlay(lp, framesL, output_path, fps=rawL["fps"], stabilize_confidence=True)
+        _render_overlay(rp, framesR, roTmp, fps=rawR["fps"], stabilize_confidence=True)
+        t_overlay_done = time.perf_counter()
 
         frames_3d = []
         for i in range(n):
@@ -163,6 +180,11 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
             sp = [int(j) for j in np.flatnonzero(spikes[i])]
             if sp:
                 f3["spikes"] = sp
+            if i in recovered:
+                f3["recovered"] = sorted(recovered[i])
+            if bone_report.get("enabled"):          # keep the pre-step-2 3D for comparison
+                f3["keypoints_3d_unrefined"] = [None if np.any(np.isnan(p)) else [round(float(v), 1) for v in p]
+                                                for p in P_unrefined[i]]
             sw = swap_report["per_frame"][i] if i < len(swap_report["per_frame"]) else None
             if sw and (sw["left"] or sw["right"]):
                 f3["swapped"] = sw
@@ -185,6 +207,7 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         "stereo_report": {               # how much the two cameras agreed (see stereo_refine.py)
             "swaps": {k: v for k, v in swap_report.items() if k != "per_frame"},
             "reprojection": reprojection_summary(errs, rejected_counts, n),
+            "bones": bone_report,
             "spikes": {"spike_mm": SPIKE_MM, "total": int(spike_counts.sum()),
                        "per_joint": {JOINT_NAMES[j]: int(c) for j, c in enumerate(spike_counts) if c}},
         },
@@ -195,8 +218,10 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
             "right_view": resR.get("timing"),
             "pose_seconds": round(t_pose_done - t_start - t_split, 2),
             "swap_check_seconds": round(t_swaps - t_pose_done, 2),
-            "healing_and_overlay_seconds": round(t_heal_done - t_swaps, 2),
-            "triangulation_seconds": round(t_triang - t_heal_done, 2),
+            "healing_seconds": round(t_heal_done - t_swaps, 2),
+            "triangulation_seconds": round(t_tri_done - t_heal_done, 2),
+            "bone_refinement_seconds": round(t_bones_done - t_tri_done, 2),
+            "overlay_seconds": round(t_overlay_done - t_bones_done, 2),
             "total_seconds": round(time.perf_counter() - t_start, 2),
         },
         "calibration_rms": float(np.asarray(calib.get("rms", 0)).item())
