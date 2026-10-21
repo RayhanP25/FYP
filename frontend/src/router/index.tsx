@@ -13,6 +13,7 @@ import VideosPage from '../pages/VideosPage';
 import AnalysisPage from '../pages/AnalysisPage';
 import AnalysisLibraryPage from '../pages/AnalysisLibraryPage';
 import AnalysisStudioPage from '../pages/AnalysisStudioPage';
+import CalibrationPage from '../pages/CalibrationPage';
 
 const AuthLoading = () => (
   <div className="flex h-screen items-center justify-center bg-background text-text-secondary">
@@ -69,6 +70,10 @@ const AppRoutes = () => {
     {
       path: '/camera-capture',
       element: <PrivateRoute element={<CameraCapture />} />,
+    },
+    {
+      path: '/calibration',
+      element: <AdminRoute element={<CalibrationPage />} />,
     },
     // {
     //   path: '/video-test',
