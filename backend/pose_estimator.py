@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import cv2
 import numpy as np
@@ -34,9 +35,20 @@ DET_EVERY = int(os.environ.get("POSE_DET_EVERY", "10"))
 POSE_BATCH = int(os.environ.get("POSE_BATCH", "16"))
 # Half precision on the GPU: faster, but check accuracy first (backend/bench_pose.py).
 POSE_FP16 = os.environ.get("POSE_FP16", "0") == "1"
+# GPU fast paths (pose_gpu.py); each can be turned off in .env to compare.
+POSE_GPU_DECODE = os.environ.get("POSE_GPU_DECODE", "1") == "1"      # heatmap decoding on the GPU
+POSE_FLIP_BATCH = os.environ.get("POSE_FLIP_BATCH", "1") == "1"      # flip pass in the same batch
+POSE_FAST_DET = os.environ.get("POSE_FAST_DET", "0") == "1"          # RTMDet without DetInferencer (no measured gain)
+POSE_PREFETCH = os.environ.get("POSE_PREFETCH", "1") == "1"          # read video ahead in a thread
+POSE_CHANNELS_LAST = os.environ.get("POSE_CHANNELS_LAST", "0") == "1"  # no measured gain
+# Flip test = run every crop twice (mirrored too) and average: ~1.4x slower, but turning it off moved
+# keypoints by 0.6 px median / 6 px max in bench_speed.py, so it stays on unless you choose speed.
+POSE_FLIP_TEST = os.environ.get("POSE_FLIP_TEST", "1") == "1"
+_direct_det = None
 _pose_model = None
 _detector = None
 _pipeline = None
+_lock = threading.Lock()          # the detector and one-time setup are not thread-safe
 
 
 def _load_models():
@@ -50,8 +62,27 @@ def _load_models():
         else:
             print("pose: WARNING running on CPU -- PyTorch in this environment cannot see CUDA")
         _pose_model = init_model(_POSE_CONFIG, _POSE_CKPT, device=_DEVICE)
+        _pose_model.test_cfg["flip_test"] = POSE_FLIP_TEST
         _detector = DetInferencer(model="rtmdet_tiny_8xb32-300e_coco",
                                   device=_DEVICE, show_progress=False)
+        if _DEVICE.startswith("cuda"):
+            _setup_gpu_paths()
+
+
+def _setup_gpu_paths():
+    global _direct_det
+    import pose_gpu
+    pose_gpu.FLIP_BATCH_ON = POSE_FLIP_BATCH
+    if POSE_GPU_DECODE:
+        pose_gpu.install_gpu_decoder(_pose_model)
+    if POSE_CHANNELS_LAST:
+        pose_gpu.set_channels_last(_pose_model, True)
+    if POSE_FAST_DET:
+        try:
+            _direct_det = pose_gpu.DirectDetector(_detector)
+        except Exception as e:
+            print(f"pose: direct detector unavailable ({e!r}); using DetInferencer")
+            _direct_det = None
 
 
 def _detect_person(frame_bgr):
@@ -62,6 +93,23 @@ def _detect_person(frame_bgr):
 
 def _detect_people(frames):
     """Batched _detect_person: one detector pass for several frames."""
+    global _direct_det
+    if _direct_det is not None and POSE_FAST_DET:
+        try:
+            boxes = [_person_box(p.pred_instances, f) for p, f in zip(_direct_det(frames), frames)]
+            if not _direct_det.checked:          # first use: must give the same boxes as DetInferencer
+                _direct_det.checked = True
+                ref = _detect_person(frames[0])
+                d = float(np.abs(np.asarray(boxes[0]) - np.asarray(ref)).max())
+                if d > 2.0:
+                    print(f"pose: WARNING direct detector box differs by {d:.1f} px -- using DetInferencer")
+                    _direct_det = None
+                    return [_detect_person(f) for f in frames]
+                print(f"pose: direct detector matches DetInferencer (max box difference {d:.2f} px)")
+            return boxes
+        except Exception as e:
+            print(f"pose: direct detector failed ({e!r}); using DetInferencer")
+            _direct_det = None
     if len(frames) == 1:
         return [_detect_person(frames[0])]
     preds = _detector(list(frames), batch_size=len(frames), return_datasamples=True,
@@ -85,6 +133,12 @@ def _person_box(o, frame_bgr):
 def _pose_pipeline():
     """mmpose's test pipeline (crop + resize around the box), built once instead of every frame."""
     global _pipeline
+    with _lock:
+        return _build_pipeline()
+
+
+def _build_pipeline():
+    global _pipeline
     if _pipeline is None:
         from mmengine.dataset import Compose
         from mmengine.registry import init_default_scope
@@ -99,6 +153,12 @@ _fp16_hooked = False
 def _ensure_fp16_hook():
     """Heatmaps back to float32 before decoding (the decoder's OpenCV blur has no float16).
     Harmless in float32 runs, so it is never removed."""
+    global _fp16_hooked
+    with _lock:
+        _add_fp16_hook()
+
+
+def _add_fp16_hook():
     global _fp16_hooked
     if not _fp16_hooked:
         import torch
@@ -118,12 +178,16 @@ def _pose_batch(frames, boxes):
         info.update(_pose_model.dataset_meta)
         data.append(pipe(info))
     batch = pseudo_collate(data)
+    step = _pose_model.test_step
+    if _DEVICE.startswith("cuda") and POSE_FLIP_BATCH:
+        import pose_gpu
+        step = lambda b: pose_gpu.fast_test_step(_pose_model, b)
     with torch.no_grad():
         if POSE_FP16 and _DEVICE.startswith("cuda"):
             _ensure_fp16_hook()
             with torch.autocast("cuda", dtype=torch.float16):
-                return _pose_model.test_step(batch)
-        return _pose_model.test_step(batch)
+                return step(batch)
+        return step(batch)
 
 
 def _capture_fps(cap, default=30.0):
@@ -288,16 +352,32 @@ def _run_inference(video_path: str) -> dict:
         return [[float(kp[i, 0]) / video_width, float(kp[i, 1]) / video_height, float(sc[i])]
                 for i in range(18)]
 
-    done = False
-    while not done:
-        # read a chunk of frames
+    def read_chunk():
         chunk = []
         while len(chunk) < batch:
             success, frame = cap.read()             # BGR frame
             if not success:
-                done = True
                 break
             chunk.append(frame)
+        return chunk
+
+    if POSE_PREFETCH:
+        import queue
+        q = queue.Queue(maxsize=2)
+
+        def reader():
+            while True:
+                c = read_chunk()
+                q.put(c)
+                if len(c) < batch:
+                    break
+        threading.Thread(target=reader, daemon=True).start()
+        next_chunk = q.get
+    else:
+        next_chunk = read_chunk
+
+    while True:
+        chunk = next_chunk()
         if not chunk:
             break
         start = len(frame_data)
@@ -307,10 +387,11 @@ def _run_inference(video_path: str) -> dict:
         found = {}
         if det_k:
             t_det = time.perf_counter()
-            try:
-                found = dict(zip(det_k, _detect_people([chunk[k] for k in det_k])))
-            except Exception:
-                found = {k: _detect_person(chunk[k]) for k in det_k}
+            with _lock:
+                try:
+                    found = dict(zip(det_k, _detect_people([chunk[k] for k in det_k])))
+                except Exception:
+                    found = {k: _detect_person(chunk[k]) for k in det_k}
             det_time += time.perf_counter() - t_det
             det_runs += len(det_k)
         boxes = []
@@ -343,6 +424,8 @@ def _run_inference(video_path: str) -> dict:
                 "keypoints": custom_18,
                 "angles": calculate_frame_angles(custom_18) if custom_18 else {}
             })
+        if len(chunk) < batch:
+            break
     frame_idx = len(frame_data)
 
     cap.release()
