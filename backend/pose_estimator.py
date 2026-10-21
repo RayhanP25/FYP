@@ -344,6 +344,17 @@ def process_video_with_overlays(
         raw_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
         return raw_result
 
+    healed_result = heal_and_render(raw_result, video_path, output_path, heal_kwargs)
+    healed_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
+    return healed_result
+
+
+def heal_and_render(raw_result: dict, video_path: str, output_path: str, heal_kwargs: dict = None,
+                    raw_keypoints: list = None) -> dict:
+    """Heal + smooth the raw keypoints, keep the raw ones alongside, and render the overlay video.
+    raw_keypoints: per-frame keypoints to store as "keypoints_raw" (default: raw_result's own), so the
+    untouched model output stays available for comparison even when the caller edited raw_result
+    (stereo swap fixing does)."""
     t_heal = time.perf_counter()
     from pose_postprocess import heal_and_smooth
     kwargs = {"healed_confidence": 0.6}
@@ -352,16 +363,17 @@ def process_video_with_overlays(
     healed_result = heal_and_smooth(raw_result, **kwargs)
     heal_time = time.perf_counter() - t_heal
 
+    raw_frames = raw_result["frames"]
     for i, fr in enumerate(healed_result["frames"]):
-        if i < len(raw_result["frames"]):
-            fr["angles_raw"] = raw_result["frames"][i].get("angles", {})
-        else:
-            fr["angles_raw"] = {}
+        src = raw_frames[i] if i < len(raw_frames) else {}
+        fr["angles_raw"] = src.get("angles", {})
+        kp_raw = raw_keypoints[i] if raw_keypoints is not None and i < len(raw_keypoints) else src.get("keypoints")
+        fr["keypoints_raw"] = kp_raw
 
     t_ov = time.perf_counter()
     _render_overlay(video_path, healed_result["frames"], output_path, fps=raw_result["fps"],
                     stabilize_confidence=True)
+    healed_result["timing"] = dict(healed_result.get("timing", {}))
     healed_result["timing"]["healing_seconds"] = round(heal_time, 2)
     healed_result["timing"]["overlay_seconds"] = round(time.perf_counter() - t_ov, 2)
-    healed_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
     return healed_result

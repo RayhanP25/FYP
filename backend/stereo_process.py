@@ -20,8 +20,11 @@ import numpy as np
 import cv2
 
 import video_io
-from pose_estimator import process_video_with_overlays
-from triangulate import load_calibration, triangulate_keypoints, angle_3d
+import copy
+
+from pose_estimator import _run_inference, heal_and_render, calculate_frame_angles
+from triangulate import load_calibration, angle_3d, DEFAULT_CONF_THRESHOLD
+from stereo_refine import fix_swaps, triangulate_checked, reprojection_summary, spike_mask, NUM_KEYPOINTS, SPIKE_MM, JOINT_NAMES
 
 # 18-point skeleton: 0 nose,1 neck,2 Lsho,3 Rsho,4 Lelb,5 Relb,6 Lwri,7 Rwri,
 # 8 Lidx,9 Ridx,10 Lhip,11 Rhip,12 Lknee,13 Rknee,14 Lank,15 Rank,16 Ltoe,17 Rtoe
@@ -102,41 +105,69 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
     keep_right = output_path_right is not None
     roTmp = output_path_right or tempfile.mktemp(suffix="_Ro.mp4")
     try:
-        # left overlay goes to output_path (the displayed processed video)
-        # Heal each view before triangulating -- a joint dropped in either view
-        # removes the 3D point entirely, so filling short occlusions here
-        # directly improves 3D coverage.
-        resL = process_video_with_overlays(lp, output_path, apply_healing=True)
-        resR = process_video_with_overlays(rp, roTmp, apply_healing=True)
+        # 1. Raw 2D detections in each view (no healing yet).
+        rawL = _run_inference(lp)
+        rawR = _run_inference(rp)
+        origL = [copy.deepcopy(f.get("keypoints")) for f in rawL["frames"]]
         t_pose_done = time.perf_counter()
+
+        # 2. Cross-check the views: put left/right labels back where one camera mixed them up.
+        #    Done on the RAW keypoints so healing/smoothing below runs on consistent tracks.
+        swap_report = fix_swaps(rawL["frames"], rawR["frames"], calib)
+        for res in (rawL, rawR):
+            for f in res["frames"]:
+                if f.get("keypoints"):
+                    f["angles"] = calculate_frame_angles(f["keypoints"])
+        t_swaps = time.perf_counter()
+
+        # 3. Heal each view (fills short occlusions) and render its overlay video.
+        resL = heal_and_render(rawL, lp, output_path, raw_keypoints=origL)
+        resR = heal_and_render(rawR, rp, roTmp)
+        t_heal_done = time.perf_counter()
 
         framesL = resL.get("frames", [])
         framesR = resR.get("frames", [])
         n = min(len(framesL), len(framesR))
 
+        # 4. Triangulate with a reprojection check: points the two cameras disagree on are dropped.
+        P = np.full((n, NUM_KEYPOINTS, 3), np.nan)
+        errs, rejected_by_frame = [], []
+        rejected_counts = np.zeros(NUM_KEYPOINTS, dtype=int)
+        for i in range(n):
+            pts3d, err, rejected = triangulate_checked(framesL[i].get("keypoints"), framesR[i].get("keypoints"),
+                                                       calib, DEFAULT_CONF_THRESHOLD)
+            P[i] = pts3d
+            errs.append(err)
+            rejected_by_frame.append(list(rejected))
+            rejected_counts[rejected] += 1
+
+        # 5. Drop one-frame 3D spikes (depth errors along the epipolar line that reprojection can't see).
+        spikes = spike_mask(P)
+        P[spikes] = np.nan
+        spike_counts = spikes.sum(axis=0)
+
         frames_3d = []
         for i in range(n):
-            kpL = framesL[i].get("keypoints")
-            kpR = framesR[i].get("keypoints")
-            pts3d = triangulate_keypoints(kpL, kpR, calib)   # (18,3) mm, NaN = missing
-
+            pts3d = P[i]
             angles = {}
             for name, (a, b, c) in ANGLE_TRIPLETS.items():
                 ang = angle_3d(pts3d[a], pts3d[b], pts3d[c])
                 if ang is not None:
                     angles[name] = round(ang, 2)
+            kp_list = [None if np.any(np.isnan(p)) else [round(float(p[0]), 1), round(float(p[1]), 1),
+                                                        round(float(p[2]), 1)] for p in pts3d]
+            f3 = {"frame_index": i, "keypoints_3d": kp_list, "angles_3d": angles,
+                  "reproj_px": [None if not np.isfinite(e) else round(float(e), 1) for e in errs[i]]}
+            if rejected_by_frame[i]:
+                f3["rejected"] = rejected_by_frame[i]
+            sp = [int(j) for j in np.flatnonzero(spikes[i])]
+            if sp:
+                f3["spikes"] = sp
+            sw = swap_report["per_frame"][i] if i < len(swap_report["per_frame"]) else None
+            if sw and (sw["left"] or sw["right"]):
+                f3["swapped"] = sw
+            frames_3d.append(f3)
 
-            kp_list = []
-            for p in pts3d:
-                if np.any(np.isnan(p)):
-                    kp_list.append(None)
-                else:
-                    kp_list.append([round(float(p[0]), 1),
-                                    round(float(p[1]), 1),
-                                    round(float(p[2]), 1)])
-            frames_3d.append({"frame_index": i,
-                              "keypoints_3d": kp_list,
-                              "angles_3d": angles})
         t_triang = time.perf_counter()
     finally:
         cleanup = [lp, rp] if keep_right else [lp, rp, roTmp]
@@ -151,11 +182,21 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         "units": "mm",
         "frames": framesL[:n],          # 2D LEFT view -> keeps the existing chart working
         "frames_3d": frames_3d,         # triangulated 3D + true 3D angles
+        "stereo_report": {               # how much the two cameras agreed (see stereo_refine.py)
+            "swaps": {k: v for k, v in swap_report.items() if k != "per_frame"},
+            "reprojection": reprojection_summary(errs, rejected_counts, n),
+            "spikes": {"spike_mm": SPIKE_MM, "total": int(spike_counts.sum()),
+                       "per_joint": {JOINT_NAMES[j]: int(c) for j, c in enumerate(spike_counts) if c}},
+        },
+        "healing_report": resL.get("healing_report"),
         "timing": {
             "split_seconds": round(t_split, 2),
             "left_view": resL.get("timing"),
             "right_view": resR.get("timing"),
-            "triangulation_seconds": round(t_triang - t_pose_done, 2),
+            "pose_seconds": round(t_pose_done - t_start - t_split, 2),
+            "swap_check_seconds": round(t_swaps - t_pose_done, 2),
+            "healing_and_overlay_seconds": round(t_heal_done - t_swaps, 2),
+            "triangulation_seconds": round(t_triang - t_heal_done, 2),
             "total_seconds": round(time.perf_counter() - t_start, 2),
         },
         "calibration_rms": float(np.asarray(calib.get("rms", 0)).item())
