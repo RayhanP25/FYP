@@ -30,8 +30,13 @@ POSE_MIN_CONF = float(os.environ.get("POSE_MIN_CONF", "0.3"))
 POSE_SURE_CONF = float(os.environ.get("POSE_SURE_CONF", "0.7"))
 # Re-run the person detector every N frames; the box is reused between runs.
 DET_EVERY = int(os.environ.get("POSE_DET_EVERY", "10"))
+# Frames per GPU pass. 1 = the original one-frame-at-a-time path (mmpose inference_topdown).
+POSE_BATCH = int(os.environ.get("POSE_BATCH", "16"))
+# Half precision on the GPU: faster, but check accuracy first (backend/bench_pose.py).
+POSE_FP16 = os.environ.get("POSE_FP16", "0") == "1"
 _pose_model = None
 _detector = None
+_pipeline = None
 
 
 def _load_models():
@@ -52,6 +57,19 @@ def _load_models():
 def _detect_person(frame_bgr):
     """Return one xyxy person box; fall back to the full frame if none found."""
     o = _detector(frame_bgr, return_datasamples=True, no_save_vis=True)["predictions"][0].pred_instances
+    return _person_box(o, frame_bgr)
+
+
+def _detect_people(frames):
+    """Batched _detect_person: one detector pass for several frames."""
+    if len(frames) == 1:
+        return [_detect_person(frames[0])]
+    preds = _detector(list(frames), batch_size=len(frames), return_datasamples=True,
+                      no_save_vis=True)["predictions"]
+    return [_person_box(p.pred_instances, f) for p, f in zip(preds, frames)]
+
+
+def _person_box(o, frame_bgr):
     b = o.bboxes.cpu().numpy(); s = o.scores.cpu().numpy(); l = o.labels.cpu().numpy()
     m = (l == 0) & (s > 0.3)                       # class 0 = person
     if not m.any():
@@ -62,6 +80,50 @@ def _detect_person(frame_bgr):
     bw, bh = x2 - x1, y2 - y1
     return np.array([[max(0, x1 - 0.1 * bw), max(0, y1 - 0.1 * bh),
                       x2 + 0.1 * bw, y2 + 0.1 * bh]], dtype=float)
+
+
+def _pose_pipeline():
+    """mmpose's test pipeline (crop + resize around the box), built once instead of every frame."""
+    global _pipeline
+    if _pipeline is None:
+        from mmengine.dataset import Compose
+        from mmengine.registry import init_default_scope
+        init_default_scope(_pose_model.cfg.get("default_scope", "mmpose"))
+        _pipeline = Compose(_pose_model.cfg.test_dataloader.dataset.pipeline)
+    return _pipeline
+
+
+_fp16_hooked = False
+
+
+def _ensure_fp16_hook():
+    """Heatmaps back to float32 before decoding (the decoder's OpenCV blur has no float16).
+    Harmless in float32 runs, so it is never removed."""
+    global _fp16_hooked
+    if not _fp16_hooked:
+        import torch
+        _pose_model.head.register_forward_hook(lambda m, i, o: o.float() if torch.is_tensor(o) else o)
+        _fp16_hooked = True
+
+
+def _pose_batch(frames, boxes):
+    """ViTPose on several (frame, box) pairs in one GPU pass. Same steps as
+    mmpose.apis.inference_topdown (pipeline -> pseudo_collate -> test_step), just batched."""
+    import torch
+    from mmengine.dataset import pseudo_collate
+    pipe = _pose_pipeline()
+    data = []
+    for f, b in zip(frames, boxes):
+        info = dict(img=f, bbox=np.asarray(b, np.float32).reshape(1, 4), bbox_score=np.ones(1, np.float32))
+        info.update(_pose_model.dataset_meta)
+        data.append(pipe(info))
+    batch = pseudo_collate(data)
+    with torch.no_grad():
+        if POSE_FP16 and _DEVICE.startswith("cuda"):
+            _ensure_fp16_hook()
+            with torch.autocast("cuda", dtype=torch.float16):
+                return _pose_model.test_step(batch)
+        return _pose_model.test_step(batch)
 
 
 def _capture_fps(cap, default=30.0):
@@ -213,42 +275,75 @@ def _run_inference(video_path: str) -> dict:
     fps = _capture_fps(cap)
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    frame_idx = 0
     frame_data = []
     last_box = None
     det_time = 0.0
     det_runs = 0
     pose_time = 0.0
+    batch = max(1, POSE_BATCH)
 
-    while True:
-        success, frame = cap.read()                 # BGR frame
-        if not success:
+    def to_18(r):
+        kp = r.keypoints[0]                          # (18, 2) pixels
+        sc = r.keypoint_scores[0]                    # (18,)
+        return [[float(kp[i, 0]) / video_width, float(kp[i, 1]) / video_height, float(sc[i])]
+                for i in range(18)]
+
+    done = False
+    while not done:
+        # read a chunk of frames
+        chunk = []
+        while len(chunk) < batch:
+            success, frame = cap.read()             # BGR frame
+            if not success:
+                done = True
+                break
+            chunk.append(frame)
+        if not chunk:
             break
+        start = len(frame_data)
 
-        if last_box is None or frame_idx % DET_EVERY == 0:
+        # person boxes: detector every DET_EVERY frames (batched), box reused in between
+        det_k = [k for k in range(len(chunk)) if (last_box is None and k == 0) or (start + k) % DET_EVERY == 0]
+        found = {}
+        if det_k:
             t_det = time.perf_counter()
-            last_box = _detect_person(frame)
+            try:
+                found = dict(zip(det_k, _detect_people([chunk[k] for k in det_k])))
+            except Exception:
+                found = {k: _detect_person(chunk[k]) for k in det_k}
             det_time += time.perf_counter() - t_det
-            det_runs += 1
+            det_runs += len(det_k)
+        boxes = []
+        for k in range(len(chunk)):
+            if k in found:
+                last_box = found[k]
+            boxes.append(last_box)
 
-        try:
-            t_pose = time.perf_counter()
-            r = inference_topdown(_pose_model, frame, last_box, bbox_format="xyxy")[0].pred_instances
-            pose_time += time.perf_counter() - t_pose
-            kp = r.keypoints[0]                      # (18, 2) pixels
-            sc = r.keypoint_scores[0]                # (18,)
-            custom_18 = [[float(kp[i, 0]) / video_width,
-                          float(kp[i, 1]) / video_height,
-                          float(sc[i])] for i in range(18)]
-        except Exception:
-            custom_18 = None
+        # pose
+        t_pose = time.perf_counter()
+        results = [None] * len(chunk)
+        if batch > 1:
+            try:
+                results = [to_18(r.pred_instances) for r in _pose_batch(chunk, boxes)]
+            except Exception as e:
+                print(f"pose: batched inference failed ({e!r}); using one frame at a time for this chunk")
+                results = [None] * len(chunk)
+        for k in range(len(chunk)):
+            if results[k] is None:
+                try:
+                    r = inference_topdown(_pose_model, chunk[k], boxes[k], bbox_format="xyxy")[0]
+                    results[k] = to_18(r.pred_instances)
+                except Exception:
+                    results[k] = None
+        pose_time += time.perf_counter() - t_pose
 
-        frame_data.append({
-            "frame_index": frame_idx,
-            "keypoints": custom_18,
-            "angles": calculate_frame_angles(custom_18) if custom_18 else {}
-        })
-        frame_idx += 1
+        for k, custom_18 in enumerate(results):
+            frame_data.append({
+                "frame_index": start + k,
+                "keypoints": custom_18,
+                "angles": calculate_frame_angles(custom_18) if custom_18 else {}
+            })
+    frame_idx = len(frame_data)
 
     cap.release()
     return {
@@ -262,6 +357,8 @@ def _run_inference(video_path: str) -> dict:
             "pose_seconds": round(pose_time, 2),
             "detections_run": det_runs,
             "det_every": DET_EVERY,
+            "batch": max(1, POSE_BATCH),
+            "fp16": bool(POSE_FP16 and _DEVICE.startswith("cuda")),
             "device": _DEVICE,
         },
     }

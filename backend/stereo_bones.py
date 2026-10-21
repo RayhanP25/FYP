@@ -52,6 +52,9 @@ HEALED_WEIGHT = 0.05     # healed / guessed detections barely count in the fit
 MAX_JUMP_MM = 300.0      # a recovered point this far from the joint's own track is not trusted
 ANCHOR_MM = 15.0         # how far the fit may move a recovered joint from its ray x sphere position
 PRIOR_MM = 60.0          # weak pull of every joint towards its starting point (keeps the fit well posed)
+# Stop when a step improves the fit by less than this (relative). 1e-5 is ~2x faster than scipy's 1e-8
+# default and moved points by < 0.5 mm in tests -- far below the keypoints' own uncertainty.
+FIT_TOL = float(os.environ.get("POSE_BONE_TOL", "1e-5"))
 
 
 class Rig:
@@ -256,16 +259,33 @@ def refine(P, views, rig, bones, recovered=None):
         if not cons:
             continue
 
+        ca = np.array([c[0] for c in cons]); cb = np.array([c[1] for c in cons])
+        cL = np.array([c[2] for c in cons]); cs = np.array([c[3] for c in cons], float)
+
         def residual(x):
             X = x.reshape(-1, 3)
             r = [(w[v][:, None] * (rig.project(X, v) - obs[v])).ravel() for v in (0, 1)]
-            r.append(np.array([(np.linalg.norm(X[a] - X[b]) - L) / s for a, b, L, s in cons]))
+            r.append((np.linalg.norm(X[ca] - X[cb], axis=1) - cL) / cs)
             r.append(((X - x0_pts) / prior[:, None]).ravel())
             return np.concatenate(r)
 
         x0 = P[t, idx].ravel()
+        # Which unknowns each residual depends on: a joint's reprojection and anchor terms only on that
+        # joint, a bone term only on its two joints. Lets scipy estimate the Jacobian with a handful of
+        # grouped evaluations instead of one per unknown (54) -- several times faster, same result.
+        m = len(idx)
+        S = np.zeros((4 * m + len(cons) + 3 * m, 3 * m), dtype=np.int8)
+        for v in (0, 1):
+            for k in range(m):
+                S[v * 2 * m + 2 * k: v * 2 * m + 2 * k + 2, 3 * k: 3 * k + 3] = 1
+        for i, (a, b, _, _) in enumerate(cons):
+            S[4 * m + i, 3 * a: 3 * a + 3] = 1
+            S[4 * m + i, 3 * b: 3 * b + 3] = 1
+        for k in range(m):
+            S[4 * m + len(cons) + 3 * k: 4 * m + len(cons) + 3 * k + 3, 3 * k: 3 * k + 3] = 1
         try:
-            sol = least_squares(residual, x0, loss="huber", f_scale=2.0, method="trf", max_nfev=50)
+            sol = least_squares(residual, x0, loss="huber", f_scale=2.0, method="trf", max_nfev=50,
+                                jac_sparsity=S, x_scale="jac", ftol=FIT_TOL, xtol=FIT_TOL)
             if sol.success or sol.status >= 0:
                 P[t, idx] = sol.x.reshape(-1, 3)
                 done += 1

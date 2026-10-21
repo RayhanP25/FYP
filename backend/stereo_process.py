@@ -50,8 +50,51 @@ def _out_size(fw, fh, target_w):
     return target_w, int(round(fh * s))
 
 
+def _split_ffmpeg(input_path, target_w):
+    """Split in ONE ffmpeg pass: decode once, crop both halves, scale, encode both (NVENC when
+    available). Avoids piping every full 5120x1440 frame through Python (~37 s -> a few s)."""
+    import subprocess
+    exe = video_io.ffmpeg_exe()
+    if not exe:
+        return None
+    cap = cv2.VideoCapture(input_path)
+    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    cap.release()
+    if W <= 0 or H <= 0:
+        return None
+    half = W // 2
+    lw, lh = _out_size(half, H, target_w)
+    rw, rh = _out_size(W - half, H, target_w)
+    lw, lh, rw, rh = (v - v % 2 for v in (lw, lh, rw, rh))          # yuv420p needs even sizes
+    lp = tempfile.mktemp(suffix="_L.mp4")
+    rp = tempfile.mktemp(suffix="_R.mp4")
+    enc = video_io.pick_encoder(max(lw, rw), max(lh, rh))
+    if enc is None:
+        return None
+    enc_args = ["-c:v", enc, *video_io._ENCODERS[enc], "-pix_fmt", "yuv420p"]
+    graph = (f"[0:v]split=2[a][b];"
+             f"[a]crop={half}:{H}:0:0,scale={lw}:{lh}[l];"
+             f"[b]crop={W - half}:{H}:{half}:0,scale={rw}:{rh}[r]")
+    cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-i", input_path,
+           "-filter_complex", graph,
+           "-map", "[l]", *enc_args, "-r", f"{fps}", lp,
+           "-map", "[r]", *enc_args, "-r", f"{fps}", rp]
+    res = subprocess.run(cmd, capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if res.returncode != 0 or not os.path.exists(lp) or not os.path.exists(rp):
+        print(f"split: ffmpeg failed ({res.stderr.decode(errors='ignore')[-300:]}); using the slower Python split")
+        for q in (lp, rp):
+            if os.path.exists(q):
+                os.unlink(q)
+        return None
+    return lp, rp, fps
+
+
 def _split_to_temp(input_path, target_w):
     """Split a side-by-side video into two temp half-videos (downscaled)."""
+    fast = _split_ffmpeg(input_path, target_w)
+    if fast is not None:
+        return fast
     cap = video_io.VideoReader(input_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     ok, frame = cap.read()
