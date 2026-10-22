@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+--find-links https://download.openmmlab.com/mmcv/dist/cu118/torch2.1.0/index.html
 pymongo==4.16.0
 fastapi==0.135.1
 uvicorn==0.41.0
@@ -6,5 +8,17 @@ PyJWT==2.9.0
 python-multipart==0.0.9
 minio==7.2.20
 opencv-python==4.10.0.84
-python-dotenv
-imageio-ffmpeg   # bundled ffmpeg for GPU (NVENC) video encoding, see video_io.py
+python-dotenv==1.2.4
+imageio-ffmpeg==0.6.0   # bundled ffmpeg for GPU (NVENC) video encoding, see video_io.py
+numpy==1.26.4
+scipy==1.17.1
+torch==2.1.0+cu118
+mmengine==0.10.7
+mmcv==2.1.0
+json-tricks==3.17.3
+matplotlib==3.11.2
+munkres==2.0.0
+xtcocotools==1.14.3
+pillow==12.3.0
+torchvision==0.16.0+cu118
+mmdet==3.3.0
