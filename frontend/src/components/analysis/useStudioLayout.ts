@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 
-export type PanelId = 'left' | 'right' | 'skeleton' | 'angles' | 'position' | 'velocity';
-export type RowId = 'stage' | 'graphs' | 'recon';
+export type PanelId = 'left' | 'right' | 'skeleton' | 'angles' | 'position' | 'velocity' | 'distance';
+export type RowId = 'stage' | 'graphs' | 'measure' | 'recon';
 
 export const ROWS: { id: RowId; panels: PanelId[] }[] = [
     { id: 'stage', panels: ['left', 'right'] },
     { id: 'graphs', panels: ['angles', 'position', 'velocity'] },
+    { id: 'measure', panels: ['distance'] },
     { id: 'recon', panels: ['skeleton'] },
 ];
 
@@ -18,9 +19,9 @@ interface StudioLayout {
 const STORAGE_KEY = 'analysisStudioLayout.v3';
 
 const DEFAULT_LAYOUT: StudioLayout = {
-    visible: { left: true, right: true, skeleton: true, angles: true, position: true, velocity: true },
-    weights: { left: 1, right: 1, skeleton: 1, angles: 1, position: 1, velocity: 1 },
-    heights: { stage: 360, graphs: 400, recon: 520 },
+    visible: { left: true, right: true, skeleton: true, angles: true, position: true, velocity: true, distance: true },
+    weights: { left: 1, right: 1, skeleton: 1, angles: 1, position: 1, velocity: 1, distance: 1 },
+    heights: { stage: 360, graphs: 400, measure: 420, recon: 520 },
 };
 
 const load = (): StudioLayout => {

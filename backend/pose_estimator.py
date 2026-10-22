@@ -1,10 +1,13 @@
 import os
+import threading
 import time
 import cv2
 import numpy as np
 import math
 from mmpose.apis import init_model, inference_topdown
 from mmdet.apis import DetInferencer
+
+import video_io
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _POSE_CONFIG = os.path.join(_HERE, "models", "vitpose_base_512_v2.py")
@@ -28,22 +31,93 @@ POSE_MIN_CONF = float(os.environ.get("POSE_MIN_CONF", "0.3"))
 POSE_SURE_CONF = float(os.environ.get("POSE_SURE_CONF", "0.7"))
 # Re-run the person detector every N frames; the box is reused between runs.
 DET_EVERY = int(os.environ.get("POSE_DET_EVERY", "10"))
+# Frames per GPU pass. 1 = the original one-frame-at-a-time path (mmpose inference_topdown).
+POSE_BATCH = int(os.environ.get("POSE_BATCH", "16"))
+# Half precision on the GPU: faster, but check accuracy first (backend/bench_pose.py).
+POSE_FP16 = os.environ.get("POSE_FP16", "0") == "1"
+# GPU fast paths (pose_gpu.py); each can be turned off in .env to compare.
+POSE_GPU_DECODE = os.environ.get("POSE_GPU_DECODE", "1") == "1"      # heatmap decoding on the GPU
+POSE_FLIP_BATCH = os.environ.get("POSE_FLIP_BATCH", "1") == "1"      # flip pass in the same batch
+POSE_FAST_DET = os.environ.get("POSE_FAST_DET", "0") == "1"          # RTMDet without DetInferencer (no measured gain)
+POSE_PREFETCH = os.environ.get("POSE_PREFETCH", "1") == "1"          # read video ahead in a thread
+POSE_CHANNELS_LAST = os.environ.get("POSE_CHANNELS_LAST", "0") == "1"  # no measured gain
+# Flip test = run every crop twice (mirrored too) and average: ~1.4x slower, but turning it off moved
+# keypoints by 0.6 px median / 6 px max in bench_speed.py, so it stays on unless you choose speed.
+POSE_FLIP_TEST = os.environ.get("POSE_FLIP_TEST", "1") == "1"
+_direct_det = None
 _pose_model = None
 _detector = None
+_pipeline = None
+_lock = threading.Lock()          # the detector and one-time setup are not thread-safe
 
 
 def _load_models():
     """Load ViTPose + person detector once (heavy); reused across requests."""
     global _pose_model, _detector
     if _pose_model is None:
+        if _DEVICE.startswith("cuda"):
+            import torch
+            torch.backends.cudnn.benchmark = True      # fixed-size crops -> pick the fastest kernels once
+            print(f"pose: running on GPU {torch.cuda.get_device_name(0)}")
+        else:
+            print("pose: WARNING running on CPU -- PyTorch in this environment cannot see CUDA")
         _pose_model = init_model(_POSE_CONFIG, _POSE_CKPT, device=_DEVICE)
+        _pose_model.test_cfg["flip_test"] = POSE_FLIP_TEST
         _detector = DetInferencer(model="rtmdet_tiny_8xb32-300e_coco",
                                   device=_DEVICE, show_progress=False)
+        if _DEVICE.startswith("cuda"):
+            _setup_gpu_paths()
+
+
+def _setup_gpu_paths():
+    global _direct_det
+    import pose_gpu
+    pose_gpu.FLIP_BATCH_ON = POSE_FLIP_BATCH
+    if POSE_GPU_DECODE:
+        pose_gpu.install_gpu_decoder(_pose_model)
+    if POSE_CHANNELS_LAST:
+        pose_gpu.set_channels_last(_pose_model, True)
+    if POSE_FAST_DET:
+        try:
+            _direct_det = pose_gpu.DirectDetector(_detector)
+        except Exception as e:
+            print(f"pose: direct detector unavailable ({e!r}); using DetInferencer")
+            _direct_det = None
 
 
 def _detect_person(frame_bgr):
     """Return one xyxy person box; fall back to the full frame if none found."""
     o = _detector(frame_bgr, return_datasamples=True, no_save_vis=True)["predictions"][0].pred_instances
+    return _person_box(o, frame_bgr)
+
+
+def _detect_people(frames):
+    """Batched _detect_person: one detector pass for several frames."""
+    global _direct_det
+    if _direct_det is not None and POSE_FAST_DET:
+        try:
+            boxes = [_person_box(p.pred_instances, f) for p, f in zip(_direct_det(frames), frames)]
+            if not _direct_det.checked:          # first use: must give the same boxes as DetInferencer
+                _direct_det.checked = True
+                ref = _detect_person(frames[0])
+                d = float(np.abs(np.asarray(boxes[0]) - np.asarray(ref)).max())
+                if d > 2.0:
+                    print(f"pose: WARNING direct detector box differs by {d:.1f} px -- using DetInferencer")
+                    _direct_det = None
+                    return [_detect_person(f) for f in frames]
+                print(f"pose: direct detector matches DetInferencer (max box difference {d:.2f} px)")
+            return boxes
+        except Exception as e:
+            print(f"pose: direct detector failed ({e!r}); using DetInferencer")
+            _direct_det = None
+    if len(frames) == 1:
+        return [_detect_person(frames[0])]
+    preds = _detector(list(frames), batch_size=len(frames), return_datasamples=True,
+                      no_save_vis=True)["predictions"]
+    return [_person_box(p.pred_instances, f) for p, f in zip(preds, frames)]
+
+
+def _person_box(o, frame_bgr):
     b = o.bboxes.cpu().numpy(); s = o.scores.cpu().numpy(); l = o.labels.cpu().numpy()
     m = (l == 0) & (s > 0.3)                       # class 0 = person
     if not m.any():
@@ -54,6 +128,66 @@ def _detect_person(frame_bgr):
     bw, bh = x2 - x1, y2 - y1
     return np.array([[max(0, x1 - 0.1 * bw), max(0, y1 - 0.1 * bh),
                       x2 + 0.1 * bw, y2 + 0.1 * bh]], dtype=float)
+
+
+def _pose_pipeline():
+    """mmpose's test pipeline (crop + resize around the box), built once instead of every frame."""
+    global _pipeline
+    with _lock:
+        return _build_pipeline()
+
+
+def _build_pipeline():
+    global _pipeline
+    if _pipeline is None:
+        from mmengine.dataset import Compose
+        from mmengine.registry import init_default_scope
+        init_default_scope(_pose_model.cfg.get("default_scope", "mmpose"))
+        _pipeline = Compose(_pose_model.cfg.test_dataloader.dataset.pipeline)
+    return _pipeline
+
+
+_fp16_hooked = False
+
+
+def _ensure_fp16_hook():
+    """Heatmaps back to float32 before decoding (the decoder's OpenCV blur has no float16).
+    Harmless in float32 runs, so it is never removed."""
+    global _fp16_hooked
+    with _lock:
+        _add_fp16_hook()
+
+
+def _add_fp16_hook():
+    global _fp16_hooked
+    if not _fp16_hooked:
+        import torch
+        _pose_model.head.register_forward_hook(lambda m, i, o: o.float() if torch.is_tensor(o) else o)
+        _fp16_hooked = True
+
+
+def _pose_batch(frames, boxes):
+    """ViTPose on several (frame, box) pairs in one GPU pass. Same steps as
+    mmpose.apis.inference_topdown (pipeline -> pseudo_collate -> test_step), just batched."""
+    import torch
+    from mmengine.dataset import pseudo_collate
+    pipe = _pose_pipeline()
+    data = []
+    for f, b in zip(frames, boxes):
+        info = dict(img=f, bbox=np.asarray(b, np.float32).reshape(1, 4), bbox_score=np.ones(1, np.float32))
+        info.update(_pose_model.dataset_meta)
+        data.append(pipe(info))
+    batch = pseudo_collate(data)
+    step = _pose_model.test_step
+    if _DEVICE.startswith("cuda") and POSE_FLIP_BATCH:
+        import pose_gpu
+        step = lambda b: pose_gpu.fast_test_step(_pose_model, b)
+    with torch.no_grad():
+        if POSE_FP16 and _DEVICE.startswith("cuda"):
+            _ensure_fp16_hook()
+            with torch.autocast("cuda", dtype=torch.float16):
+                return step(batch)
+        return step(batch)
 
 
 def _capture_fps(cap, default=30.0):
@@ -197,7 +331,7 @@ def _run_inference(video_path: str) -> dict:
        18 keypoints as [x, y, conf], x/y normalised 0-1, project keypoint order."""
     _load_models()
 
-    cap = cv2.VideoCapture(video_path)
+    cap = video_io.VideoReader(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
 
@@ -205,42 +339,94 @@ def _run_inference(video_path: str) -> dict:
     fps = _capture_fps(cap)
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    frame_idx = 0
     frame_data = []
     last_box = None
     det_time = 0.0
     det_runs = 0
     pose_time = 0.0
+    batch = max(1, POSE_BATCH)
+
+    def to_18(r):
+        kp = r.keypoints[0]                          # (18, 2) pixels
+        sc = r.keypoint_scores[0]                    # (18,)
+        return [[float(kp[i, 0]) / video_width, float(kp[i, 1]) / video_height, float(sc[i])]
+                for i in range(18)]
+
+    def read_chunk():
+        chunk = []
+        while len(chunk) < batch:
+            success, frame = cap.read()             # BGR frame
+            if not success:
+                break
+            chunk.append(frame)
+        return chunk
+
+    if POSE_PREFETCH:
+        import queue
+        q = queue.Queue(maxsize=2)
+
+        def reader():
+            while True:
+                c = read_chunk()
+                q.put(c)
+                if len(c) < batch:
+                    break
+        threading.Thread(target=reader, daemon=True).start()
+        next_chunk = q.get
+    else:
+        next_chunk = read_chunk
 
     while True:
-        success, frame = cap.read()                 # BGR frame
-        if not success:
+        chunk = next_chunk()
+        if not chunk:
             break
+        start = len(frame_data)
 
-        if last_box is None or frame_idx % DET_EVERY == 0:
+        # person boxes: detector every DET_EVERY frames (batched), box reused in between
+        det_k = [k for k in range(len(chunk)) if (last_box is None and k == 0) or (start + k) % DET_EVERY == 0]
+        found = {}
+        if det_k:
             t_det = time.perf_counter()
-            last_box = _detect_person(frame)
+            with _lock:
+                try:
+                    found = dict(zip(det_k, _detect_people([chunk[k] for k in det_k])))
+                except Exception:
+                    found = {k: _detect_person(chunk[k]) for k in det_k}
             det_time += time.perf_counter() - t_det
-            det_runs += 1
+            det_runs += len(det_k)
+        boxes = []
+        for k in range(len(chunk)):
+            if k in found:
+                last_box = found[k]
+            boxes.append(last_box)
 
-        try:
-            t_pose = time.perf_counter()
-            r = inference_topdown(_pose_model, frame, last_box, bbox_format="xyxy")[0].pred_instances
-            pose_time += time.perf_counter() - t_pose
-            kp = r.keypoints[0]                      # (18, 2) pixels
-            sc = r.keypoint_scores[0]                # (18,)
-            custom_18 = [[float(kp[i, 0]) / video_width,
-                          float(kp[i, 1]) / video_height,
-                          float(sc[i])] for i in range(18)]
-        except Exception:
-            custom_18 = None
+        # pose
+        t_pose = time.perf_counter()
+        results = [None] * len(chunk)
+        if batch > 1:
+            try:
+                results = [to_18(r.pred_instances) for r in _pose_batch(chunk, boxes)]
+            except Exception as e:
+                print(f"pose: batched inference failed ({e!r}); using one frame at a time for this chunk")
+                results = [None] * len(chunk)
+        for k in range(len(chunk)):
+            if results[k] is None:
+                try:
+                    r = inference_topdown(_pose_model, chunk[k], boxes[k], bbox_format="xyxy")[0]
+                    results[k] = to_18(r.pred_instances)
+                except Exception:
+                    results[k] = None
+        pose_time += time.perf_counter() - t_pose
 
-        frame_data.append({
-            "frame_index": frame_idx,
-            "keypoints": custom_18,
-            "angles": calculate_frame_angles(custom_18) if custom_18 else {}
-        })
-        frame_idx += 1
+        for k, custom_18 in enumerate(results):
+            frame_data.append({
+                "frame_index": start + k,
+                "keypoints": custom_18,
+                "angles": calculate_frame_angles(custom_18) if custom_18 else {}
+            })
+        if len(chunk) < batch:
+            break
+    frame_idx = len(frame_data)
 
     cap.release()
     return {
@@ -254,6 +440,8 @@ def _run_inference(video_path: str) -> dict:
             "pose_seconds": round(pose_time, 2),
             "detections_run": det_runs,
             "det_every": DET_EVERY,
+            "batch": max(1, POSE_BATCH),
+            "fp16": bool(POSE_FP16 and _DEVICE.startswith("cuda")),
             "device": _DEVICE,
         },
     }
@@ -286,7 +474,7 @@ def _overlay_confidences(frames):
 
 def _render_overlay(video_path: str, frames: list, output_path: str, fps: float = None,
                     stabilize_confidence: bool = False):
-    cap = cv2.VideoCapture(video_path)
+    cap = video_io.VideoReader(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
 
@@ -294,14 +482,8 @@ def _render_overlay(video_path: str, frames: list, output_path: str, fps: float 
         fps = _capture_fps(cap)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    # H.264 ('avc1') so browsers can play the result. On Windows OpenCV needs
-    # openh264-2.5.0-win64.dll for this; without it the writer silently fails, so
-    # fall back to 'mp4v' (still a valid file, but some browsers won't play it).
-    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'avc1'), fps, (w, h))
-    if not out.isOpened():
-        print("WARNING: H.264 encoder not available (openh264 DLL missing) -> writing mp4v instead; "
-              "browsers may not play this video. See README (OpenH264).")
-        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+    # Browser-playable H.264: NVENC on the GPU when available, else CPU (see video_io.py).
+    out = video_io.open_writer(output_path, w, h, fps)
 
     display_scores = _overlay_confidences(frames) if stabilize_confidence else None
     idx = 0
@@ -342,6 +524,17 @@ def process_video_with_overlays(
         raw_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
         return raw_result
 
+    healed_result = heal_and_render(raw_result, video_path, output_path, heal_kwargs)
+    healed_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
+    return healed_result
+
+
+def heal_and_render(raw_result: dict, video_path: str, output_path: str, heal_kwargs: dict = None,
+                    raw_keypoints: list = None, render: bool = True) -> dict:
+    """Heal + smooth the raw keypoints, keep the raw ones alongside, and render the overlay video.
+    raw_keypoints: per-frame keypoints to store as "keypoints_raw" (default: raw_result's own), so the
+    untouched model output stays available for comparison even when the caller edited raw_result
+    (stereo swap fixing does)."""
     t_heal = time.perf_counter()
     from pose_postprocess import heal_and_smooth
     kwargs = {"healed_confidence": 0.6}
@@ -350,16 +543,18 @@ def process_video_with_overlays(
     healed_result = heal_and_smooth(raw_result, **kwargs)
     heal_time = time.perf_counter() - t_heal
 
+    raw_frames = raw_result["frames"]
     for i, fr in enumerate(healed_result["frames"]):
-        if i < len(raw_result["frames"]):
-            fr["angles_raw"] = raw_result["frames"][i].get("angles", {})
-        else:
-            fr["angles_raw"] = {}
+        src = raw_frames[i] if i < len(raw_frames) else {}
+        fr["angles_raw"] = src.get("angles", {})
+        kp_raw = raw_keypoints[i] if raw_keypoints is not None and i < len(raw_keypoints) else src.get("keypoints")
+        fr["keypoints_raw"] = kp_raw
 
-    t_ov = time.perf_counter()
-    _render_overlay(video_path, healed_result["frames"], output_path, fps=raw_result["fps"],
-                    stabilize_confidence=True)
+    healed_result["timing"] = dict(healed_result.get("timing", {}))
     healed_result["timing"]["healing_seconds"] = round(heal_time, 2)
-    healed_result["timing"]["overlay_seconds"] = round(time.perf_counter() - t_ov, 2)
-    healed_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
+    if render:          # stereo renders later, after the 3D refinement has filled hidden joints
+        t_ov = time.perf_counter()
+        _render_overlay(video_path, healed_result["frames"], output_path, fps=raw_result["fps"],
+                        stabilize_confidence=True)
+        healed_result["timing"]["overlay_seconds"] = round(time.perf_counter() - t_ov, 2)
     return healed_result

@@ -44,7 +44,6 @@ const AnalysisPage = () => {
         <AppLayout>
             <div className="flex flex-col h-[calc(100vh-90px)] overflow-hidden gap-4">
                 
-                {/* Header */}
                 <div className="flex items-center justify-between flex-shrink-0">
                     <div className="flex items-center gap-3">
                         <div className="w-1.5 h-6 bg-primary rounded-full"></div>
@@ -55,7 +54,6 @@ const AnalysisPage = () => {
                     </Button>
                 </div>
                 
-                {/* Top Row: Video & 3D Viewer */}
                 <div className="flex flex-row h-[42%] gap-4 flex-shrink-0">
                     <div className={`${isStereo ? 'w-1/2' : 'w-full'} h-full bg-background-main border border-border rounded-xl shadow-sm overflow-hidden relative`}>
                         <VideoPlayer videoId={videoId} videoUrl={videoUrl} />
@@ -68,7 +66,6 @@ const AnalysisPage = () => {
                     )}
                 </div>
 
-                {/* Bottom Row: Chart */}
                 <div className="flex-1 min-h-0 w-full pb-1">
                     <div className="h-full w-full bg-background-main border border-border rounded-xl shadow-sm overflow-hidden">
                         <KinematicAnalysis videoId={videoId} />

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
-import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, RefreshCw, RotateCcw, Video, Wand2, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, RefreshCw, RotateCcw, Ruler, Video, Wand2, type LucideIcon } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
@@ -23,9 +23,10 @@ const PANELS: { id: PanelId; label: string; icon: LucideIcon; needs: 'always' | 
     { id: 'angles', label: 'Joint angles', icon: Activity, needs: 'always' },
     { id: 'position', label: 'Position', icon: Move3d, needs: '3d' },
     { id: 'velocity', label: 'Velocity', icon: Gauge, needs: '3d' },
+    { id: 'distance', label: 'Distance travelled', icon: Ruler, needs: '3d' },
 ];
 
-const CHART_MODES: Partial<Record<PanelId, ChartMode>> = { angles: 'angles', position: 'position', velocity: 'velocity' };
+const CHART_MODES: Partial<Record<PanelId, ChartMode>> = { angles: 'angles', position: 'position', velocity: 'velocity', distance: 'distance' };
 
 const AnalysisStudioPage = () => {
     const { videoId = '' } = useParams<{ videoId: string }>();

@@ -1,12 +1,12 @@
 import { useEffect, useState, useRef, useMemo, type ReactNode } from 'react';
 import * as echarts from 'echarts';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem } from '@/components/dropdown/dropdown';
-import { ChevronDown, Clock, Frame } from 'lucide-react';
+import { ChevronDown, Clock, Frame, Flag } from 'lucide-react';
 
 interface AngleData { angle: number | null; confidence: number; }
 interface FrameData { frame_index: number; keypoints: number[][] | null; angles: Record<string, AngleData>; }
 
-export type ChartMode = 'angles' | 'position' | 'velocity';
+export type ChartMode = 'angles' | 'position' | 'velocity' | 'distance';
 
 const ANGLE_NAMES: Record<string, string> = { left_knee: 'Left Knee', right_knee: 'Right Knee', left_hip: 'Left Hip', right_hip: 'Right Hip', left_elbow: 'Left Elbow', right_elbow: 'Right Elbow', left_wrist: 'Left Wrist', right_wrist: 'Right Wrist', left_shoulder: 'Left Shoulder', right_shoulder: 'Right Shoulder', left_ankle: 'Left Ankle', right_ankle: 'Right Ankle' };
 
@@ -33,6 +33,45 @@ const getSpeeds = (track: Sample[], fps: number): (number | null)[] => {
     });
 };
 
+const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+// 5-frame moving average (skipping gaps). Single-frame 3D points jitter by a few mm; summed over
+// hundreds of frames that jitter would inflate the path length, so distances use this smoothed track.
+const smoothTrack = (track: Sample[], half = 2): Sample[] => track.map((s, k) => {
+    const w = track.slice(Math.max(0, k - half), k + half + 1).filter((t) => Math.abs(t.i - s.i) <= half);
+    return { i: s.i, p: [0, 1, 2].map((a) => w.reduce((t, x) => t + x.p[a], 0) / w.length) };
+});
+
+// Smoothed sample nearest to a frame (within 3 frames), or null if the keypoint is missing there.
+const sampleAt = (sm: Sample[], frame: number): Sample | null => {
+    let best: Sample | null = null;
+    for (const s of sm) if (Math.abs(s.i - frame) <= 3 && (!best || Math.abs(s.i - frame) < Math.abs(best.i - frame))) best = s;
+    return best;
+};
+
+// Cumulative path length from frame A onward (null before A; gaps > 3 frames are not bridged).
+const pathFrom = (sm: Sample[], fromFrame: number): (number | null)[] => {
+    let acc = 0;
+    return sm.map((s, k) => {
+        if (s.i < fromFrame) return null;
+        const prev = sm[k - 1];
+        if (prev && prev.i >= fromFrame && s.i - prev.i <= 3) acc += dist3(s.p, prev.p);
+        return acc;
+    });
+};
+
+export interface DistanceReadout { kp: number; straight: number | null; path: number | null; delta: number[] | null; }
+
+const measure = (frames: any[], kp: number, a: number, b: number): DistanceReadout => {
+    const sm = smoothTrack(getTrack(frames, kp));
+    const sa = sampleAt(sm, a), sb = sampleAt(sm, b);
+    if (!sa || !sb) return { kp, straight: null, path: null, delta: null };
+    const lo = Math.min(sa.i, sb.i), hi = Math.max(sa.i, sb.i);
+    const inRange = sm.filter((s) => s.i >= lo && s.i <= hi);
+    const path = pathFrom(inRange, lo).at(-1) ?? 0;
+    return { kp, straight: dist3(sa.p, sb.p), path, delta: [0, 1, 2].map((x) => sb.p[x] - sa.p[x]) };
+};
+
 interface KinematicChartProps {
     analysisData: any;
     mode: ChartMode;
@@ -51,6 +90,10 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
     const [posMode, setPosMode] = useState<'absolute' | 'displacement'>('absolute');
     const [selectedAngles, setSelectedAngles] = useState<string[]>(['left_knee']);
     const [xAxisMode, setXAxisMode] = useState<'frame' | 'time'>('time');
+    const lastFrame = Math.max(0, ...((analysisData?.frames_3d || []) as any[]).map((f) => f.frame_index));
+    const [markA, setMarkA] = useState(0);
+    const [markB, setMarkB] = useState(lastFrame);
+    const playheadFrame = useRef(0);
     const chartRef = useRef<HTMLDivElement>(null);
     const chartInstance = useRef<echarts.ECharts | null>(null);
 
@@ -132,6 +175,23 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
                 const start = posMode === 'displacement' && track.length ? track[0].p : [0, 0, 0];
                 return AXES.map((ax, a) => lineOf(`${KP_NAMES[kp]} ${ax}`, KP_COLORS[kp], track.map((s) => [toX(s.i), (s.p[a] - start[a]) / div]), DASHES[a]));
             });
+        } else if (activeTab === 'distance') {
+            yName = `Distance from A (${unit})`;
+            series = selectedKps.flatMap((kp) => {
+                const sm = smoothTrack(getTrack(analysisData.frames_3d, kp));
+                const a = sampleAt(sm, markA);
+                if (!a) return [];
+                const path = pathFrom(sm, a.i);
+                return [
+                    lineOf(`${KP_NAMES[kp]} straight-line`, KP_COLORS[kp], sm.map((s) => [toX(s.i), dist3(s.p, a.p) / div])),
+                    lineOf(`${KP_NAMES[kp]} path travelled`, KP_COLORS[kp], sm.map((s, k) => [toX(s.i), path[k] === null ? null : path[k]! / div]), 'dashed'),
+                ];
+            });
+            if (series.length) series[0].markArea = {
+                silent: true, itemStyle: { color: 'rgba(245, 80, 54, 0.08)' },
+                label: { color: THEME.textMuted, position: 'insideTop' },
+                data: [[{ xAxis: toX(Math.min(markA, markB)), name: 'A → B' }, { xAxis: toX(Math.max(markA, markB)) }]],
+            };
         } else if (activeTab === 'velocity') {
             yName = 'Speed (m/s)';
             series = selectedKps.map((kp) => {
@@ -153,20 +213,21 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
                 borderRadius: 8,
                 valueFormatter: (value: any) => Number(value).toFixed(1),
             },
-            legend: { show: activeTab === 'position', top: 0, type: 'scroll', textStyle: { color: THEME.textSecondary } },
+            legend: { show: activeTab === 'position' || activeTab === 'distance', top: 0, type: 'scroll', textStyle: { color: THEME.textSecondary } },
             dataZoom: [{ type: 'inside', xAxisIndex: 0 }],
-            grid: { left: '3%', right: '3%', bottom: '12%', top: activeTab === 'position' ? '20%' : '14%', containLabel: true },
+            grid: { left: '3%', right: '3%', bottom: '12%', top: activeTab === 'position' || activeTab === 'distance' ? '20%' : '14%', containLabel: true },
             xAxis: { type: 'value', name: xAxisMode === 'time' ? 'Time (s)' : 'Frame', nameLocation: 'middle', nameGap: 25, nameTextStyle: { color: THEME.textSecondary }, splitLine: { show: true, lineStyle: { color: THEME.border, type: 'dashed' } }, axisLine: { lineStyle: { color: THEME.border } }, axisLabel: { color: THEME.textMuted } },
             yAxis: { type: 'value', name: yName, nameLocation: 'end', nameGap: 14, nameTextStyle: { color: THEME.textSecondary, align: 'left' }, splitLine: { show: true, lineStyle: { color: THEME.border, type: 'dashed' } }, axisLine: { lineStyle: { color: THEME.border } }, axisLabel: { color: THEME.textMuted } },
             series
         }, true);
-    }, [analysisData, selectedAngles, xAxisMode, THEME, activeTab, selectedKps, unit, posMode, is3D]);
+    }, [analysisData, selectedAngles, xAxisMode, THEME, activeTab, selectedKps, unit, posMode, is3D, markA, markB]);
 
     // EVENT-DRIVEN CURSOR SYNC (Throttled to 20fps)
     const lastUpdate = useRef<number>(0);
     useEffect(() => {
         const handleSync = (e: Event) => {
             const time = (e as CustomEvent).detail as number;
+            playheadFrame.current = Math.round(time * (analysisData.fps || 30));
             const now = performance.now();
             if (now - lastUpdate.current < 50 || !chartInstance.current) return;
             lastUpdate.current = now;
@@ -187,6 +248,7 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
         const zr = chart.getZr();
         const onClick = (p: any) => {
             const x = chart.convertFromPixel({ xAxisIndex: 0 }, [p.offsetX, p.offsetY])[0];
+            if (typeof x === 'number' && x >= 0) playheadFrame.current = Math.round(xAxisMode === 'time' ? x * (analysisData.fps || 30) : x);
             if (typeof x === 'number' && x >= 0) window.dispatchEvent(new CustomEvent('seek-time', { detail: xAxisMode === 'time' ? x : x / (analysisData.fps || 30) }));
         };
         zr.on('click', onClick);
@@ -231,6 +293,18 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
                 </div>
 
                 <div className={`flex items-center ${compact ? 'gap-1.5' : 'gap-3'}`}>
+                    {activeTab === 'distance' && (
+                        <>
+                            <button onClick={() => setMarkA(playheadFrame.current)} className={`${ctl} inline-flex items-center gap-1.5`} title="Set point A to the current video position (play/scrub the video or click the chart first)">
+                                <Flag className="w-3 h-3" /> Set A
+                            </button>
+                            <button onClick={() => setMarkB(playheadFrame.current)} className={`${ctl} inline-flex items-center gap-1.5`} title="Set point B to the current video position">
+                                <Flag className="w-3 h-3" /> Set B
+                            </button>
+                            <button onClick={() => { setMarkA(0); setMarkB(lastFrame); }} className={ctl} title="A = first frame, B = last frame">Whole clip</button>
+                            <button onClick={() => setUnit(unit === 'cm' ? 'mm' : 'cm')} className={ctl}>{unit}</button>
+                        </>
+                    )}
                     {activeTab === 'position' && (
                         <>
                             <button onClick={() => setPosMode(posMode === 'absolute' ? 'displacement' : 'absolute')} className={ctl} title="Absolute position (Y up, Z depth) or displacement from first frame">
@@ -246,6 +320,30 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
                     </button>
                 </div>
             </div>
+
+            {activeTab === 'distance' && (() => {
+                const fps = analysisData.fps || 30;
+                const fmt = (v: number | null) => v === null ? '—' : `${(unit === 'cm' ? v / 10 : v).toFixed(unit === 'cm' ? 1 : 0)} ${unit}`;
+                const at = (f: number) => xAxisMode === 'time' ? `${(f / fps).toFixed(2)} s` : `frame ${f}`;
+                return (
+                    <div className={`flex flex-col gap-1.5 flex-shrink-0 ${compact ? 'mb-2' : 'mb-3'}`}>
+                        <div className="text-xs text-text-muted">A = {at(markA)} · B = {at(markB)} · positions averaged over 5 frames</div>
+                        <div className="flex flex-wrap gap-2">
+                            {selectedKps.map((kp) => measure(analysisData.frames_3d, kp, markA, markB)).map((m) => (
+                                <div key={m.kp} className="flex items-center gap-3 px-3 py-1.5 rounded-lg border border-border bg-background text-xs tabular-nums">
+                                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: KP_COLORS[m.kp] }} />
+                                    <span className="font-medium text-text">{KP_NAMES[m.kp]}</span>
+                                    {m.straight === null ? <span className="text-text-muted">not seen in 3D at A or B</span> : <>
+                                        <span className="text-text-secondary">A→B straight <b className="text-text">{fmt(m.straight)}</b></span>
+                                        <span className="text-text-secondary">path <b className="text-text">{fmt(m.path)}</b></span>
+                                        <span className="text-text-muted">ΔX {fmt(m.delta![0])} · ΔY {fmt(m.delta![1])} · ΔZ {fmt(m.delta![2])}</span>
+                                    </>}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            })()}
 
             <div className="flex-1 w-full min-h-0 relative">
                 <div ref={chartRef} className="absolute inset-0"></div>

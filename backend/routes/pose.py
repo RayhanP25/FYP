@@ -151,6 +151,7 @@ async def process_video(
         "fps": result["fps"],
         "has_3d": "frames_3d" in result,
         "healing_report": result.get("healing_report"),
+        "stereo_report": result.get("stereo_report"),
         "timing": result.get("timing"),
     }
 

@@ -109,13 +109,14 @@ def gray(f):
     return cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) if f.ndim == 3 else f
 
 
-def capture_still(capL, capR):
-    """Two grabs ~0.15 s apart; accepted only if the board is found in both views and has not moved."""
-    fL1, fR1 = grab_pair(capL, capR)
+def capture_still(grab):
+    """Two grabs ~0.15 s apart; accepted only if the board is found in both views and has not moved.
+    grab() -> (frameL, frameR), or (None, None) when no pair is available."""
+    fL1, fR1 = grab()
     if fL1 is None:
         return None, "could not grab a pair"
     time.sleep(0.15)
-    fL2, fR2 = grab_pair(capL, capR)
+    fL2, fR2 = grab()
     if fL2 is None:
         return None, "could not grab a pair"
     res = []
@@ -168,7 +169,7 @@ class Coverage:
         ws = [p["width"] for p in self.pairs]
         spread = (max(ws) / min(ws)) if ws else 0
         cov = [c.mean() for c in self.cells]
-        ok = dict(n=n >= 25, area=min(cov) >= 0.75, th=th >= 6, tv=tv >= 6, spread=spread >= 1.6)
+        ok = dict(n=n >= 25, area=min(cov) >= 0.75, tilt=th >= 6 and tv >= 6, spread=spread >= 1.6)  # one flag per line
         lines = [f"pairs {n} (aim 25-40)",
                  f"image covered L {100 * cov[0]:.0f}% R {100 * cov[1]:.0f}% (aim 75%+)",
                  f"tilted left/right {th}, up/down {tv} (aim 6+ each)",
@@ -353,6 +354,130 @@ def load(path=OUT):
     return {k: d[k] for k in d.files}
 
 
+def render_preview(fL, fR, cov, msg="", det=None):
+    """Side-by-side preview: board corners per view, coverage grid and status lines. Shared by the terminal and the web page.
+    det: optional ((foundL, cornersL), (foundR, cornersR)) already computed elsewhere (the web page detects in a
+    background thread so the stream is not held back by the ~150 ms per view that findChessboardCorners takes)."""
+    sc, disp_w = 0.33, 800
+    if det is None:
+        det = (find_corners(gray(fL), fast_scale=sc), find_corners(gray(fR), fast_scale=sc))
+    (fdL, cL), (fdR, cR) = det
+    # Scale each view on its own: the two cameras can deliver different sizes or channel counts,
+    # and cv2.hconcat needs equal heights and types.
+    fL3 = fL if fL.ndim == 3 else cv2.cvtColor(fL, cv2.COLOR_GRAY2BGR)
+    fR3 = fR if fR.ndim == 3 else cv2.cvtColor(fR, cv2.COLOR_GRAY2BGR)
+    dsL = disp_w / fL3.shape[1]
+    dL = cv2.resize(fL3, None, fx=dsL, fy=dsL)
+    dsR = dL.shape[0] / fR3.shape[0]
+    dR = cv2.resize(fR3, (max(1, round(fR3.shape[1] * dsR)), dL.shape[0]))
+    cov.draw(dL, 0, dsL); cov.draw(dR, 1, dsR)
+    if fdL:
+        cv2.drawChessboardCorners(dL, CHECKERBOARD, (cL * dsL).astype(np.float32), True)
+    if fdR:
+        cv2.drawChessboardCorners(dR, CHECKERBOARD, (cR * dsR).astype(np.float32), True)
+    disp = cv2.hconcat([dL, dR])
+    lines, ok = cov.summary()
+    col = (0, 200, 0) if (fdL and fdR) else (0, 0, 255)
+    cv2.putText(disp, f"board in both: {'YES' if (fdL and fdR) else 'no'}", (10, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2)
+    for k, (t, good) in enumerate(zip(lines, ok.values())):
+        cv2.putText(disp, t, (10, 50 + 22 * k), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                    (0, 200, 0) if good else (0, 165, 255), 2)
+    if msg:
+        cv2.putText(disp, msg, (10, disp.shape[0] - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+    return disp
+
+
+class CalibrationSession:
+    """Capture, calibrate and floor-level state. Used by the terminal loop (live) and the web calibration page."""
+
+    def __init__(self, folder, sizeL, sizeR, out=OUT, meta=None):
+        self.folder, self.sizeL, self.sizeR, self.out = folder, sizeL, sizeR, out
+        self.meta = meta or {}
+        self.objpoints, self.imgL, self.imgR, self.saved = [], [], [], []
+        self.cov, self.calib = Coverage(), None
+        os.makedirs(folder, exist_ok=True)
+
+    def _path(self, k, side):
+        return os.path.join(self.folder, f"pair_{k:02d}_{side}.png")
+
+    def _write_report(self, rep, mode):
+        with open(os.path.join(self.folder, "report.txt"), mode, encoding="utf-8") as f:
+            f.write("\n".join(rep) + "\n")
+
+    def load_pairs(self):
+        """Resume: reload earlier captured pairs from this folder. Returns how many were usable."""
+        for pL in sorted(glob.glob(os.path.join(self.folder, "pair_*_L.png"))):
+            a_, b_ = cv2.imread(pL, 0), cv2.imread(pL[:-6] + "_R.png", 0)
+            if a_ is None or b_ is None or (a_.shape[1], a_.shape[0]) != self.sizeL:
+                continue
+            okL_, cL_ = find_corners(a_); okR_, cR_ = find_corners(b_)
+            if okL_ and okR_:
+                self.objpoints.append(OBJP.copy()); self.imgL.append(cL_); self.imgR.append(cR_)
+                self.cov.add(cL_, cR_, self.sizeL, self.sizeR)
+        return len(self.objpoints)
+
+    def add(self, fL, fR, cL, cR):
+        """Store an accepted still pair (photos + corners). Returns its pair number."""
+        k = len(self.objpoints) + 1
+        while os.path.exists(self._path(k, "L")):
+            k += 1
+        cv2.imwrite(self._path(k, "L"), fL)
+        cv2.imwrite(self._path(k, "R"), fR)
+        self.objpoints.append(OBJP.copy()); self.imgL.append(cL); self.imgR.append(cR)
+        self.cov.add(cL, cR, self.sizeL, self.sizeR)
+        self.saved.append(k)
+        return k
+
+    def undo(self):
+        """Remove the most recent pair added in this run. Returns the pair count left."""
+        k = self.saved.pop()
+        for s in "LR":
+            if os.path.exists(self._path(k, s)):
+                os.remove(self._path(k, s))
+        self.objpoints.pop(); self.imgL.pop(); self.imgR.pop()
+        self.cov.pop(list(zip(self.imgL, self.imgR)), self.sizeL, self.sizeR)
+        return len(self.objpoints)
+
+    def calibrate(self):
+        """Stereo calibration over all pairs; saves calibration.npz. Returns the report lines."""
+        if len(self.objpoints) < MIN_PAIRS:
+            raise ValueError(f"need at least {MIN_PAIRS} pairs (have {len(self.objpoints)})")
+        calib, rep = calibrate(self.objpoints, self.imgL, self.imgR, self.sizeL, self.sizeR)
+        rep = ["coverage: " + "; ".join(self.cov.summary()[0])] + rep
+        self.meta["report"] = rep
+        save(calib, self.meta, self.out)
+        self._write_report(rep, "w")
+        self.calib = calib
+        return rep
+
+    def set_floor(self, grab):
+        """Board lying flat on the floor: capture still photos and save R_level. Returns the report lines."""
+        cal = self.calib or load(self.out)
+        if cal is None:
+            raise ValueError("no calibration yet -- press c first")
+        if tuple(int(v) for v in np.asarray(cal["size1"]).ravel()[:2]) != self.sizeL:
+            raise ValueError(f"calibration.npz was made at {np.asarray(cal['size1']).tolist()}, "
+                             f"cameras are {self.sizeL} -- recalibrate")
+        got = []
+        for _ in range(5):
+            res, _ = capture_still(grab)
+            if res is not None:
+                got.append(res)
+        if len(got) < 2:
+            raise ValueError("floor board not found / not still in both views -- reposition and retry")
+        cv2.imwrite(os.path.join(self.folder, "floor_L.png"), got[0][0])
+        cv2.imwrite(os.path.join(self.folder, "floor_R.png"), got[0][1])
+        R_level, rep, vals = floor_level([(g[2], g[3]) for g in got], cal)
+        cal = dict(cal); cal["R_level"] = R_level; cal.update(vals)
+        m = json.loads(str(cal.pop("meta_json"))) if "meta_json" in cal else dict(self.meta)
+        m["floor_report"] = rep
+        save(cal, m, self.out)
+        self._write_report(rep, "a")
+        self.calib = cal
+        return rep
+
+
 def live(resume=None):
     capL, fL0 = open_cam(LEFT_INDEX)
     capR, fR0 = open_cam(RIGHT_INDEX)
@@ -370,122 +495,51 @@ def live(resume=None):
               f"must use the SAME size as the recordings -- fix CAMERA_WIDTH/HEIGHT in .env.")
         capL.release(); capR.release(); return
 
-    session = resume or os.path.join("calib_sessions", datetime.datetime.now().strftime("%Y-%m-%d_%H%M"))
-    os.makedirs(session, exist_ok=True)
-    objpoints, imgL, imgR = [], [], []
-    cov = Coverage()
+    folder = resume or os.path.join("calib_sessions", datetime.datetime.now().strftime("%Y-%m-%d_%H%M"))
+    cs = CalibrationSession(folder, sizeL, sizeR, OUT, meta=dict(
+        date=datetime.datetime.now().isoformat(timespec="seconds"), session=folder,
+        camera_left=infoL, camera_right=infoR, board=list(CHECKERBOARD), square_mm=SQUARE_MM))
     if resume:
-        for pL in sorted(glob.glob(os.path.join(session, "pair_*_L.png"))):
-            a_, b_ = cv2.imread(pL, 0), cv2.imread(pL[:-6] + "_R.png", 0)
-            if a_ is None or b_ is None or (a_.shape[1], a_.shape[0]) != sizeL:
-                continue
-            okL_, cL_ = find_corners(a_); okR_, cR_ = find_corners(b_)
-            if okL_ and okR_:
-                objpoints.append(OBJP.copy()); imgL.append(cL_); imgR.append(cR_)
-                cov.add(cL_, cR_, sizeL, sizeR)
-        print(f"resumed {session}: {len(objpoints)} earlier pairs loaded")
-    print(f"photos are saved in {session}")
-    saved = []
-    calib = None
-    meta = dict(date=datetime.datetime.now().isoformat(timespec="seconds"), session=session,
-                camera_left=infoL, camera_right=infoR, board=list(CHECKERBOARD), square_mm=SQUARE_MM)
+        print(f"resumed {folder}: {cs.load_pairs()} earlier pairs loaded")
+    print(f"photos are saved in {folder}")
+    grab = lambda: grab_pair(capL, capR)
     win = "Stereo calibration  (SPACE capture | u undo | c calibrate | f floor | q quit)"
     msg, msg_t = "", 0.0
     while True:
         okL, fL = capL.read(); okR, fR = capR.read()
         if not (okL and okR):
             continue
-        sc = 0.33
-        fdL, cL = find_corners(gray(fL), fast_scale=sc)
-        fdR, cR = find_corners(gray(fR), fast_scale=sc)
-        disp_w = 800
-        ds = disp_w / fL.shape[1]
-        dL = cv2.resize(fL, None, fx=ds, fy=ds); dR = cv2.resize(fR, None, fx=ds, fy=ds)
-        cov.draw(dL, 0, ds); cov.draw(dR, 1, ds)
-        if fdL:
-            cv2.drawChessboardCorners(dL, CHECKERBOARD, (cL * ds).astype(np.float32), True)
-        if fdR:
-            cv2.drawChessboardCorners(dR, CHECKERBOARD, (cR * ds).astype(np.float32), True)
-        disp = cv2.hconcat([dL, dR])
-        lines, ok = cov.summary()
-        col = (0, 200, 0) if (fdL and fdR) else (0, 0, 255)
-        cv2.putText(disp, f"board in both: {'YES' if (fdL and fdR) else 'no'}", (10, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2)
-        for k, (t, good) in enumerate(zip(lines, ok.values())):
-            cv2.putText(disp, t, (10, 50 + 22 * k), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                        (0, 200, 0) if good else (0, 165, 255), 2)
-        if msg and time.time() - msg_t < 3:
-            cv2.putText(disp, msg, (10, disp.shape[0] - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-        cv2.imshow(win, disp)
+        cv2.imshow(win, render_preview(fL, fR, cs.cov, msg if time.time() - msg_t < 3 else ""))
         key = cv2.waitKey(1) & 0xFF
 
         if key == ord("q"):
             break
         elif key == ord(" "):
-            res, why = capture_still(capL, capR)
+            res, why = capture_still(grab)
             if res is None:
                 msg, msg_t = why, time.time(); print("  " + why); continue
-            fcL, fcR, ccL, ccR = res
-            k = len(objpoints) + 1
-            while os.path.exists(os.path.join(session, f"pair_{k:02d}_L.png")):
-                k += 1
-            cv2.imwrite(os.path.join(session, f"pair_{k:02d}_L.png"), fcL)
-            cv2.imwrite(os.path.join(session, f"pair_{k:02d}_R.png"), fcR)
-            objpoints.append(OBJP.copy()); imgL.append(ccL); imgR.append(ccR)
-            cov.add(ccL, ccR, sizeL, sizeR)
-            saved.append(k)
-            msg, msg_t = f"captured pair #{k} ({len(objpoints)} in total)", time.time(); print("  " + msg)
-        elif key == ord("u") and saved:
-            k = saved.pop()
-            for s in "LR":
-                p = os.path.join(session, f"pair_{k:02d}_{s}.png")
-                if os.path.exists(p):
-                    os.remove(p)
-            objpoints.pop(); imgL.pop(); imgR.pop()
-            cov.pop(list(zip(imgL, imgR)), sizeL, sizeR)
-            msg, msg_t = f"undo -> {len(objpoints)} pairs", time.time(); print("  " + msg)
+            k = cs.add(*res)
+            msg, msg_t = f"captured pair #{k} ({len(cs.objpoints)} in total)", time.time(); print("  " + msg)
+        elif key == ord("u") and cs.saved:
+            msg, msg_t = f"undo -> {cs.undo()} pairs", time.time(); print("  " + msg)
         elif key == ord("c"):
-            if len(objpoints) < MIN_PAIRS:
-                msg, msg_t = f"need at least {MIN_PAIRS} pairs (have {len(objpoints)})", time.time()
+            if len(cs.objpoints) < MIN_PAIRS:
+                msg, msg_t = f"need at least {MIN_PAIRS} pairs (have {len(cs.objpoints)})", time.time()
                 print("  " + msg); continue
             print("Calibrating ...")
             try:
-                calib, rep = calibrate(objpoints, imgL, imgR, sizeL, sizeR)
+                rep = cs.calibrate()
             except Exception as ex:
                 print(f"  calibration error: {ex} -- captures kept; add pairs and press c again"); continue
-            cl, _ = cov.summary()
-            rep = ["coverage: " + "; ".join(cl)] + rep
             print("\n".join("  " + x for x in rep))
-            meta["report"] = rep
-            save(calib, meta)
-            open(os.path.join(session, "report.txt"), "w", encoding="utf-8").write("\n".join(rep) + "\n")
             print("  NEXT: lay the board FLAT on the floor where the athlete stands (both cameras see it), press f.")
             print("  (the old floor level is NOT kept -- it belongs to the old calibration)")
         elif key == ord("f"):
-            cal = calib or load()
-            if cal is None:
-                print("  no calibration yet -- press c first"); continue
-            if tuple(int(v) for v in np.asarray(cal["size1"]).ravel()[:2]) != sizeL:
-                print(f"  calibration.npz was made at {np.asarray(cal['size1']).tolist()}, cameras are {sizeL} -- recalibrate")
-                continue
-            got = []
-            for _ in range(5):
-                res, why = capture_still(capL, capR)
-                if res is not None:
-                    got.append(res)
-            if len(got) < 2:
-                print("  floor board not found / not still in both views -- reposition and retry"); continue
-            for k, (fl, fr, _, _) in enumerate(got[:1]):
-                cv2.imwrite(os.path.join(session, "floor_L.png"), fl)
-                cv2.imwrite(os.path.join(session, "floor_R.png"), fr)
-            R_level, rep, vals = floor_level([(g[2], g[3]) for g in got], cal)
+            try:
+                rep = cs.set_floor(grab)
+            except ValueError as ex:
+                print("  " + str(ex)); continue
             print("\n".join("  " + x for x in rep))
-            cal = dict(cal); cal["R_level"] = R_level; cal.update(vals)
-            m = json.loads(str(cal.pop("meta_json"))) if "meta_json" in cal else dict(meta)
-            m["floor_report"] = rep
-            save(cal, m)
-            calib = cal
-            open(os.path.join(session, "report.txt"), "a", encoding="utf-8").write("\n".join(rep) + "\n")
             print("  floor level saved. Re-process a clip to see the skeleton upright.")
     capL.release(); capR.release(); cv2.destroyAllWindows()
 
