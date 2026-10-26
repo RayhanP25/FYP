@@ -1,6 +1,7 @@
-"""Remove recordings from the validation JSON (by default split_27, which was set aside).
+"""Copy the validation JSON to val_clean.json, optionally leaving out whole recordings.
 
-    python data/make_clean_val_json.py --src coco/val.json --out coco/val_clean.json
+    python data/make_clean_val_json.py                              (keep everything)
+    python data/make_clean_val_json.py --exclude split_27           (as used for the released model)
 """
 import argparse, json, os
 
@@ -10,7 +11,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default="coco/val.json")
     ap.add_argument("--out", default="coco/val_clean.json")
-    ap.add_argument("--exclude", nargs="+", default=["split_27"])
+    ap.add_argument("--exclude", nargs="*", default=[])
     args = ap.parse_args()
 
     d = json.load(open(args.src))
@@ -21,7 +22,8 @@ def main():
     d["images"] = keep
     d["annotations"] = [a for a in d["annotations"] if a["image_id"] in ids]
     json.dump(d, open(args.out, "w"))
-    print(f"kept {len(keep)} images / {len(d['annotations'])} annotations; dropped {dropped} ({', '.join(args.exclude)})")
+    print(f"kept {len(keep)} images / {len(d['annotations'])} annotations; dropped {dropped} "
+          f"({', '.join(args.exclude) or 'nothing excluded'})")
     print(f"-> {args.out}")
 
 

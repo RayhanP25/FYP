@@ -56,9 +56,21 @@ def yolo_line(pts, W, H):
     return " ".join(parts)
 
 def find_video(root, split_rel, cam):
+    """videos/<subset>/<split>/Camera_<cam>.<ext> for an annotation file. Folder and file names are
+    matched ignoring upper/lower case, so it behaves the same on Windows and Linux."""
     for ext in (".mp4",".MP4",".mov",".avi"):
         p=os.path.join(root,"videos",split_rel,f"Camera_{cam}{ext}")
         if os.path.exists(p): return p
+    d=os.path.join(root,"videos")
+    for part in split_rel.split("/"):
+        if not os.path.isdir(d): return None
+        match=[n for n in os.listdir(d) if n.lower()==part.lower()]
+        if not match: return None
+        d=os.path.join(d,match[0])
+    if not os.path.isdir(d): return None
+    want={f"camera_{cam}{e}".lower() for e in (".mp4",".mov",".avi")}
+    for n in sorted(os.listdir(d)):
+        if n.lower() in want: return os.path.join(d,n)
     return None
 
 def process(xml_path, studio, out, subset, stats):
