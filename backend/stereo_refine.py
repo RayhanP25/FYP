@@ -2,18 +2,22 @@
 stereo_refine.py -- use the two cameras to check each other (step 1 of stereo refinement).
 
 1. fix_swaps()           runs on the RAW 2D keypoints of both views, before healing.
-   For every left/right joint pair (shoulders, elbows, wrists, index, hips, knees, ankles, toes)
-   it triangulates both possible pairings between the views:
-       keep  : left-view A with right-view A, left-view B with right-view B
-       cross : left-view A with right-view B, left-view B with right-view A
-   and measures the reprojection error of each. If "cross" fits the two cameras much better,
-   one view has mixed up the left/right labels. Which view is to blame is decided by 3D
-   continuity with the previous frames (fallback: each view's own 2D continuity, then the
-   lower-confidence view), and the labels are swapped back in that view only.
-
-   Limit: two views can only tell pairings apart when the two candidates are NOT on the same
-   epipolar line. With side-by-side cameras that means a swap of two joints at the same height
-   is undetectable here (the "keep" pairing fits fine); those are left as they are.
+   The pose model sometimes mirrors a limb in one camera (most often when it sees the person from
+   behind). Per frame, each camera may have mirrored an arm chain (from the shoulder, elbow or hand
+   outwards) and/or a leg chain (from the hip, knee or foot): 16 ways per camera, 256 combinations.
+   Every combination is triangulated and scored:
+       camera agreement   reprojection error of each joint (both cameras must see the same point)
+       bone lengths       upper arm, forearm, hand, thigh, shin, foot keep this person's length
+       torso twist        the shoulder line may not turn more than POSE_TWIST_MAX_DEG from the hip line
+       chirality          the body's left side must be on its left (forward from feet and nose, up from
+                          the floor), which also catches a person mirrored in BOTH cameras
+   A left/right pair that no pairing fits (fast motion between the two unsynchronised cameras) is left out
+   of the scoring for that frame. The cheapest sequence over the whole clip is chosen (Viterbi), with a
+   cost for 3D jumps, for labels jumping across each camera's image, and for changing a chain's labels
+   between frames -- so one odd frame can't flip the labels, and one wrong frame can't become the
+   reference for the next ones. The labels are swapped back in the camera(s) that mixed them up.
+   Settings (.env, optional): POSE_SWAP_MIN_CONF, POSE_TWIST_MAX_DEG, POSE_SWAP_SWITCH_COST,
+   POSE_SWAP_JUMP_MM, POSE_SWAP_JUMP_PX, POSE_SWAP_MODE_COST, POSE_SWAP_MISSING_COST.
 
 2. triangulate_checked() runs after healing. It triangulates each joint, projects the 3D point
    back into both cameras and rejects it (NaN) when it lands more than POSE_REPROJ_MAX_PX away
@@ -37,9 +41,7 @@ PAIR_NAMES = {2: "shoulder", 4: "elbow", 6: "wrist", 8: "index", 10: "hip", 12: 
 
 REPROJ_MAX_PX = float(os.environ.get("POSE_REPROJ_MAX_PX", "25"))     # reject a 3D point above this
 SWAP_MIN_CONF = float(os.environ.get("POSE_SWAP_MIN_CONF", "0.3"))    # raw joints considered for swaps
-SWAP_RATIO = float(os.environ.get("POSE_SWAP_RATIO", "0.5"))          # cross must be < ratio * keep
 SPIKE_MM = float(os.environ.get("POSE_SPIKE_MM", "80"))               # 3D jump that counts as a spike
-CONTINUITY_FRAMES = 5                                                 # how old a "previous" 3D point may be
 
 
 def _P(calib):
@@ -75,71 +77,269 @@ def _ok(kp, j, min_conf):
     return bool(kp) and j < len(kp) and kp[j] and len(kp[j]) >= 3 and kp[j][2] >= min_conf
 
 
-def fix_swaps(framesL, framesR, calib):
-    """Swap left/right labels back in place in framesL/framesR (raw keypoints). Returns a report."""
-    sL, sR = calib["size1"], calib["size2"]
-    n = min(len(framesL), len(framesR))
-    prev3d = {}                                # joint -> (frame, 3D point) from the last good frame
-    per_frame = [dict(left=[], right=[]) for _ in range(n)]
-    counts = {name: 0 for name in PAIR_NAMES.values()}
+MIRROR = list(range(NUM_KEYPOINTS))
+for _a, _b in LR_PAIRS:
+    MIRROR[_a], MIRROR[_b] = _b, _a
 
-    def jump2d(kp_prev, kp, a, b, swap):
-        if not (kp_prev and _ok(kp_prev, a, 0) and _ok(kp_prev, b, 0)):
-            return None
-        A, B = (kp[b], kp[a]) if swap else (kp[a], kp[b])
-        return (np.hypot(A[0] - kp_prev[a][0], A[1] - kp_prev[a][1]) +
-                np.hypot(B[0] - kp_prev[b][0], B[1] - kp_prev[b][1]))
+# Ways one camera can mix up a side of the body. Each mode swaps the left/right labels of a whole chain
+# from some joint outwards (the pose model mirrors limbs as a unit, it doesn't swap an elbow alone).
+# Numbers are the left-side joint of each swapped pair.
+ARM_MODES = [(), (2, 4, 6, 8), (4, 6, 8), (6, 8)]          # none | from shoulder | from elbow | hand
+LEG_MODES = [(), (10, 12, 14, 16), (12, 14, 16), (14, 16)]  # none | from hip | from knee | foot
+N_VIEW_MODES = len(ARM_MODES) * len(LEG_MODES)              # 16 per camera
+N_STATES = N_VIEW_MODES * N_VIEW_MODES                      # 256 combinations of both cameras
 
+# Bones whose length is fixed for one person; left and right sides share one reference length.
+BONE_KINDS = {"upper_arm": [(2, 4), (3, 5)], "forearm": [(4, 6), (5, 7)], "hand": [(6, 8), (7, 9)],
+              "thigh": [(10, 12), (11, 13)], "shin": [(12, 14), (13, 15)], "foot": [(14, 16), (15, 17)]}
+BONE_TOL = {"upper_arm": 0.15, "forearm": 0.15, "hand": 0.35, "thigh": 0.15, "shin": 0.15, "foot": 0.35}
+
+TWIST_MAX_DEG = float(os.environ.get("POSE_TWIST_MAX_DEG", "70"))   # shoulder line vs hip line
+JUMP_MM = float(os.environ.get("POSE_SWAP_JUMP_MM", "150"))         # 3D jump per frame that starts to cost
+JUMP_PX = float(os.environ.get("POSE_SWAP_JUMP_PX", "80"))          # 2D jump per frame in one camera (calib px)
+# Price of each swap mode (none | from shoulder/hip | from elbow/knee | hand/foot), so "no swap" wins when
+# nothing else decides. The pose model mirrors whole limbs (typically when it sees the person from behind);
+# a hand or foot alone needs stronger evidence -- when each camera sees a different hand, pairing the two
+# hands always "explains" a little more, which is not evidence of a swap.
+MODE_COST = [float(v) for v in os.environ.get("POSE_SWAP_MODE_COST", "0,0.5,0.5,0.5").split(",")]
+SWITCH_COST = float(os.environ.get("POSE_SWAP_SWITCH_COST", "8"))   # per chain that changes between frames:
+                         # real mix-ups last several frames; one odd detection should not flip the labels
+MISSING_COST = float(os.environ.get("POSE_SWAP_MISSING_COST", "1.0"))      # a joint a combination can't triangulate (so a swap can't just drop an awkward joint)
+CHIRALITY_COST = 8.0     # body's left side on its right
+CHUNK = 100              # frames scored at once (bounds memory)
+
+
+def _view_swaps():
+    """(16, 18) bool: does view-mode m read joint j from the mirrored detection?"""
+    sw = np.zeros((N_VIEW_MODES, NUM_KEYPOINTS), bool)
+    for m in range(N_VIEW_MODES):
+        for a in ARM_MODES[m // len(LEG_MODES)] + LEG_MODES[m % len(LEG_MODES)]:
+            sw[m, a] = sw[m, MIRROR[a]] = True
+    return sw
+
+
+VIEW_SW = _view_swaps()
+# Pairing of joint j in state s: 0 = both cameras as labelled, 1 = right camera mirrored,
+# 2 = left camera mirrored, 3 = both mirrored.
+STATE_PAIRING = (2 * VIEW_SW[:, None, :] + VIEW_SW[None, :, :]).reshape(N_STATES, NUM_KEYPOINTS)
+VIEW_PRIOR = np.array([MODE_COST[m // len(LEG_MODES)] + MODE_COST[m % len(LEG_MODES)] for m in range(N_VIEW_MODES)])
+STATE_PRIOR = (VIEW_PRIOR[:, None] + VIEW_PRIOR[None, :]).reshape(N_STATES)
+_ARM, _LEG = np.arange(N_VIEW_MODES) // len(LEG_MODES), np.arange(N_VIEW_MODES) % len(LEG_MODES)
+_VIEW_CHANGES = (_ARM[:, None] != _ARM[None, :]).astype(int) + (_LEG[:, None] != _LEG[None, :])
+STATE_SWITCH = SWITCH_COST * (_VIEW_CHANGES[:, None, :, None] + _VIEW_CHANGES[None, :, None, :]).reshape(
+    N_STATES, N_STATES)                                      # [state at t-1, state at t]
+
+
+def _keypoint_array(frames, n):
+    K = np.full((n, NUM_KEYPOINTS, 3), np.nan)
     for t in range(n):
-        kL, kR = framesL[t].get("keypoints"), framesR[t].get("keypoints")
-        for a, b in LR_PAIRS:
-            if not all(_ok(k, j, SWAP_MIN_CONF) for k in (kL, kR) for j in (a, b)):
-                continue
-            La, Lb, Ra, Rb = _to_px(kL[a], sL), _to_px(kL[b], sL), _to_px(kR[a], sR), _to_px(kR[b], sR)
-            X, e = triangulate_px([La, Lb, La, Lb], [Ra, Rb, Rb, Ra], calib)
-            keep, cross = e[0] + e[1], e[2] + e[3]
-            geometric = keep > 2 * REPROJ_MAX_PX and cross < SWAP_RATIO * keep
-            pa, pb = prev3d.get(a), prev3d.get(b)
-            recent = bool(pa and pb and t - pa[0] <= CONTINUITY_FRAMES and t - pb[0] <= CONTINUITY_FRAMES)
-            temporal = False
-            if not geometric and recent and cross <= 2 * REPROJ_MAX_PX:
-                # Both pairings fit the cameras (the joints lie on the same epipolar line), so geometry
-                # can't decide. Use 3D continuity: a pairing that jumps far from the last frame while
-                # the other one continues smoothly is a label swap.
-                jump_keep = np.linalg.norm(X[0] - pa[1]) + np.linalg.norm(X[1] - pb[1])
-                jump_cross = min(np.linalg.norm(X[2] - pa[1]) + np.linalg.norm(X[3] - pb[1]),
-                                 np.linalg.norm(X[3] - pa[1]) + np.linalg.norm(X[2] - pb[1]))
-                temporal = jump_keep > 2 * SPIKE_MM and jump_cross < SWAP_RATIO * jump_keep
-            if not (geometric or temporal):
-                if keep <= 2 * REPROJ_MAX_PX:
-                    for j, x in ((a, X[0]), (b, X[1])):
-                        prev3d[j] = (t, x)
-                continue
-            # The views disagree on which joint is which. Option "right view wrong": a=(La,Rb), b=(Lb,Ra).
-            # Option "left view wrong": a=(Lb,Ra), b=(La,Rb).
-            Xa_r, Xb_r = X[2], X[3]
-            Xa_l, Xb_l = X[3], X[2]
-            if recent:
-                cost_r = np.linalg.norm(Xa_r - pa[1]) + np.linalg.norm(Xb_r - pb[1])
-                cost_l = np.linalg.norm(Xa_l - pa[1]) + np.linalg.norm(Xb_l - pb[1])
-                blame_left = cost_l < cost_r
-            else:
-                kLp = framesL[t - 1].get("keypoints") if t else None
-                kRp = framesR[t - 1].get("keypoints") if t else None
-                gl = [jump2d(kLp, kL, a, b, s) for s in (False, True)]
-                gr = [jump2d(kRp, kR, a, b, s) for s in (False, True)]
-                if None not in gl and None not in gr:
-                    blame_left = (gl[0] - gl[1]) > (gr[0] - gr[1])   # swapping helps the left view more
-                else:
-                    blame_left = (kL[a][2] + kL[b][2]) < (kR[a][2] + kR[b][2])
-            k = kL if blame_left else kR
-            k[a], k[b] = k[b], k[a]
-            per_frame[t]["left" if blame_left else "right"].append(PAIR_NAMES[a])
-            counts[PAIR_NAMES[a]] += 1
-            Xa, Xb = (Xa_l, Xb_l) if blame_left else (Xa_r, Xb_r)
-            prev3d[a], prev3d[b] = (t, Xa), (t, Xb)
+        kp = frames[t].get("keypoints")
+        if kp:
+            for j in range(min(NUM_KEYPOINTS, len(kp))):
+                if kp[j] and len(kp[j]) >= 3:
+                    K[t, j] = kp[j][:3]
+    return K
+
+
+def _pairings(KL, KR, calib, min_conf):
+    """Triangulate every joint under all 4 pairings. Returns X (n,18,4,3), E (n,18,4), V (n,18,4) valid."""
+    n = len(KL)
+    sL, sR = np.asarray(calib["size1"], float), np.asarray(calib["size2"], float)
+    X = np.full((n, NUM_KEYPOINTS, 4, 3), np.nan)
+    E = np.full((n, NUM_KEYPOINTS, 4), np.inf)
+    V = np.zeros((n, NUM_KEYPOINTS, 4), bool)
+    idx, ptsL, ptsR = [], [], []
+    for j in range(NUM_KEYPOINTS):
+        for p in range(4):
+            dl = MIRROR[j] if p >= 2 else j
+            dr = MIRROR[j] if p % 2 else j
+            ok = (KL[:, dl, 2] >= min_conf) & (KR[:, dr, 2] >= min_conf)
+            for t in np.flatnonzero(ok):
+                idx.append((t, j, p))
+                ptsL.append(KL[t, dl, :2] * sL)
+                ptsR.append(KR[t, dr, :2] * sR)
+    if idx:
+        Xs, es = triangulate_px(ptsL, ptsR, calib)
+        t_, j_, p_ = np.array(idx).T
+        X[t_, j_, p_] = Xs
+        E[t_, j_, p_] = es
+        V[t_, j_, p_] = np.isfinite(es)
+    # A left/right pair that no pairing fits (the cameras disagree whichever way it is labelled -- fast motion
+    # between two unsynchronised cameras, blur) carries no 3D evidence in that frame: leave it out of the
+    # scoring, so continuity keeps the labels as detected instead of a junk 3D point deciding.
+    best = np.where(V, E, np.inf).min(axis=2)                       # (n, 18) best fit per label
+    pair_best = np.minimum(best, best[:, MIRROR])
+    V &= (pair_best <= REPROJ_MAX_PX)[:, :, None]
+    return X, E, V
+
+
+def _unit(v):
+    n = np.linalg.norm(v, axis=-1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return v / n
+
+
+def _flat(v, up):
+    """Remove the vertical part of v (project onto the floor plane)."""
+    return v - (v @ up)[..., None] * up
+
+
+def _bone_reference(X, E, V):
+    """Median length of each bone kind over frames where the labels as given fit both cameras."""
+    ref = {}
+    for kind, bones in BONE_KINDS.items():
+        lens = []
+        for a, b in bones:
+            ok = V[:, a, 0] & V[:, b, 0] & (E[:, a, 0] <= REPROJ_MAX_PX) & (E[:, b, 0] <= REPROJ_MAX_PX)
+            lens.append(np.linalg.norm(X[ok, a, 0] - X[ok, b, 0], axis=1))
+        lens = np.concatenate(lens)
+        if len(lens) >= 20:
+            ref[kind] = float(np.median(lens))
+    return ref
+
+
+def _unary(X, E, V, up, bone_ref):
+    """Cost of each of the 256 combinations in each frame: (n, 256), plus the twist angle (n, 256)."""
+    n = len(X)
+    J = np.arange(NUM_KEYPOINTS)[None, :]
+    cost = np.zeros((n, N_STATES))
+    twist = np.full((n, N_STATES), np.nan)
+    any_valid = V.any(axis=2)                                       # joint seen in some pairing
+    for s0 in range(0, n, CHUNK):
+        sl = slice(s0, min(n, s0 + CHUNK))
+        Xs = X[sl][:, J, STATE_PAIRING]                             # (c, 256, 18, 3)
+        Es = E[sl][:, J, STATE_PAIRING]
+        Vs = V[sl][:, J, STATE_PAIRING]
+
+        # 1. Both cameras must agree (reprojection error), joints the combination loses cost a bit.
+        rep = np.where(Vs, np.minimum((Es / REPROJ_MAX_PX) ** 2, 9.0), MISSING_COST)
+        c = (rep * any_valid[sl][:, None, :]).sum(axis=2)
+
+        # 2. Bones keep this person's length.
+        for kind, L in bone_ref.items():
+            for a, b in BONE_KINDS[kind]:
+                ok = Vs[..., a] & Vs[..., b]
+                d = np.linalg.norm(Xs[..., a, :] - Xs[..., b, :], axis=-1)
+                c += np.where(ok, np.minimum(((d - L) / (BONE_TOL[kind] * L)) ** 2, 25.0), 0.0)   # 25: impossible bone
+
+        # 3. Shoulders can't twist far from the hips (a real spine turns ~45-60 degrees).
+        sh = _unit(_flat(Xs[..., 3, :] - Xs[..., 2, :], up))        # left -> right shoulder
+        hp = _unit(_flat(Xs[..., 11, :] - Xs[..., 10, :], up))      # left -> right hip
+        with np.errstate(invalid="ignore"):
+            ang = np.degrees(np.arccos(np.clip((sh * hp).sum(-1), -1, 1)))
+        ok = Vs[..., 2] & Vs[..., 3] & Vs[..., 10] & Vs[..., 11] & np.isfinite(ang)
+        twist[sl] = np.where(ok, ang, np.nan)
+        c += np.where(ok, np.minimum(np.clip((ang - TWIST_MAX_DEG) / 20.0, 0, None) ** 2, 16.0), 0.0)
+
+        # 4. The body's left side is on its left: forward from feet (ankle -> toe) and nose (neck -> nose),
+        #    up from the floor; left = up x forward. Checked on the hips, else the shoulders.
+        fwd = np.zeros(Xs.shape[:2] + (3,))
+        for a, b in ((14, 16), (15, 17), (1, 0)):
+            ok_f = (Vs[..., a] & Vs[..., b])[..., None]
+            fwd += np.where(ok_f, np.nan_to_num(_unit(_flat(Xs[..., b, :] - Xs[..., a, :], up))), 0.0)
+        has_fwd = np.linalg.norm(fwd, axis=-1) > 0.5
+        left_dir = _unit(np.cross(up, fwd))
+        side = np.full(Xs.shape[:2], np.nan)
+        for a, b in ((2, 3), (10, 11)):                              # hips win (written last)
+            ok_s = Vs[..., a] & Vs[..., b]
+            v = _unit(_flat(Xs[..., a, :] - Xs[..., b, :], up))     # right -> left
+            side = np.where(ok_s, (v * left_dir).sum(-1), side)
+        bad = has_fwd & np.isfinite(side)
+        c += np.where(bad, CHIRALITY_COST * np.clip(-side / 0.5, 0, 1) ** 2, 0.0)
+
+        cost[sl] = c + STATE_PRIOR[None, :]
+    return cost, twist
+
+
+VIEW_ONEHOT = np.zeros((N_VIEW_MODES, NUM_KEYPOINTS * 2))
+VIEW_ONEHOT[np.arange(N_VIEW_MODES)[:, None], np.arange(NUM_KEYPOINTS) * 2 + VIEW_SW] = 1.0
+
+
+def _transition_2d(K0, K1, size, min_conf):
+    """(16, 16) cost of one camera's labelling at t-1 -> t: a label that jumps across the image costs.
+    Independent of the other camera, so it still works when the two cameras disagree (motion blur, sync)."""
+    P0 = np.where((K0[:, 2] >= min_conf)[:, None], K0[:, :2] * size, np.nan)
+    P1 = np.where((K1[:, 2] >= min_conf)[:, None], K1[:, :2] * size, np.nan)
+    own = np.arange(NUM_KEYPOINTS)
+    src0 = np.stack([P0[own], P0[MIRROR]], axis=1)                          # (18, 2 choices, 2)
+    src1 = np.stack([P1[own], P1[MIRROR]], axis=1)
+    d = np.linalg.norm(src0[:, :, None, :] - src1[:, None, :, :], axis=-1)  # (18, prev choice, now choice)
+    C = np.where(np.isfinite(d), np.minimum((np.nan_to_num(d) / JUMP_PX) ** 2, 4.0), 0.0)
+    block = np.zeros((NUM_KEYPOINTS, 2, NUM_KEYPOINTS, 2))
+    block[own, :, own, :] = C
+    block = block.reshape(NUM_KEYPOINTS * 2, NUM_KEYPOINTS * 2)
+    return VIEW_ONEHOT @ block @ VIEW_ONEHOT.T
+
+
+def _transition(X0, V0, X1, V1, onehot):
+    """(256, 256) cost of going from each combination at t-1 to each at t: big 3D jumps cost."""
+    d = np.linalg.norm(X1[:, None, :, :] - X0[:, :, None, :], axis=-1)       # (18, p_prev, p_now)
+    ok = V0[:, :, None] & V1[:, None, :]
+    C = np.where(ok, np.minimum((np.nan_to_num(d) / JUMP_MM) ** 2, 4.0), 0.0)
+    block = np.zeros((NUM_KEYPOINTS, 4, NUM_KEYPOINTS, 4))
+    block[np.arange(NUM_KEYPOINTS), :, np.arange(NUM_KEYPOINTS), :] = C
+    block = block.reshape(NUM_KEYPOINTS * 4, NUM_KEYPOINTS * 4)
+    return onehot @ block @ onehot.T + STATE_SWITCH
+
+
+def fix_swaps(framesL, framesR, calib, min_conf=SWAP_MIN_CONF):
+    """Put left/right labels back where a camera mixed them up, in place in framesL/framesR (raw keypoints).
+
+    Every frame, each camera may have mirrored an arm chain and/or a leg chain (16 ways per camera,
+    256 combinations). Each combination is triangulated and scored on camera agreement, bone lengths,
+    torso twist and body chirality; the cheapest sequence over the whole clip (Viterbi) is applied.
+    Returns a report."""
+    n = min(len(framesL), len(framesR))
+    counts = {name: 0 for name in PAIR_NAMES.values()}
+    per_frame = [dict(left=[], right=[]) for _ in range(n)]
+    if n == 0:
+        return dict(per_frame=per_frame, swaps_fixed=counts, total_swaps_fixed=0, frames_changed=0)
+
+    KL, KR = _keypoint_array(framesL, n), _keypoint_array(framesR, n)
+    sL, sR = np.asarray(calib["size1"], float), np.asarray(calib["size2"], float)
+    X, E, V = _pairings(KL, KR, calib, min_conf)
+    R_level = calib.get("R_level")
+    up = (np.asarray(R_level, float).T @ np.array([0.0, -1.0, 0.0]) if R_level is not None
+          else np.array([0.0, -1.0, 0.0]))                         # "up" in the left camera's frame
+    bone_ref = _bone_reference(X, E, V)
+    U, twist = _unary(X, E, V, up, bone_ref)
+
+    onehot = np.zeros((N_STATES, NUM_KEYPOINTS * 4))
+    onehot[np.arange(N_STATES)[:, None], np.arange(NUM_KEYPOINTS) * 4 + STATE_PAIRING] = 1.0
+    D = U[0].copy()
+    back = np.zeros((n, N_STATES), dtype=np.int32)
+    for t in range(1, n):
+        tL = _transition_2d(KL[t - 1], KL[t], sL, min_conf)
+        tR = _transition_2d(KR[t - 1], KR[t], sR, min_conf)
+        T2 = (tL[:, None, :, None] + tR[None, :, None, :]).reshape(N_STATES, N_STATES)
+        M = D[:, None] + _transition(X[t - 1], V[t - 1], X[t], V[t], onehot) + T2
+        back[t] = M.argmin(axis=0)
+        D = M[back[t], np.arange(N_STATES)] + U[t]
+    path = np.zeros(n, dtype=np.int32)
+    path[-1] = int(D.argmin())
+    for t in range(n - 1, 0, -1):
+        path[t - 1] = back[t, path[t]]
+
+    changed = 0
+    for t, s in enumerate(path):
+        if s == 0:
+            continue
+        changed += 1
+        for side, m, frames in (("left", s // N_VIEW_MODES, framesL), ("right", s % N_VIEW_MODES, framesR)):
+            kp = frames[t].get("keypoints")
+            for a in ARM_MODES[m // len(LEG_MODES)] + LEG_MODES[m % len(LEG_MODES)]:
+                b = MIRROR[a]
+                if kp and max(a, b) < len(kp):
+                    kp[a], kp[b] = kp[b], kp[a]
+                per_frame[t][side].append(PAIR_NAMES[a])
+                counts[PAIR_NAMES[a]] += 1
+    chosen_twist = twist[np.arange(n), path]
+    still_twisted = int(np.sum(chosen_twist > TWIST_MAX_DEG))
     return dict(per_frame=per_frame, swaps_fixed=counts, total_swaps_fixed=int(sum(counts.values())),
-                params=dict(min_conf=SWAP_MIN_CONF, ratio=SWAP_RATIO, max_px=REPROJ_MAX_PX))
+                frames_changed=changed, frames_still_twisted=still_twisted,
+                bone_reference_mm={k: round(v, 1) for k, v in bone_ref.items()},
+                params=dict(min_conf=min_conf, max_px=REPROJ_MAX_PX, twist_max_deg=TWIST_MAX_DEG,
+                            jump_mm=JUMP_MM))
 
 
 def triangulate_checked(kp_left, kp_right, calib, conf_threshold, max_px=REPROJ_MAX_PX):
