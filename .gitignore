@@ -57,3 +57,9 @@ venv/
 
 # Batch launcher
 start-all.bat
+
+# Local calibration / debug files (calibrations are kept in the calibration library)
+backend/calibration_backup_*.npz
+backend/calib_sessions/
+backend/_debug/
+backend/probe_*.jpg
