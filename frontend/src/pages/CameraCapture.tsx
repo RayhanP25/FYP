@@ -4,7 +4,6 @@ import { api } from '../api/axiosInstance';
 import { Camera, VideoOff, Video, StopCircle } from 'lucide-react';
 import { toast } from 'react-toastify';
 import AppLayout from '../layout/AppLayout';
-import { getVideoUrl } from '../api/videoApi';
 
 export default function CameraCapture() {
     const navigate = useNavigate();
@@ -94,8 +93,7 @@ export default function CameraCapture() {
             });
             
             // Automatically navigate to analysis page
-            const videoData = await getVideoUrl(data.video_id);
-            navigate(`/kinematic-analysis/${data.video_id}?url=${encodeURIComponent(videoData.presigned_url)}`);
+            navigate(`/analysis/${data.video_id}`);
         } catch (error: unknown) {
             const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
             toast.update(id, {

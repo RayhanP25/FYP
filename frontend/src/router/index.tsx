@@ -1,4 +1,4 @@
-import { useRoutes, Navigate } from 'react-router-dom';
+import { useRoutes, Navigate, useParams } from 'react-router-dom';
 import type { RouteObject } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import HomePage from '../pages/Home';
@@ -10,7 +10,6 @@ import UserProfilePage from '../pages/userProfile';
 import type { JSX } from 'react';
 import CameraCapture from '../pages/CameraCapture';
 import VideosPage from '../pages/VideosPage';
-import AnalysisPage from '../pages/AnalysisPage';
 import AnalysisLibraryPage from '../pages/AnalysisLibraryPage';
 import AnalysisStudioPage from '../pages/AnalysisStudioPage';
 import CalibrationPage from '../pages/CalibrationPage';
@@ -39,6 +38,12 @@ const PublicRoute = ({ element }: { element: JSX.Element }) => {
   const { isAuthenticated, loading } = useAuth();
   if (loading) return <AuthLoading />;
   return isAuthenticated() ? <Navigate to="/video-test" /> : element;
+};
+
+// The old analysis page's links (/kinematic-analysis/...) now open the analysis studio.
+const ToStudio = () => {
+  const { videoId } = useParams();
+  return <Navigate to={videoId ? `/analysis/${videoId}` : '/analysis'} replace />;
 };
 
 const AppRoutes = () => {
@@ -100,14 +105,13 @@ const AppRoutes = () => {
       element: <PrivateRoute element={<AnalysisStudioPage />} />,
     },
     {
-      // Matches the exact video ID when you click a video
-      path: '/kinematic-analysis/:videoId', 
-      element: <PrivateRoute element={<AnalysisPage />} />,
+      // Old links to the previous analysis page
+      path: '/kinematic-analysis/:videoId',
+      element: <ToStudio />,
     },
     {
-      // Matches if you just click the sidebar tab directly
-      path: '/kinematic-analysis', 
-      element: <PrivateRoute element={<AnalysisPage />} />,
+      path: '/kinematic-analysis',
+      element: <ToStudio />,
     },
   ];
 

@@ -6,9 +6,9 @@ import { useNavigate } from 'react-router-dom'
 const VideosPage = () => {
     const navigate = useNavigate();
 
-    // When a video is clicked, send the ID and URL safely to the new Analysis route
-    const handleVideoSelect = (videoId: string, videoUrl: string) => {
-        navigate(`/kinematic-analysis/${videoId}?url=${encodeURIComponent(videoUrl)}`);
+    // When a video is clicked (or just uploaded), open it in the analysis studio
+    const handleVideoSelect = (videoId: string) => {
+        navigate(`/analysis/${videoId}`);
     }
 
     return (
