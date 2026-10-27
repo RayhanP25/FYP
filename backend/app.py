@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import client, database_name
-from routes import users, ping, upload, pose, camera, calibration
+from routes import users, ping, upload, pose, camera, calibration, dashboard
 
 '''cd .venv/Scripts
  .\Activate.ps1
@@ -26,6 +26,7 @@ app.include_router(upload.router, prefix="/api")
 app.include_router(pose.router, prefix="/api")
 app.include_router(camera.router, prefix="/api")
 app.include_router(calibration.router, prefix="/api")
+app.include_router(dashboard.router, prefix="/api")
 
 
 @app.on_event("startup")

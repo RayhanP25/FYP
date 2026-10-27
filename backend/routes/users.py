@@ -93,10 +93,12 @@ def login(user_credentials: UserLogin, response: Response):
     token_data = {"sub": user["email"], "role": user["role"]}
     access_token = create_access_token(token_data)
     
-    # Update last login
+    # Update last login (last_login_at / previous_login_at: full times, for "new since your last login")
+    now = datetime.now()
     users_collection.update_one(
         {"_id": user["_id"]},
-        {"$set": {"last_login": datetime.now().strftime("%d.%m.%Y")}}
+        {"$set": {"last_login": now.strftime("%d.%m.%Y"), "last_login_at": now,
+                  "previous_login_at": user.get("last_login_at") or user.get("last_login")}}
     )
     
     # Set HttpOnly cookie
