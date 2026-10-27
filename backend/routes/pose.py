@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from database import client, database_name
 from minio_client import minio_client
 from routes.users import get_current_user
+from routes.edits import apply_to as apply_keypoint_edits
 from pose_estimator import process_video_with_overlays, POSE_MIN_CONF, POSE_SURE_CONF
 from bson import ObjectId
 import calibration_store
@@ -210,4 +211,8 @@ async def get_analysis(video_id: str, current_user: dict = Depends(get_current_u
     if not analysis:
         raise HTTPException(status_code=404, detail="No analysis found for this video")
     analysis["_id"] = str(analysis["_id"])
+    try:                                        # manual keypoint corrections (routes/edits.py)
+        analysis["result"] = apply_keypoint_edits(analysis, analysis.get("result"))
+    except Exception as ex:                     # show the analysis even if the edits can't be applied
+        print(f"keypoint edits not applied for {video_id}: {ex!r}")
     return analysis

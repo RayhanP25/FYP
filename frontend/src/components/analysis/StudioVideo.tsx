@@ -10,6 +10,7 @@ export interface StudioOverlay {
     minConf: number;
     sureConf: number;
     stabilize: boolean;
+    marks?: (Record<string, string> | undefined)[];
 }
 
 interface StudioVideoProps {
@@ -20,9 +21,14 @@ interface StudioVideoProps {
     overlay?: StudioOverlay | null;
     /** Shown when the skeleton can't be switched for this video (it's drawn into an older overlay video). */
     fixedNote?: string;
+    /** Edit mode: joints on this video can be dragged. */
+    edit?: {
+        selectedJoint: number | null;
+        onDragJoint: (phase: 'start' | 'move' | 'end', frame: number, joint: number, uv: [number, number]) => void;
+    } | null;
 }
 
-const StudioVideo = ({ videoId, view, innerRef, overlay, fixedNote }: StudioVideoProps) => {
+const StudioVideo = ({ videoId, view, innerRef, overlay, fixedNote, edit }: StudioVideoProps) => {
     const [plainFailed, setPlainFailed] = useState(false);
     const variant = overlay && !plainFailed ? 'plain' : 'overlay';
     const { data, isLoading, isError } = useQuery({
@@ -44,7 +50,15 @@ const StudioVideo = ({ videoId, view, innerRef, overlay, fixedNote }: StudioVide
                 // A clean video the browser can't play (e.g. an HEVC upload): use the overlay video instead.
                 onError={() => { if (variant === 'plain') setPlainFailed(true); }}
             />
-            {drawing && overlay && <SkeletonOverlay videoRef={innerRef} {...overlay} />}
+            {drawing && overlay && (
+                <SkeletonOverlay videoRef={innerRef} {...overlay} editable={!!edit} selectedJoint={edit?.selectedJoint} onDragJoint={edit?.onDragJoint} />
+            )}
+            {edit && data && !drawing && (
+                // An older analysis: the skeleton is part of this video, so edits can't be drawn or made on it.
+                <div className="absolute inset-x-3 top-3 px-3 py-2 rounded-md bg-amber-500/90 text-xs font-medium text-black">
+                    This video has the skeleton drawn into it, so edits won't show here. Re-analyze the recording to edit on the videos.
+                </div>
+            )}
             <span className="absolute bottom-3 left-3 px-2 py-0.5 rounded bg-black/60 text-[10px] font-medium tracking-[0.2em] text-white/70 uppercase">{view} cam</span>
             {!drawing && data && fixedNote && (
                 <span className="absolute top-3 right-3 px-2 py-0.5 rounded bg-black/60 text-[11px] text-white/70">{fixedNote}</span>

@@ -1,12 +1,14 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
-import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, RefreshCw, RotateCcw, Ruler, Video, Wand2, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, Pencil, RefreshCw, RotateCcw, Ruler, Undo2, Video, Wand2, type LucideIcon } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
 import { getVideoUrl } from '@/api/videoApi';
+import { getEdits, revertEdits, saveEdits } from '@/api/editsApi';
+import { LIMB_BONES, pointFrom2D, projectToCamera } from '@/utils/skeleton';
 import Skeleton3DViewer from '@/components/Skeleton3DViewer';
 import KinematicChart, { type ChartMode } from '@/components/Video/kinematicChart';
 import PanelCard from '@/components/analysis/PanelCard';
@@ -31,6 +33,14 @@ const CHART_MODES: Partial<Record<PanelId, ChartMode>> = { angles: 'angles', pos
 
 type KeypointMode = 'processed' | 'raw';
 
+/** An unsaved keypoint edit: dragged in the 3D view (value = X, mm floor-levelled like keypoints_3d) or on one
+ *  camera video (value = [x, y] from 0 to 1). X is where it puts the joint in 3D, for drawing it everywhere. */
+type EditTarget = '3d' | 'left' | 'right';
+type PendingEdit = { frame: number; joint: number; target: EditTarget; value: number[]; X: number[] | null };
+const editKey = (frame: number, joint: number) => `${frame}:${joint}`;
+const errorText = (e: unknown, fallback: string) =>
+    ((e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail as string) || fallback;
+
 // The analysis JSON is untyped here, as in the charts.
 type AnalysisJson = any;
 
@@ -51,6 +61,14 @@ const AnalysisStudioPage = () => {
     const rightRef = useRef<HTMLVideoElement>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [mode, setMode] = useState<KeypointMode>('processed');
+    // Keypoint editing (admins and coaches, stereo analyses): unsaved edits, undo history, selected joint.
+    const [editing, setEditing] = useState(false);
+    const [pending, setPending] = useState<Record<string, PendingEdit>>({});
+    const [history, setHistory] = useState<Record<string, PendingEdit>[]>([]);
+    const [selected, setSelected] = useState<{ frame: number; joint: number } | null>(null);
+    const [lockBones, setLockBones] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const beforeDrag = useRef<Record<string, PendingEdit> | null>(null);
 
     const { data: meta } = useQuery({ queryKey: ['studio-video', videoId, 'left'], queryFn: () => getVideoUrl(videoId, 'left'), staleTime: 30 * 60 * 1000 });
     const { data: analysis, isLoading, isError } = useQuery({
@@ -60,6 +78,9 @@ const AnalysisStudioPage = () => {
     });
 
     const is3D = !!analysis?.frames_3d?.length;
+    const { data: editInfo } = useQuery({ queryKey: ['edits', videoId], queryFn: () => getEdits(videoId), enabled: is3D, retry: false });
+    const canEdit = is3D && !!editInfo?.can_edit;
+    const pendingCount = Object.keys(pending).length;
     const hasRight = !!meta?.has_right_view;
     const isAvailable = (needs: 'always' | 'right' | '3d') => needs === 'always' || (needs === 'right' ? hasRight : is3D);
     const visiblePanels = PANELS.filter((p) => isAvailable(p.needs) && layout.visible[p.id]);
@@ -71,17 +92,50 @@ const AnalysisStudioPage = () => {
     const hasRaw = !!analysis && (is3D
         ? analysis.frames_3d.some((f: { keypoints_3d_raw?: unknown }) => f.keypoints_3d_raw)
         : analysis.frames?.some((f: { keypoints_raw?: unknown }) => f.keypoints_raw));
-    const showRaw = mode === 'raw' && hasRaw;
-    const shown = useMemo(() => (analysis && showRaw ? rawView(analysis) : analysis), [analysis, showRaw]);
+    const showRaw = mode === 'raw' && hasRaw && !editing;
+    const base = useMemo(() => (analysis && showRaw ? rawView(analysis) : analysis), [analysis, showRaw]);
+    // Unsaved edits on top (marked "pending"); saved ones already come applied from the server.
+    const shown = useMemo(() => {
+        if (!base || !pendingCount || showRaw || !base.frames_3d) return base;
+        const f3 = [...base.frames_3d];
+        Object.values(pending).forEach(({ frame, joint, X }) => {
+            const f = f3[frame];
+            if (!f || !X) return;
+            const kp = [...f.keypoints_3d];
+            kp[joint] = X;
+            f3[frame] = { ...f, keypoints_3d: kp, edited: { ...(f.edited || {}), [joint]: 'pending' } };
+        });
+        return { ...base, frames_3d: f3 };
+    }, [base, pending, pendingCount, showRaw]);
+    // This person's bone lengths (from the analysis), by "parent-child" joint key.
+    const boneLengths = useMemo(() => {
+        const b = analysis?.stereo_report?.bones?.bones || {};
+        return Object.fromEntries(LIMB_BONES.filter(([, , n]) => b[n]?.length_mm).map(([a, c, n]) => [`${a}-${c}`, b[n].length_mm as number]));
+    }, [analysis]);
     const overlays = useMemo(() => {
         if (!analysis) return { left: null, right: null };
         const conf = analysis.overlay_conf ?? { min: 0.3, sure: 0.7 };
-        const make = (frames: { keypoints?: Keypoints2D; keypoints_raw?: Keypoints2D }[] | undefined): StudioOverlay | null =>
-            frames?.length
-                ? { frames: frames.map((f) => (showRaw ? f.keypoints_raw : f.keypoints) ?? null), fps, minConf: conf.min, sureConf: conf.sure, stabilize: !showRaw }
-                : null;
-        return { left: make(analysis.frames), right: make(analysis.frames_right) };
-    }, [analysis, showRaw, fps]);
+        const cal = editInfo?.calibration;
+        const marks = !showRaw && shown?.frames_3d ? shown.frames_3d.map((f: { edited?: Record<string, string> }) => f.edited) : undefined;
+        const make = (frames: { keypoints?: Keypoints2D; keypoints_raw?: Keypoints2D }[] | undefined, view: 'left' | 'right'): StudioOverlay | null => {
+            if (!frames?.length) return null;
+            const kps = frames.map((f) => (showRaw ? f.keypoints_raw : f.keypoints) ?? null);
+            if (!showRaw && cal) {
+                // Unsaved 3D edits shown where they land in this camera, so you can check them against the video.
+                Object.values(pending).forEach(({ frame, joint, target, value, X }) => {
+                    const kp = kps[frame];
+                    // Dragged on this video: exactly there. Otherwise where its 3D position lands in this camera.
+                    const uv = target === view ? value : X ? projectToCamera(X, cal, view) : null;
+                    if (!kp || !uv) return;
+                    const next = [...kp];
+                    next[joint] = [uv[0], uv[1], 1];
+                    kps[frame] = next;
+                });
+            }
+            return { frames: kps, fps, minConf: conf.min, sureConf: conf.sure, stabilize: !showRaw, marks };
+        };
+        return { left: make(analysis.frames, 'left'), right: make(analysis.frames_right, 'right') };
+    }, [analysis, shown, showRaw, fps, pending, editInfo]);
     const totalFrames = analysis?.total_frames ?? analysis?.frames?.length;
     const stats = analysis ? [`${Math.round(fps)} fps`, `${totalFrames} frames`, `${(totalFrames / fps).toFixed(1)} s`] : [];
 
@@ -98,6 +152,104 @@ const AnalysisStudioPage = () => {
         }
     };
 
+    const startEditing = () => {
+        [leftRef.current, rightRef.current].forEach((v) => v?.pause());
+        setMode('processed');
+        if (!layout.visible.skeleton) toggleVisible('skeleton');
+        setEditing(true);
+    };
+    const stopEditing = () => { setEditing(false); setSelected(null); };
+    const onSelectJoint = (frame: number, joint: number | null) => {
+        setSelected(joint == null ? null : { frame, joint });
+        beforeDrag.current = joint == null ? null : pending;      // becomes an undo step once the joint moves
+    };
+    const onEditJoint = (frame: number, joint: number, value: [number, number, number]) => {
+        if (beforeDrag.current) {
+            const snapshot = beforeDrag.current;
+            setHistory((h) => [...h.slice(-49), snapshot]);
+            beforeDrag.current = null;
+        }
+        setPending((p) => ({ ...p, [editKey(frame, joint)]: { frame, joint, target: '3d', value, X: value } }));
+    };
+    // Dragging a joint on one of the videos: the other camera's point for it gives its depth.
+    const pointIn = (view: 'left' | 'right', frame: number, joint: number): number[] | null => {
+        const p = pending[editKey(frame, joint)];
+        const cal = editInfo?.calibration;
+        if (p && cal) return p.target === view ? p.value : p.X ? projectToCamera(p.X, cal, view) : null;
+        const kp = (view === 'left' ? analysis?.frames : analysis?.frames_right)?.[frame]?.keypoints?.[joint];
+        return kp && kp[2] >= 0.3 ? kp : null;
+    };
+    const onDragJoint2D = (view: 'left' | 'right') => (phase: 'start' | 'move' | 'end', frame: number, joint: number, uv: [number, number]) => {
+        if (phase === 'start') { onSelectJoint(frame, joint); return; }
+        const cal = editInfo?.calibration;
+        if (!cal) return;
+        const other = pointIn(view === 'left' ? 'right' : 'left', frame, joint);
+        const current = pending[editKey(frame, joint)]?.X ?? analysis?.frames_3d?.[frame]?.keypoints_3d?.[joint] ?? null;
+        const X = pointFrom2D(uv, view, other, current, cal);
+        if (beforeDrag.current) {
+            const snapshot = beforeDrag.current;
+            setHistory((h) => [...h.slice(-49), snapshot]);
+            beforeDrag.current = null;
+        }
+        setPending((p) => ({ ...p, [editKey(frame, joint)]: { frame, joint, target: view, value: uv, X } }));
+    };
+    const undo = () => {
+        const prev = history[history.length - 1];
+        if (!prev) return;
+        setPending(prev);
+        setHistory(history.slice(0, -1));
+    };
+    const discard = () => { setPending({}); setHistory([]); };
+    const refreshEdits = () => Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['analysis', videoId] }),
+        queryClient.invalidateQueries({ queryKey: ['edits', videoId] }),
+    ]);
+    const save = async () => {
+        setSaving(true);
+        try {
+            const n = pendingCount;
+            await saveEdits(videoId, Object.values(pending).map(({ frame, joint, target, value }) => ({ frame, joint, target, value })));
+            await refreshEdits();
+            setPending({});
+            setHistory([]);
+            toast.success(`Saved ${n} edit${n === 1 ? '' : 's'}. Nearby frames ease into ${n === 1 ? 'it' : 'them'}.`);
+        } catch (e) {
+            toast.error(errorText(e, 'Could not save the edits.'));
+        } finally {
+            setSaving(false);
+        }
+    };
+    const selectedSaved = selected && analysis?.frames_3d?.[selected.frame]?.edited?.[selected.joint] === 'edit'
+        && !pending[editKey(selected.frame, selected.joint)];
+    const revertSelected = async () => {
+        if (!selected) return;
+        try {
+            await revertEdits(videoId, selected.frame, selected.joint);
+            await refreshEdits();
+            toast.success('Edit reverted.');
+        } catch (e) {
+            toast.error(errorText(e, 'Could not revert the edit.'));
+        }
+    };
+    const savedCount = editInfo?.edits.length ?? 0;
+    const revertAll = async () => {
+        if (!window.confirm(`Revert all ${savedCount} keypoint edits of this video?`)) return;
+        try {
+            await revertEdits(videoId);
+            await refreshEdits();
+            toast.success('All edits reverted.');
+        } catch (e) {
+            toast.error(errorText(e, 'Could not revert the edits.'));
+        }
+    };
+    // Don't lose unsaved edits by closing or reloading the tab.
+    useEffect(() => {
+        if (!pendingCount) return;
+        const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+        window.addEventListener('beforeunload', warn);
+        return () => window.removeEventListener('beforeunload', warn);
+    }, [pendingCount]);
+
     const renderPanel = (id: PanelId) => {
         if (id === 'left' || id === 'right') {
             return (
@@ -106,11 +258,26 @@ const AnalysisStudioPage = () => {
                     view={id}
                     innerRef={id === 'left' ? leftRef : rightRef}
                     overlay={overlays[id]}
-                    fixedNote={showRaw ? 'Processed skeleton (re-analyze to show raw on video)' : undefined}
+                    fixedNote={showRaw ? 'Processed skeleton (re-analyze to show raw on video)'
+                        : savedCount > 0 ? 'Older video: edits not shown here (re-analyze)' : undefined}
+                    edit={editing ? { selectedJoint: selected?.joint ?? null, onDragJoint: onDragJoint2D(id) } : null}
                 />
             );
         }
-        if (id === 'skeleton') return <Skeleton3DViewer analysis={shown} framing={analysis?.frames_3d} />;
+        if (id === 'skeleton') {
+            return (
+                <Skeleton3DViewer
+                    analysis={shown}
+                    framing={analysis?.frames_3d}
+                    editing={editing}
+                    onEditJoint={onEditJoint}
+                    onSelectJoint={onSelectJoint}
+                    selectedJoint={selected?.joint ?? null}
+                    boneLengths={boneLengths}
+                    lockBones={lockBones}
+                />
+            );
+        }
         return <KinematicChart analysisData={shown} mode={CHART_MODES[id]!} padded={false} />;
     };
 
@@ -127,6 +294,11 @@ const AnalysisStudioPage = () => {
                             <div className="mt-2 flex items-center gap-4 text-sm text-text-muted tabular-nums">
                                 <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium">{is3D ? 'Stereo 3D' : '2D'}</span>
                                 {showRaw && <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-500 text-xs font-medium">Raw detections</span>}
+                                {!showRaw && savedCount > 0 && (
+                                    <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium" title="Joints corrected by hand (rings in the views)">
+                                        {savedCount} edited {savedCount === 1 ? 'joint' : 'joints'}
+                                    </span>
+                                )}
                                 {stats.map((s) => <span key={s}>{s}</span>)}
                             </div>
                         )}
@@ -141,13 +313,18 @@ const AnalysisStudioPage = () => {
                                     <button
                                         key={m}
                                         onClick={() => setMode(m)}
-                                        disabled={m === 'raw' && !hasRaw}
+                                        disabled={(m === 'raw' && !hasRaw) || editing}
                                         className={`px-3 text-sm rounded-md capitalize transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${(m === 'raw' ? showRaw : !showRaw) ? 'bg-primary text-white' : 'text-text-secondary hover:text-text'}`}
                                     >
                                         {m}
                                     </button>
                                 ))}
                             </div>
+                            {canEdit && !editing && (
+                                <button onClick={startEditing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors" title="Correct keypoints by dragging them on the videos or in the 3D view">
+                                    <Pencil className="w-4 h-4" /> Edit keypoints
+                                </button>
+                            )}
                             <ViewMenu
                                 panels={PANELS.map((p) => ({ id: p.id, label: p.label, icon: p.icon, available: isAvailable(p.needs) }))}
                                 visible={layout.visible}
@@ -163,6 +340,44 @@ const AnalysisStudioPage = () => {
                         </div>
                     )}
                 </div>
+
+                {editing && (
+                    <div className="sticky top-2 z-20 -mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-primary/50 bg-background-main/95 backdrop-blur px-4 py-2.5">
+                        <span className="inline-flex items-center gap-2 text-sm font-medium text-text"><Pencil className="w-4 h-4 text-primary" /> Editing keypoints</span>
+                        <span className="text-xs text-text-muted">
+                            Drag a joint on either video or in the 3D view; the other views follow. Saved edits ease into the {editInfo?.fade_frames ?? 5} frames on each side,
+                            and edits of a joint up to {editInfo?.keyframe_gap ?? 30} frames apart are joined.
+                        </span>
+                        <div className="ml-auto flex flex-wrap items-center gap-2">
+                            <label className="inline-flex items-center gap-2 text-sm text-text-secondary cursor-pointer select-none" title="Keep the dragged joint's bone to its parent (e.g. the forearm for a wrist) at this person's usual length">
+                                <input type="checkbox" checked={lockBones} onChange={(e) => setLockBones(e.target.checked)} className="accent-primary" />
+                                Keep bone length
+                            </label>
+                            <button onClick={undo} disabled={!history.length} className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
+                                <Undo2 className="w-4 h-4" /> Undo
+                            </button>
+                            {selectedSaved && (
+                                <button onClick={revertSelected} className="h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text">Revert this joint</button>
+                            )}
+                            {savedCount > 0 && !pendingCount && (
+                                <button onClick={revertAll} className="h-8 px-2.5 text-sm rounded-md text-text-muted hover:text-red-500">Revert all</button>
+                            )}
+                            <button onClick={discard} disabled={!pendingCount} className="h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">Discard</button>
+                            <Button size="sm" onClick={save} disabled={!pendingCount || saving} className="h-8 gap-1.5">
+                                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                                Save{pendingCount ? ` ${pendingCount} ${pendingCount === 1 ? 'edit' : 'edits'}` : ''}
+                            </Button>
+                            <button
+                                onClick={stopEditing}
+                                disabled={pendingCount > 0}
+                                title={pendingCount ? 'Save or discard your changes first' : undefined}
+                                className="h-8 px-2.5 text-sm rounded-md text-text-secondary hover:text-text disabled:opacity-40"
+                            >
+                                Done
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {isLoading && <div className="py-32 text-center text-sm text-text-muted">Loading analysis...</div>}
 

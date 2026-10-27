@@ -1,10 +1,29 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
+import { JOINT_NAMES, LIMB_BONES } from "@/utils/skeleton";
 
 type Pt = [number, number, number] | null;
-interface Frame3D { frame_index: number; keypoints_3d: Pt[]; angles_3d: Record<string, number>; }
-// framing: frames to centre and zoom the view on (default: the ones shown). Lets raw and processed data
-// share one framing, so switching between them doesn't move the camera.
-interface Props { videoId?: string; apiBase?: string; analysis?: { fps?: number; frames_3d?: Frame3D[] }; framing?: Frame3D[]; }
+/** edited: joint -> "edit" (corrected here) | "blend" (eased toward a nearby correction) | "pending" (unsaved). */
+interface Frame3D { frame_index: number; keypoints_3d: Pt[]; angles_3d: Record<string, number>; edited?: Record<string, string>; }
+interface Props {
+  videoId?: string;
+  apiBase?: string;
+  analysis?: { fps?: number; frames_3d?: Frame3D[] };
+  // framing: frames to centre and zoom the view on (default: the ones shown). Lets raw and processed data
+  // share one framing, so switching between them doesn't move the camera.
+  framing?: Frame3D[];
+  /** Edit mode: click a joint to select it and drag it (parallel to the screen); empty space still rotates. */
+  editing?: boolean;
+  onEditJoint?: (frame: number, joint: number, value: [number, number, number]) => void;
+  onSelectJoint?: (frame: number, joint: number | null) => void;
+  selectedJoint?: number | null;
+  /** Usual bone lengths (mm) by "parent-child" joint key, shown while editing. */
+  boneLengths?: Record<string, number>;
+  /** Keep the dragged joint's bone to its parent at its usual length. */
+  lockBones?: boolean;
+}
+
+const PARENT: Record<number, number> = Object.fromEntries(LIMB_BONES.map(([a, b]) => [b, a]));
+const HIT_PX = 14;
 
 /** Floor height: where the body's lowest point is most often (a 30 mm histogram's busiest bin, refined by
  *  the median of the frames near it). The single lowest point would let one wrong joint - a hidden foot
@@ -27,7 +46,10 @@ const BONES_LEFT: [number, number][] = [[1, 2], [2, 4], [4, 6], [6, 8], [2, 10],
 const BONES_RIGHT: [number, number][] = [[1, 3], [3, 5], [5, 7], [7, 9], [3, 11], [11, 13], [13, 15], [15, 17]];
 const BONES_CENTER: [number, number][] = [[0, 1], [10, 11]];
 
-export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, framing }: Props) {
+export default function Skeleton3DViewer({
+  videoId, apiBase = "", analysis, framing, editing = false, onEditJoint, onSelectJoint, selectedJoint = null,
+  boneLengths, lockBones = false,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [frames, setFrames] = useState<Frame3D[]>([]);
   const [fps, setFps] = useState(30);
@@ -36,6 +58,10 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, fram
   const [pitch, setPitch] = useState(0.15);
   const [zoom, setZoom] = useState(1);
   const drag = useRef<{ x: number; y: number } | null>(null);
+  // Joint being dragged in edit mode: where the pointer and the joint started.
+  const jointDrag = useRef<{ joint: number; x: number; y: number; start: [number, number, number] } | null>(null);
+  // Screen projection of the last drawn frame, for picking and dragging joints.
+  const view = useRef<{ S: number; cyaw: number; syaw: number; cp: number; sp: number; P: ({ sx: number; sy: number } | null)[] } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
@@ -133,6 +159,7 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, fram
       return { sx: W / 2 + xr * S, sy: H / 2 + yr2 * S, depth: zr2 };
     };
     const P = f.keypoints_3d.map(project);
+    view.current = { S, cyaw, syaw, cp, sp, P };
 
     // Floor grid, sized from the scene instead of fixed millimetres so it fills
     // the view at any capture scale. Lines fade out toward the edges.
@@ -201,10 +228,77 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, fram
       ctx.beginPath(); ctx.arc(p.sx, p.sy, 3.5, 0, Math.PI * 2);
       ctx.fillStyle = COL.joint; ctx.fill();
     });
-  }, [frames, idx, yaw, pitch, zoom, center, radius, floorY, COL, size]);
 
-  const onDown = (e: React.MouseEvent) => { drag.current = { x: e.clientX, y: e.clientY }; setDragging(true); };
+    // Corrected joints: solid ring = edited here, faint = eased toward a nearby edit, accent = unsaved.
+    Object.entries(f.edited ?? {}).forEach(([j, kind]) => {
+      const p = P[Number(j)];
+      if (!p) return;
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, 7, 0, Math.PI * 2);
+      ctx.lineWidth = kind === "blend" ? 1 : 2;
+      ctx.globalAlpha = kind === "blend" ? 0.45 : 1;
+      ctx.strokeStyle = kind === "pending" ? COL.left : COL.joint;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
+    if (editing && selectedJoint != null && P[selectedJoint]) {
+      const p = P[selectedJoint]!;
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, 10, 0, Math.PI * 2);
+      ctx.lineWidth = 2; ctx.strokeStyle = COL.left; ctx.setLineDash([3, 3]); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }, [frames, idx, yaw, pitch, zoom, center, radius, floorY, COL, size, editing, selectedJoint]);
+
+  /** Joint under a pointer position (canvas pixels), or null. */
+  const pick = (x: number, y: number): number | null => {
+    const P = view.current?.P ?? [];
+    let best: number | null = null;
+    let bestD = HIT_PX;
+    P.forEach((p, j) => {
+      if (!p) return;
+      const d = Math.hypot(p.sx - x, p.sy - y);
+      if (d < bestD) { best = j; bestD = d; }
+    });
+    return best;
+  };
+
+  /** A drag on screen (px) as a 3D offset parallel to the screen: the inverse of the view rotation. */
+  const screenToWorld = (dx: number, dy: number): [number, number, number] => {
+    const v = view.current!;
+    const xr = dx / v.S, yr2 = dy / v.S, zr2 = 0;
+    const y = yr2 * v.cp + zr2 * v.sp;
+    const zr = -yr2 * v.sp + zr2 * v.cp;
+    return [xr * v.cyaw - zr * v.syaw, y, xr * v.syaw + zr * v.cyaw];
+  };
+
+  const onDown = (e: React.MouseEvent) => {
+    if (editing) {
+      const box = canvasRef.current!.getBoundingClientRect();
+      const j = pick(e.clientX - box.left, e.clientY - box.top);
+      const p = j != null ? frames[idx]?.keypoints_3d?.[j] : null;
+      onSelectJoint?.(idx, j);
+      if (j != null && p) {
+        jointDrag.current = { joint: j, x: e.clientX, y: e.clientY, start: [p[0], p[1], p[2]] };
+        setDragging(true);
+        return;
+      }
+    }
+    drag.current = { x: e.clientX, y: e.clientY }; setDragging(true);
+  };
   const onMove = (e: React.MouseEvent) => {
+    const jd = jointDrag.current;
+    if (jd && view.current) {
+      const d = screenToWorld(e.clientX - jd.x, e.clientY - jd.y);
+      let next: [number, number, number] = [jd.start[0] + d[0], jd.start[1] + d[1], jd.start[2] + d[2]];
+      const parent = PARENT[jd.joint];
+      const pp = parent != null ? frames[idx]?.keypoints_3d?.[parent] : null;
+      const L = parent != null ? boneLengths?.[`${parent}-${jd.joint}`] : undefined;
+      if (lockBones && pp && L) {                       // slide on a sphere around the parent joint
+        const v = [next[0] - pp[0], next[1] - pp[1], next[2] - pp[2]];
+        const n = Math.hypot(v[0], v[1], v[2]) || 1;
+        next = [pp[0] + (v[0] * L) / n, pp[1] + (v[1] * L) / n, pp[2] + (v[2] * L) / n];
+      }
+      onEditJoint?.(idx, jd.joint, next);
+      return;
+    }
     const start = drag.current;
     if (!start) return;
     const dx = e.clientX - start.x;
@@ -213,7 +307,18 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, fram
     setYaw((y) => y + dx * 0.01);
     setPitch((p) => Math.max(-1.4, Math.min(1.4, p + dy * 0.01)));
   };
-  const onUp = () => { drag.current = null; setDragging(false); };
+  const onUp = () => { drag.current = null; jointDrag.current = null; setDragging(false); };
+
+  // Lengths of the bones at the selected joint, against this person's usual length.
+  const boneReadout = useMemo(() => {
+    if (!editing || selectedJoint == null) return [];
+    const kp = frames[idx]?.keypoints_3d;
+    return LIMB_BONES.filter(([a, b]) => a === selectedJoint || b === selectedJoint).map(([a, b, name]) => {
+      const pa = kp?.[a], pb = kp?.[b];
+      const now = pa && pb ? Math.hypot(pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]) : null;
+      return { name: name.replace(/^(left|right)_/, "").replace("_", " "), now, usual: boneLengths?.[`${a}-${b}`] ?? null };
+    });
+  }, [editing, selectedJoint, frames, idx, boneLengths]);
   // Wheel = zoom. A native, non-passive listener: React's onWheel is passive, so it can't stop the page
   // from scrolling at the same time. Only while the pointer is over the view; the page scrolls elsewhere.
   useEffect(() => {
@@ -246,13 +351,31 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, fram
         <span>FR {idx}</span>
       </div>
 
+      {editing && (
+        <div className="absolute top-4 left-4 max-w-[60%] px-3 py-2 bg-background/90 backdrop-blur-sm border border-border rounded-lg text-xs shadow-sm">
+          {selectedJoint == null ? (
+            <span className="text-text-muted">Click a joint to select it</span>
+          ) : (
+            <>
+              <p className="font-medium text-text">{JOINT_NAMES[selectedJoint]}</p>
+              {boneReadout.map((b) => (
+                <p key={b.name} className="text-text-muted tabular-nums">
+                  {b.name} {b.now != null ? `${(b.now / 10).toFixed(1)} cm` : "-"}
+                  {b.usual != null && <> (usual {(b.usual / 10).toFixed(1)})</>}
+                </p>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
       <div className="absolute bottom-4 left-0 right-0 flex justify-center pointer-events-none">
         <div className="flex items-center gap-4 text-[10px] text-text-muted bg-background/90 backdrop-blur-sm px-4 py-2 rounded-full border border-border shadow-sm pointer-events-auto">
-            <span>Drag to rotate • Scroll to zoom</span>
+            <span>{editing ? "Drag a joint to move it • ←/→ change frame • Drag empty space to rotate" : "Drag to rotate • Scroll to zoom"}</span>
             <div className="w-[1px] h-3 bg-border"></div>
             <button onClick={() => { setYaw(0.5); setPitch(0.15); setZoom(1); }} className="text-primary hover:brightness-110 font-semibold transition-all">Reset</button>
         </div>
       </div>
     </div>
   );
-}
+}

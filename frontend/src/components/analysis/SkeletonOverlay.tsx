@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 
 /** One frame's 2D keypoints: [x, y, confidence] per joint, x / y from 0 to 1 (or null when missing). */
 export type Keypoints2D = (number[] | null)[] | null;
@@ -11,6 +11,13 @@ interface SkeletonOverlayProps {
     sureConf: number;
     /** Steady the sure / unsure state over a few frames (processed view); raw shows each frame as detected. */
     stabilize: boolean;
+    /** Per frame, joints corrected by hand: joint -> "edit" | "blend" | "pending" (drawn as rings). */
+    marks?: (Record<string, string> | undefined)[];
+    /** Edit mode: joints can be dragged (hidden ones are drawn faintly so they can be placed too). */
+    editable?: boolean;
+    selectedJoint?: number | null;
+    /** A joint grabbed ('start'), moved ('move', [x, y] from 0 to 1) or let go ('end') at `frame`. */
+    onDragJoint?: (phase: 'start' | 'move' | 'end', frame: number, joint: number, uv: [number, number]) => void;
 }
 
 // Same skeleton and drawing rules as the overlay videos (backend/pose_estimator.py).
@@ -22,6 +29,9 @@ const LINE = '#00ff00';
 const POINT = '#ff0000';
 const UNSURE = '#ffd700';
 const NONE = 0;
+// Unsaved edits: the app's accent colour, like the 3D view.
+const PENDING = getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim() || '#ff5a36';
+const HIT_PX = 14;
 const UNSURE_LEVEL = 1;
 const SURE_LEVEL = 2;
 
@@ -48,8 +58,14 @@ const displayLevels = (frames: Keypoints2D[], minConf: number, sureConf: number,
     });
 };
 
-const SkeletonOverlay = ({ videoRef, frames, fps, minConf, sureConf, stabilize }: SkeletonOverlayProps) => {
+type Geometry = { idx: number; ox: number; oy: number; w: number; h: number };
+
+const SkeletonOverlay = ({ videoRef, frames, fps, minConf, sureConf, stabilize, marks, editable, selectedJoint, onDragJoint }: SkeletonOverlayProps) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const geo = useRef<Geometry | null>(null);            // where the last drawn frame sits on the canvas
+    const drag = useRef<{ frame: number; joint: number; x: number; y: number; moved: boolean } | null>(null);
+    const onDragRef = useRef(onDragJoint);
+    useEffect(() => { onDragRef.current = onDragJoint; }, [onDragJoint]);
     const levels = useMemo(() => displayLevels(frames, minConf, sureConf, stabilize), [frames, minConf, sureConf, stabilize]);
 
     useEffect(() => {
@@ -74,7 +90,7 @@ const SkeletonOverlay = ({ videoRef, frames, fps, minConf, sureConf, stabilize }
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, box.width, box.height);
             const kp = frames[idx];
-            if (!kp || !video.videoWidth) return;
+            if (!kp || !video.videoWidth) { geo.current = null; return; }
 
             // The picture inside the element (object-contain leaves bars on two sides).
             const scale = Math.min(box.width / video.videoWidth, box.height / video.videoHeight);
@@ -82,6 +98,7 @@ const SkeletonOverlay = ({ videoRef, frames, fps, minConf, sureConf, stabilize }
             const h = video.videoHeight * scale;
             const ox = (box.width - w) / 2;
             const oy = (box.height - h) / 2;
+            geo.current = { idx, ox, oy, w, h };
             const px = (j: number): [number, number] => [ox + kp[j]![0] * w, oy + kp[j]![1] * h];
             const s = Math.max(0.6, scale);              // keep the videos' line widths at their size
             const lv = levels[idx];
@@ -97,6 +114,13 @@ const SkeletonOverlay = ({ videoRef, frames, fps, minConf, sureConf, stabilize }
                 ctx.stroke();
             }
             kp.forEach((p, j) => {
+                if (p && !lv[j] && editable) {               // hidden joint: faint, so it can still be dragged into place
+                    ctx.beginPath();
+                    ctx.arc(...px(j), 3 * s, 0, Math.PI * 2);
+                    ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+                    ctx.lineWidth = 1 * s;
+                    ctx.stroke();
+                }
                 if (!p || !lv[j]) return;
                 ctx.beginPath();
                 ctx.arc(...px(j), 4 * s, 0, Math.PI * 2);
@@ -109,6 +133,26 @@ const SkeletonOverlay = ({ videoRef, frames, fps, minConf, sureConf, stabilize }
                     ctx.stroke();
                 }
             });
+            // Hand-corrected joints: white ring = edited, faint = eased toward an edit, orange = unsaved.
+            Object.entries(marks?.[idx] ?? {}).forEach(([j, kind]) => {
+                if (!kp[Number(j)]) return;
+                ctx.beginPath();
+                ctx.arc(...px(Number(j)), 8 * s, 0, Math.PI * 2);
+                ctx.strokeStyle = kind === 'pending' ? PENDING : '#ffffff';
+                ctx.globalAlpha = kind === 'blend' ? 0.45 : 1;
+                ctx.lineWidth = (kind === 'blend' ? 1 : 2) * s;
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            });
+            if (editable && selectedJoint != null && kp[selectedJoint]) {
+                ctx.beginPath();
+                ctx.setLineDash([3 * s, 3 * s]);
+                ctx.arc(...px(selectedJoint), 11 * s, 0, Math.PI * 2);
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1.5 * s;
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
         };
 
         // Follow the frame actually on screen (requestVideoFrameCallback), else poll every animation frame.
@@ -145,9 +189,56 @@ const SkeletonOverlay = ({ videoRef, frames, fps, minConf, sureConf, stabilize }
             video.removeEventListener('seeked', redraw);
             video.removeEventListener('loadeddata', redraw);
         };
-    }, [videoRef, frames, fps, levels]);
+    }, [videoRef, frames, fps, levels, marks, editable, selectedJoint]);
 
-    return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />;
+    // Edit mode: grab the nearest joint of the frame on screen and drag it.
+    const at = (e: ReactPointerEvent): { x: number; y: number; uv: [number, number] } | null => {
+        const g = geo.current;
+        const box = canvasRef.current?.getBoundingClientRect();
+        if (!g || !box) return null;
+        const x = e.clientX - box.left, y = e.clientY - box.top;
+        const clamp = (v: number) => Math.min(1, Math.max(0, v));
+        return { x, y, uv: [clamp((x - g.ox) / g.w), clamp((y - g.oy) / g.h)] };
+    };
+    const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+        const g = geo.current, p = at(e);
+        const kp = g ? frames[g.idx] : null;
+        if (!g || !p || !kp) return;
+        let best = -1, bestD = HIT_PX;
+        kp.forEach((q, j) => {
+            if (!q) return;
+            const d = Math.hypot(g.ox + q[0] * g.w - p.x, g.oy + q[1] * g.h - p.y);
+            if (d < bestD) { bestD = d; best = j; }
+        });
+        if (best < 0) return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = { frame: g.idx, joint: best, x: p.x, y: p.y, moved: false };
+        onDragRef.current?.('start', g.idx, best, [kp[best]![0], kp[best]![1]]);
+    };
+    const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+        const d = drag.current, p = at(e);
+        if (!d || !p) return;
+        if (!d.moved && Math.hypot(p.x - d.x, p.y - d.y) < 3) return;   // a click selects without moving it
+        d.moved = true;
+        onDragRef.current?.('move', d.frame, d.joint, p.uv);
+    };
+    const onPointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+        const d = drag.current, p = at(e);
+        drag.current = null;
+        if (d && p && d.moved) onDragRef.current?.('end', d.frame, d.joint, p.uv);
+    };
+
+    return (
+        <canvas
+            ref={canvasRef}
+            className={`absolute inset-0 w-full h-full ${editable ? 'cursor-crosshair touch-none' : 'pointer-events-none'}`}
+            onPointerDown={editable ? onPointerDown : undefined}
+            onPointerMove={editable ? onPointerMove : undefined}
+            onPointerUp={editable ? onPointerUp : undefined}
+            onPointerCancel={editable ? onPointerUp : undefined}
+        />
+    );
 };
 
 export default SkeletonOverlay;
