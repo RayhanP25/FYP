@@ -4,6 +4,7 @@ from minio_client import minio_client
 from routes.users import get_current_user
 from pose_estimator import process_video_with_overlays
 from bson import ObjectId
+import calibration_store
 import os
 import tempfile
 import uuid
@@ -58,13 +59,20 @@ async def process_video(
     is_stereo = (video_doc.get("layout") == "side_by_side"
                  or video_doc.get("source") == "stereo_camera")
     temp_output_right_path = None
+    # The calibration the recording was filmed with (falls back to the active one, calibration.npz).
+    calib_path, calib_is_temp, calib_doc = CALIB_PATH, False, None
+    if is_stereo:
+        try:
+            calib_path, calib_is_temp, calib_doc = calibration_store.file_for(video_doc.get("calibration_id"))
+        except Exception as ex:
+            print(f"calibration library unavailable, using calibration.npz: {ex!r}")
     try:
         temp_output_path = tempfile.mktemp(suffix="_processed.mp4")
-        if is_stereo and os.path.exists(CALIB_PATH):
+        if is_stereo and os.path.exists(calib_path):
             from stereo_process import process_stereo_video
             temp_output_right_path = tempfile.mktemp(suffix="_processed_right.mp4")
             result = process_stereo_video(temp_input_path, temp_output_path,
-                                          calib_path=CALIB_PATH,
+                                          calib_path=calib_path,
                                           output_path_right=temp_output_right_path)
         else:
             # If it's stereo but calibration is missing, fall back to 2D so it
@@ -80,6 +88,9 @@ async def process_video(
         if temp_output_right_path and os.path.exists(temp_output_right_path):
             os.unlink(temp_output_right_path)
         raise HTTPException(status_code=500, detail=f"Pose estimation failed: {str(e)}")
+    finally:
+        if calib_is_temp and os.path.exists(calib_path):
+            os.unlink(calib_path)
 
     # 5. Delete input temp file
     os.unlink(temp_input_path)
@@ -137,6 +148,15 @@ async def process_video(
         "result": result,
         "created_at": datetime.now()
     }
+    if is_stereo and "frames_3d" in result:
+        if calib_doc is None:
+            try:
+                calib_doc = calibration_store.active()
+            except Exception:
+                calib_doc = None
+        if calib_doc:
+            analysis_doc["calibration_id"] = str(calib_doc["_id"])
+            analysis_doc["calibration_setup"] = calib_doc.get("setup")
     existing_analysis = analysis_collection.find_one({"video_id": video_id})
     if existing_analysis:
         analysis_collection.update_one({"_id": existing_analysis["_id"]}, {"$set": analysis_doc})

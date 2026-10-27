@@ -132,7 +132,7 @@ def capture_still(grab):
 
 
 class Coverage:
-    GRID = 4
+    GRID = 8      # boxes per side of each view in the preview; a box turns green once the board has covered it
 
     def __init__(self):
         self.cells = [np.zeros((self.GRID, self.GRID), bool), np.zeros((self.GRID, self.GRID), bool)]
@@ -148,11 +148,15 @@ class Coverage:
         return width, abs(np.log(left / right)), abs(np.log(top / bot))
 
     def add(self, cL, cR, sizeL, sizeR):
+        centres = np.stack(np.meshgrid(np.arange(self.GRID) + 0.5, np.arange(self.GRID) + 0.5), -1).reshape(-1, 2)
         for k, (c, s) in enumerate(((cL, sizeL), (cR, sizeR))):
-            xy = c.reshape(-1, 2)
-            gx = np.clip((xy[:, 0] / s[0] * self.GRID).astype(int), 0, self.GRID - 1)
-            gy = np.clip((xy[:, 1] / s[1] * self.GRID).astype(int), 0, self.GRID - 1)
-            self.cells[k][gy, gx] = True
+            xy = c.reshape(-1, 2) / np.asarray(s, float) * self.GRID          # in box units
+            g = np.clip(xy.astype(int), 0, self.GRID - 1)
+            self.cells[k][g[:, 1], g[:, 0]] = True                               # boxes with a corner in them
+            # ...and every box whose centre the board covers, so small boxes between corners count too
+            hull = cv2.convexHull(xy.astype(np.float32))
+            inside = np.array([cv2.pointPolygonTest(hull, (float(x), float(y)), False) >= 0 for x, y in centres])
+            self.cells[k] |= inside.reshape(self.GRID, self.GRID)
         w, th, tv = self.shape_stats(cL, sizeL)
         self.pairs.append(dict(width=w, tiltH=th, tiltV=tv))
 

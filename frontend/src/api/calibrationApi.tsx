@@ -13,6 +13,7 @@ export interface CalibrationSessionInfo {
     checks: CalibrationCheck[];
     saved: number;
     camera_size: [number, number];
+    setup: string | null;
 }
 
 export interface CalibrationResult {
@@ -22,8 +23,32 @@ export interface CalibrationResult {
     pairs: number;
     camera_size: [number, number];
     floor_set: boolean;
+    baseline_mm: number;
+    calibrated_at: string | null;
     report: string[];
     floor_report: string[];
+    id: string | null;
+    setup: string | null;
+}
+
+export interface CalibrationEntry {
+    id: string;
+    setup: string;
+    active: boolean;
+    created_at: string;
+    created_by: string | null;
+    calibrated_at: string | null;
+    session: string | null;
+    rms: number | null;
+    baseline_mm: number;
+    camera_size: [number, number];
+    pairs: number | null;
+    floor_set: boolean;
+}
+
+export interface CalibrationLibrary {
+    entries: CalibrationEntry[];
+    setups: string[];
 }
 
 export interface CalibrationStatus {
@@ -52,8 +77,8 @@ export const getCalibrationStatus = async (): Promise<CalibrationStatus> => {
     return response.data;
 };
 
-export const startCalibrationSession = async (): Promise<void> => {
-    await api.post('/api/calibration/session/start', {}, { timeout: 60000 });
+export const startCalibrationSession = async (setup: string): Promise<void> => {
+    await api.post('/api/calibration/session/start', { setup }, { timeout: 60000 });
 };
 
 export const endCalibrationSession = async (): Promise<void> => {
@@ -76,4 +101,23 @@ export const runCalibration = async (): Promise<void> => {
 
 export const runFloorLevel = async (): Promise<void> => {
     await api.post('/api/calibration/floor');
+};
+
+export const getCalibrationLibrary = async (): Promise<CalibrationLibrary> => {
+    const response = await api.get('/api/calibration/library');
+    return response.data;
+};
+
+export const activateCalibration = async (id: string): Promise<CalibrationEntry> => {
+    const response = await api.post(`/api/calibration/library/${id}/activate`);
+    return response.data;
+};
+
+export const renameCalibration = async (id: string, setup: string): Promise<CalibrationEntry> => {
+    const response = await api.patch(`/api/calibration/library/${id}`, { setup });
+    return response.data;
+};
+
+export const deleteCalibration = async (id: string): Promise<void> => {
+    await api.delete(`/api/calibration/library/${id}`);
 };

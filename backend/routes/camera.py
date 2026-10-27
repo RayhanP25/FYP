@@ -27,6 +27,7 @@ import cv2
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+import calibration_store
 import video_io
 from database import client, database_name
 from minio_client import minio_client
@@ -394,6 +395,12 @@ def stop_recording(current_user: dict = Depends(get_current_user)):
         "real_fps": real_fps,          # new images per second actually captured
         "dropped_frames": recorder.dropped,  # camera frames skipped because saving fell behind
     }
+    try:                                   # which calibration this was filmed with (see calibration_store.py)
+        cal = calibration_store.active()
+        if cal:
+            doc["calibration_id"], doc["calibration_setup"] = str(cal["_id"]), cal.get("setup")
+    except Exception as ex:                # never lose a recording over this
+        print(f"calibration library unavailable: {ex!r}")
     result = client[database_name]["videos"].insert_one(doc)
     return {"status": "saved", "video_id": str(result.inserted_id),
             "object_name": object_name, "frames": frames,
