@@ -201,9 +201,29 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
                     f["angles"] = calculate_frame_angles(f["keypoints"])
         t_bones_done = time.perf_counter()
 
-        # 7. Overlay videos (now showing the filled-in joints too).
-        _render_overlay(lp, framesL, output_path, fps=rawL["fps"], stabilize_confidence=True)
-        _render_overlay(rp, framesR, roTmp, fps=rawR["fps"], stabilize_confidence=True)
+        # 7. Overlay videos (now showing the filled-in joints too), both at once: OpenCV drawing
+        #    releases the GIL and each video is decoded / encoded by its own ffmpeg process.
+        import threading
+        errors = []
+
+        def draw(src, frames_v, dst, fps_v):
+            try:
+                _render_overlay(src, frames_v, dst, fps=fps_v, stabilize_confidence=True)
+            except Exception as e:
+                errors.append(e)
+        threads = [threading.Thread(target=draw, args=(lp, framesL, output_path, rawL["fps"])),
+                   threading.Thread(target=draw, args=(rp, framesR, roTmp, rawR["fps"]))]
+        if os.environ.get("POSE_PARALLEL_OVERLAY", "0") == "1":
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+        else:                                   # one at a time (default)
+            for th in threads:
+                th.start()
+                th.join()
+        if errors:
+            raise errors[0]
         t_overlay_done = time.perf_counter()
 
         frames_3d = []

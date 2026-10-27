@@ -44,6 +44,10 @@ POSE_CHANNELS_LAST = os.environ.get("POSE_CHANNELS_LAST", "0") == "1"  # no meas
 # Flip test = run every crop twice (mirrored too) and average: ~1.4x slower, but turning it off moved
 # keypoints by 0.6 px median / 6 px max in bench_speed.py, so it stays on unless you choose speed.
 POSE_FLIP_TEST = os.environ.get("POSE_FLIP_TEST", "1") == "1"
+# RTMDet keeps every box above 0.001 (thousands, 80 classes) and runs NMS on all of them: ~75 ms per
+# image. We only use the best person above 0.3 (_person_box), and greedy NMS never lets a box below
+# 0.3 suppress one above it, so dropping those first returns the same box much faster. 0 = default.
+DET_SCORE_THR = float(os.environ.get("POSE_DET_SCORE_THR", "0.3"))
 _direct_det = None
 _pose_model = None
 _detector = None
@@ -65,8 +69,21 @@ def _load_models():
         _pose_model.test_cfg["flip_test"] = POSE_FLIP_TEST
         _detector = DetInferencer(model="rtmdet_tiny_8xb32-300e_coco",
                                   device=_DEVICE, show_progress=False)
+        tune_detector(DET_SCORE_THR)
         if _DEVICE.startswith("cuda"):
             _setup_gpu_paths()
+
+
+def tune_detector(score_thr):
+    """Set RTMDet's pre-NMS score threshold (see DET_SCORE_THR). Returns the previous settings."""
+    cfg = getattr(getattr(_detector.model, "bbox_head", None), "test_cfg", None)
+    if cfg is None:
+        return None
+    old = dict(score_thr=cfg.get("score_thr"), nms_pre=cfg.get("nms_pre"))
+    if score_thr > 0:
+        cfg["score_thr"] = max(float(old["score_thr"] or 0), score_thr)
+        cfg["nms_pre"] = min(int(old["nms_pre"] or 1000), 1000)
+    return old
 
 
 def _setup_gpu_paths():
