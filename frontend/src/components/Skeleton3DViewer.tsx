@@ -1,10 +1,27 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 
 type Pt = [number, number, number] | null;
 interface Frame3D { frame_index: number; keypoints_3d: Pt[]; angles_3d: Record<string, number>; }
 // framing: frames to centre and zoom the view on (default: the ones shown). Lets raw and processed data
 // share one framing, so switching between them doesn't move the camera.
 interface Props { videoId?: string; apiBase?: string; analysis?: { fps?: number; frames_3d?: Frame3D[] }; framing?: Frame3D[]; }
+
+/** Floor height: where the body's lowest point is most often (a 30 mm histogram's busiest bin, refined by
+ *  the median of the frames near it). The single lowest point would let one wrong joint - a hidden foot
+ *  triangulated half a metre too low - drop the floor away from the body. Jumps don't move it: the feet
+ *  are on the ground in most frames. */
+const floorLevel = (lows: number[], bin = 30): number => {
+  if (!lows.length) return 1;
+  const lo = Math.min(...lows);
+  const counts = new Map<number, number>();
+  lows.forEach((y) => { const k = Math.floor((y - lo) / bin); counts.set(k, (counts.get(k) ?? 0) + 1); });
+  let best = 0;
+  let bestCount = -1;
+  counts.forEach((n, k) => { if (n > bestCount) { best = k; bestCount = n; } });
+  const mid = lo + (best + 0.5) * bin;
+  const near = lows.filter((y) => Math.abs(y - mid) <= bin).sort((a, b) => a - b);
+  return near.length ? near[Math.floor(near.length / 2)] : mid;
+};
 
 const BONES_LEFT: [number, number][] = [[1, 2], [2, 4], [4, 6], [6, 8], [2, 10], [10, 12], [12, 14], [14, 16]];
 const BONES_RIGHT: [number, number][] = [[1, 3], [3, 5], [5, 7], [7, 9], [3, 11], [11, 13], [13, 15], [15, 17]];
@@ -57,19 +74,22 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, fram
   }, []);
 
   const { center, radius, floorY } = useMemo(() => {
+    const source = framing?.length ? framing : frames;
     const pts: number[][] = [];
-    (framing?.length ? framing : frames).forEach((f) => f.keypoints_3d?.forEach((p) => { if (p) pts.push(p); }));
+    const lows: number[] = [];               // each frame's lowest point ("up" is -Y, so its largest Y)
+    source.forEach((f) => {
+      let low = -Infinity;
+      f.keypoints_3d?.forEach((p) => { if (p) { pts.push(p); if (p[1] > low) low = p[1]; } });
+      if (low > -Infinity) lows.push(low);
+    });
     if (!pts.length) return { center: [0, 0, 0], radius: 1, floorY: 1 };
     const c = [0, 1, 2].map((i) => pts.reduce((s, p) => s + p[i], 0) / pts.length);
     let r = 1;
-    let maxY = -Infinity;
     pts.forEach((p) => {
       const d = Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]);
       if (d > r) r = d;
-      if (p[1] > maxY) maxY = p[1];
     });
-    // "Up" is -Y in this projection, so the largest Y is ground level (the feet)
-    return { center: c, radius: r, floorY: maxY };
+    return { center: c, radius: r, floorY: floorLevel(lows) };
   }, [frames, framing]);
 
   useEffect(() => {
@@ -194,14 +214,25 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, fram
     setPitch((p) => Math.max(-1.4, Math.min(1.4, p + dy * 0.01)));
   };
   const onUp = () => { drag.current = null; setDragging(false); };
-  const onWheel = useCallback((e: React.WheelEvent) => setZoom((z) => Math.max(0.3, Math.min(4, z - e.deltaY * 0.001))), []);
+  // Wheel = zoom. A native, non-passive listener: React's onWheel is passive, so it can't stop the page
+  // from scrolling at the same time. Only while the pointer is over the view; the page scrolls elsewhere.
+  useEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoom((z) => Math.max(0.3, Math.min(4, z - e.deltaY * 0.001)));
+    };
+    cv.addEventListener("wheel", onWheel, { passive: false });
+    return () => cv.removeEventListener("wheel", onWheel);
+  }, []);
 
   return (
     <div className="w-full h-full relative bg-background-main font-sans overflow-hidden">
       <canvas
         ref={canvasRef}
-        style={{ display: "block", width: "100%", height: "100%", cursor: dragging ? "grabbing" : "grab", touchAction: "none" }}
-        onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onWheel={onWheel}
+        style={{ display: "block", width: "100%", height: "100%", cursor: dragging ? "grabbing" : "grab", touchAction: "none", overscrollBehavior: "contain" }}
+        onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
       />
       
       <div className="absolute top-4 right-4 flex items-center gap-3 px-3 py-1.5 bg-background/90 backdrop-blur-sm border border-border rounded-full text-[10px] text-text-muted shadow-sm">
