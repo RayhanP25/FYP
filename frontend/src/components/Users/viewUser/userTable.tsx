@@ -129,6 +129,7 @@ const UserTable = () => {
                             <th className="text-left py-3 px-4 font-medium text-text-secondary">Name</th>
                             <th className="text-left py-3 px-4 font-medium text-text-secondary">Email</th>
                             <th className="text-left py-3 px-4 font-medium text-text-secondary">Role</th>
+                            <th className="text-left py-3 px-4 font-medium text-text-secondary">Group</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -159,6 +160,9 @@ const UserTable = () => {
                                     <span className={`px-2 py-1 text-xs rounded-full ${getRoleStyles(user.role)}`}>
                                         {user.role}
                                     </span>
+                                </td>
+                                <td className="py-3 px-4 text-text-muted">
+                                    {user.role === 'athlete' ? (user.group_name ? `${user.group_name} (${user.coach_name ?? 'no coach'})` : 'Not in a group') : ''}
                                 </td>
                                 <td className="py-3 px-4">
                                     <button

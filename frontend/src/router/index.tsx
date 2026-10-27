@@ -13,6 +13,7 @@ import VideosPage from '../pages/VideosPage';
 import AnalysisLibraryPage from '../pages/AnalysisLibraryPage';
 import AnalysisStudioPage from '../pages/AnalysisStudioPage';
 import CalibrationPage from '../pages/CalibrationPage';
+import GroupsPage from '../pages/GroupsPage';
 
 const AuthLoading = () => (
   <div className="flex h-screen items-center justify-center bg-background text-text-secondary">
@@ -79,6 +80,10 @@ const AppRoutes = () => {
     {
       path: '/calibration',
       element: <AdminRoute element={<CalibrationPage />} />,
+    },
+    {
+      path: '/groups',
+      element: <PrivateRoute element={<GroupsPage />} />,
     },
     // {
     //   path: '/video-test',

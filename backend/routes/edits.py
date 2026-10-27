@@ -6,8 +6,8 @@ edits.py -- manual keypoint corrections for an analysis (see keypoint_edits.py f
     PUT    /api/analysis/{video_id}/edits      save edits: {"edits": [{frame, joint, target, value}, ...]}
     DELETE /api/analysis/{video_id}/edits      revert: ?frame=&joint= for one, nothing for all
 
-Admins and coaches can edit; everyone who can open the analysis sees the edits (applied by
-GET /api/get-analysis). Stored in "keypoint_edits", one per video, frame and joint (the newest wins).
+Admins, coaches and athletes can edit the analyses they can open. Stored in "keypoint_edits",
+one per video, frame and joint (the newest wins).
 """
 from datetime import datetime
 from typing import List, Optional
@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 import calibration_store
 import keypoint_edits
+from access import can_access_analysis
 from database import client, database_name
 from routes.users import get_current_user
 from triangulate import load_calibration
@@ -24,7 +25,7 @@ from triangulate import load_calibration
 router = APIRouter(prefix="/analysis", tags=["edits"])
 db = client[database_name]
 edits_col = db["keypoint_edits"]
-EDITOR_ROLES = ("admin", "coach")
+EDITOR_ROLES = ("admin", "coach", "athlete")
 CALIB_KEYS = ("K1", "D1", "K2", "D2", "R", "T", "R_level", "size1", "size2")
 
 try:
@@ -46,19 +47,16 @@ class EditBatch(BaseModel):
 
 def _analysis(video_id, user):
     """The analysis if this user can open it (as GET /api/get-analysis: their own; admins any)."""
-    q = {"video_id": video_id}
-    if user.get("role") != "admin":
-        q["user_id"] = str(user["_id"])
-    doc = db["pose_analysis"].find_one(q, {"result.mode": 1, "result.total_frames": 1, "calibration_id": 1,
-                                           "user_id": 1})
-    if not doc:
+    doc = db["pose_analysis"].find_one({"video_id": video_id}, {"result.mode": 1, "result.total_frames": 1,
+                                                                "calibration_id": 1, "user_id": 1})
+    if not doc or not can_access_analysis(user, doc):
         raise HTTPException(status_code=404, detail="No analysis found for this video")
     return doc
 
 
 def _require_editor(user):
     if user.get("role") not in EDITOR_ROLES:
-        raise HTTPException(status_code=403, detail="Only admins and coaches can edit keypoints.")
+        raise HTTPException(status_code=403, detail="Only admins, coaches and athletes can edit keypoints.")
 
 
 def calibration_for(analysis_doc):

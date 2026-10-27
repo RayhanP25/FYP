@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from database import client, database_name
 from minio_client import minio_client
+from access import can_access_analysis, can_access_video
 from routes.users import get_current_user
 from routes.edits import apply_to as apply_keypoint_edits
 from pose_estimator import process_video_with_overlays, POSE_MIN_CONF, POSE_SURE_CONF
@@ -35,11 +36,11 @@ async def process_video(
     # 1. Verify video exists and belongs to user
     videos_collection = client[database_name]["videos"]
     try:
-        video_doc = videos_collection.find_one({"_id": ObjectId(video_id), "user_id": str(current_user["_id"])})
+        video_doc = videos_collection.find_one({"_id": ObjectId(video_id)})
     except:
         raise HTTPException(status_code=400, detail="Invalid video ID")
 
-    if not video_doc:
+    if not video_doc or not can_access_video(current_user, video_doc):
         raise HTTPException(status_code=404, detail="Video not found or access denied")
 
     # 2. Skip only if already processed AND not forcing a re-run
@@ -170,7 +171,7 @@ async def process_video(
     analysis_collection = client[database_name]["pose_analysis"]
     analysis_doc = {
         "video_id": video_id,
-        "user_id": str(current_user["_id"]),
+        "user_id": video_doc["user_id"],
         "status": "completed",
         "result": result,
         "created_at": datetime.now()
@@ -207,8 +208,8 @@ async def process_video(
 async def get_analysis(video_id: str, current_user: dict = Depends(get_current_user)):
     """Retrieve pose analysis results for a video."""
     analysis_collection = client[database_name]["pose_analysis"]
-    analysis = analysis_collection.find_one({"video_id": video_id, "user_id": str(current_user["_id"])})
-    if not analysis:
+    analysis = analysis_collection.find_one({"video_id": video_id})
+    if not analysis or not can_access_analysis(current_user, analysis):
         raise HTTPException(status_code=404, detail="No analysis found for this video")
     analysis["_id"] = str(analysis["_id"])
     try:                                        # manual keypoint corrections (routes/edits.py)

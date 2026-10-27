@@ -8,6 +8,9 @@ export interface User {
     createdAt?: string;
     updatedAt?: string;
     profile_picture?: string;
+    group_id?: string | null;
+    group_name?: string | null;
+    coach_name?: string | null;
 }
 
 export const fetchUsers = async (): Promise<User[]> => {

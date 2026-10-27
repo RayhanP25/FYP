@@ -9,6 +9,8 @@ export interface Video {
     has_analysis?: boolean;
     is_stereo?: boolean;
     has_right_view?: boolean;
+    owner_id?: string;
+    owner_name?: string | null;
 }
 
 export interface VideoUploadResponse {
@@ -22,6 +24,8 @@ export interface VideoUrlResponse {
     original_filename: string;
     content_type: string;
     uploaded_at: string;
+    owner_id?: string;
+    owner_name?: string | null;
     view?: 'left' | 'right';
     /** "plain": the camera view without a skeleton drawn; "overlay": with the skeleton drawn in. */
     variant?: 'plain' | 'overlay';
@@ -64,6 +68,14 @@ export const getMyVideos = async (): Promise<MyVideosResponse> => {
         return response.data;
     } catch (error) {
         throw new Error('Failed to fetch videos');
+    }
+};
+
+export const moveVideo = async (videoId: string, ownerId: string): Promise<void> => {
+    try {
+        await api.put(`/api/videos/${videoId}/owner`, { owner_id: ownerId });
+    } catch (error) {
+        throw new Error('Failed to move video');
     }
 };
 

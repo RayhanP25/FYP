@@ -103,6 +103,7 @@ function HomePage() {
                                 : 'This is your first login.'
                             : ' '}
                         {data?.scope === 'all' && <> · showing every user's videos</>}
+                        {data?.scope === 'group' && <> · showing your videos and your athletes'</>}
                     </p>
                 </div>
 
@@ -129,7 +130,7 @@ function HomePage() {
                             />
                         </div>
 
-                        <div className={`grid grid-cols-1 gap-6 items-start ${data.scope === 'all' ? '2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : ''}`}>
+                        <div className={`grid grid-cols-1 gap-6 items-start ${data.scope !== 'mine' ? '2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : ''}`}>
                             <div className="flex flex-col gap-6 min-w-0">
                                 <Panel
                                     title="New since your last login"
@@ -144,7 +145,7 @@ function HomePage() {
                                 </Panel>
                             </div>
 
-                            {data.scope === 'all' && (
+                            {data.scope !== 'mine' && (
                                 <Panel title="Videos per user">
                                     {data.per_user.length ? (
                                         <table className="w-full text-sm">

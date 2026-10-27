@@ -1,10 +1,12 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { Search, FileVideo, Trash2, AlertTriangle, X } from 'lucide-react';
-import { getMyVideos, getVideoUrl, deleteVideo } from '@/api/videoApi';
+import { getMyVideos, getVideoUrl, deleteVideo, type Video } from '@/api/videoApi';
+import { athletesInGroups, getGroups } from '@/api/groupApi';
 import { toast } from 'react-toastify';
 import * as Dialog from '@radix-ui/react-dialog';
 import Button from '@/components/ui/button';
+import { useAuth } from '../../hooks/useAuth';
 
 import VideoThumbnail from './videoThumbnail';
 
@@ -15,19 +17,24 @@ interface PastVideosProps {
 const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
+    const [ownerFilter, setOwnerFilter] = useState('all');
     const videosPerPage = 8;
     const queryClient = useQueryClient();
     const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
     const [videoToDelete, setVideoToDelete] = useState<string | null>(null);
+    const { user, isCoach } = useAuth();
+    const coach = isCoach();
 
     const { data: videosData, isLoading, error } = useQuery({
         queryKey: ['my-videos'],
-        queryFn: () => getMyVideos(),
+        queryFn: getMyVideos,
         staleTime: 5 * 60 * 1000,
         refetchOnWindowFocus: true,
         refetchOnReconnect: true,
         retry: 3
     });
+
+    const { data: groups } = useQuery({ queryKey: ['groups'], queryFn: getGroups, enabled: coach, staleTime: 5 * 60 * 1000 });
 
     const videos = videosData?.videos || [];
 
@@ -39,12 +46,17 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
             new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()
         );
 
+        if (ownerFilter === 'mine') result = result.filter(v => v.owner_id === user?._id);
+        else if (ownerFilter !== 'all') result = result.filter(v => v.owner_id === ownerFilter);
+
         if (searchTerm === '') return result;
 
         return result.filter(video =>
             video.original_filename.toLowerCase().includes(searchTerm.toLowerCase())
         );
-    }, [searchTerm, videos]);
+    }, [searchTerm, videos, ownerFilter, user?._id]);
+
+    const subtitle = (v: Video) => (v.owner_id !== user?._id ? v.owner_name : null);
 
     const totalPages = Math.ceil(filteredVideos.length / videosPerPage);
     const startIndex = (currentPage - 1) * videosPerPage;
@@ -84,6 +96,7 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
         if (!videoToDelete) return;
         deleteVideoMutation.mutate(videoToDelete);
     };
+
 
     if (isLoading) {
         return (
@@ -128,6 +141,23 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                     </div>
                 </div>
 
+                {coach && (
+                    <select
+                        value={ownerFilter}
+                        onChange={(e) => {
+                            setOwnerFilter(e.target.value);
+                            setCurrentPage(1);
+                        }}
+                        className="mb-4 px-3 py-2 border rounded-lg bg-background-main focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    >
+                        <option value="all">All videos</option>
+                        <option value="mine">My videos</option>
+                        {athletesInGroups(groups).map((a) => (
+                            <option key={a.id} value={a.id}>{a.full_name}</option>
+                        ))}
+                    </select>
+                )}
+
                 {videos.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12">
                         <FileVideo className="w-16 h-16 text-text-muted mb-4" />
@@ -162,6 +192,9 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                                                         <p className="font-medium truncate" title={video.original_filename}>
                                                             {video.original_filename}
                                                         </p>
+                                                        {subtitle(video) && (
+                                                            <p className="text-xs text-text-muted truncate">{subtitle(video)}</p>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </td>

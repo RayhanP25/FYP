@@ -6,16 +6,16 @@ GET /api/dashboard
     totals          videos (uploads + stereo recordings), stereo recordings, analysed
     last_login      the login before this one (sessions end after ACCESS_TOKEN_EXPIRE_MINUTES idle)
     new_since_login videos added after that login (newest first)
-    per_user        videos and recordings per user (admins only)
+    per_user        videos and recordings per user (admins: everyone; coaches: themselves and their athletes)
     recent          the latest videos
 
-Coaches / athletes: per_user lists each user with their role; grouping athletes under their coach
-can be added here once users carry that link.
+Coaches see their own and their athletes' videos. Athletes see their own.
 """
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
 
+from access import visible_owner_ids
 from database import client, database_name
 from routes.users import get_current_user
 
@@ -56,9 +56,10 @@ def _previous_login(user):
 
 @router.get("")
 def dashboard(current_user: dict = Depends(get_current_user)):
-    is_admin = current_user.get("role") == "admin"
+    role = current_user.get("role")
+    owners = visible_owner_ids(current_user)
     me = db["users"].find_one({"email": current_user["email"]}) or {}
-    scope = {} if is_admin else {"user_id": str(current_user["_id"])}
+    scope = {} if owners is None else {"user_id": {"$in": owners}}
 
     videos = list(db["videos"].find(scope, {"original_filename": 1, "filename": 1, "object_name": 1, "uploaded_at": 1,
                                             "created_at": 1, "user_id": 1, "source": 1, "layout": 1,
@@ -85,7 +86,7 @@ def dashboard(current_user: dict = Depends(get_current_user)):
     new = [v for v in newest_first if since and _when(v) and _when(v) > since]
 
     per_user = []
-    if is_admin:
+    if role in ("admin", "coach"):
         counts = {}
         for v in videos:
             c = counts.setdefault(v.get("user_id"), dict(videos=0, recordings=0, analysed=0, last=None))
@@ -102,7 +103,7 @@ def dashboard(current_user: dict = Depends(get_current_user)):
         per_user.sort(key=lambda r: (-r["videos"], r["name"]))
 
     return dict(
-        scope="all" if is_admin else "mine",
+        scope={"admin": "all", "coach": "group"}.get(role, "mine"),
         totals=dict(videos=len(videos), recordings=sum(map(_is_recording, videos)), analysed=len(analysed)),
         last_login=_iso(since),
         new_since_login=dict(count=len(new), videos=[row(v) for v in new[:LIST_LIMIT]]),

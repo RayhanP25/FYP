@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Dialog from '@radix-ui/react-dialog';
 import { toast } from 'react-toastify';
-import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, Pencil, RefreshCw, RotateCcw, Ruler, Undo2, Video, Wand2, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, Pencil, RefreshCw, RotateCcw, Ruler, Undo2, Users, Video, Wand2, type LucideIcon } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
-import { getVideoUrl } from '@/api/videoApi';
+import { getVideoUrl, moveVideo } from '@/api/videoApi';
+import { athletesInGroups, getGroups } from '@/api/groupApi';
+import { useAuth } from '@/hooks/useAuth';
 import { getEdits, revertEdits, saveEdits } from '@/api/editsApi';
 import { LIMB_BONES, pointFrom2D, projectToCamera } from '@/utils/skeleton';
 import Skeleton3DViewer from '@/components/Skeleton3DViewer';
@@ -61,7 +64,7 @@ const AnalysisStudioPage = () => {
     const rightRef = useRef<HTMLVideoElement>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [mode, setMode] = useState<KeypointMode>('processed');
-    // Keypoint editing (admins and coaches, stereo analyses): unsaved edits, undo history, selected joint.
+    // Keypoint editing (admins, coaches and athletes, stereo analyses): unsaved edits, undo history, selected joint.
     const [editing, setEditing] = useState(false);
     const [pending, setPending] = useState<Record<string, PendingEdit>>({});
     const [history, setHistory] = useState<Record<string, PendingEdit>[]>([]);
@@ -80,6 +83,26 @@ const AnalysisStudioPage = () => {
     const is3D = !!analysis?.frames_3d?.length;
     const { data: editInfo } = useQuery({ queryKey: ['edits', videoId], queryFn: () => getEdits(videoId), enabled: is3D, retry: false });
     const canEdit = is3D && !!editInfo?.can_edit;
+    const { user } = useAuth();
+    const canAssign = user?.role === 'admin' || user?.role === 'coach';
+    const [assignOpen, setAssignOpen] = useState(false);
+    const [assignSearch, setAssignSearch] = useState('');
+    const { data: groups } = useQuery({ queryKey: ['groups'], queryFn: getGroups, enabled: canAssign && assignOpen });
+    const assign = useMutation({
+        mutationFn: (ownerId: string) => moveVideo(videoId, ownerId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['my-videos'] });
+            queryClient.invalidateQueries({ queryKey: ['studio-video', videoId] });
+            setAssignOpen(false);
+            toast.success('Video assigned');
+        },
+        onError: (e: Error) => toast.error(e.message),
+    });
+    const query = assignSearch.trim().toLowerCase();
+    const assignees = (user?.role === 'admin'
+        ? [...(groups?.coaches ?? []), ...athletesInGroups(groups), ...(groups?.unassigned ?? [])]
+        : athletesInGroups(groups)
+    ).filter((p) => `${p.full_name} ${p.email}`.toLowerCase().includes(query));
     const pendingCount = Object.keys(pending).length;
     const hasRight = !!meta?.has_right_view;
     const isAvailable = (needs: 'always' | 'right' | '3d') => needs === 'always' || (needs === 'right' ? hasRight : is3D);
@@ -324,6 +347,47 @@ const AnalysisStudioPage = () => {
                                 <button onClick={startEditing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors" title="Correct keypoints by dragging them on the videos or in the 3D view">
                                     <Pencil className="w-4 h-4" /> Edit keypoints
                                 </button>
+                            )}
+                            {canAssign && (
+                                <Dialog.Root open={assignOpen} onOpenChange={setAssignOpen}>
+                                    <Dialog.Trigger asChild>
+                                        <button className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors">
+                                            <Users className="w-4 h-4" />
+                                            {meta?.owner_name && meta.owner_id !== user?._id ? `Assigned to ${meta.owner_name}` : 'Assign'}
+                                        </button>
+                                    </Dialog.Trigger>
+                                    <Dialog.Portal>
+                                        <Dialog.Overlay className="fixed inset-0 bg-black/70" />
+                                        <Dialog.Content className="fixed left-1/2 top-1/2 flex max-h-[70vh] w-[90vw] max-w-[420px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background shadow-xl focus:outline-none">
+                                            <div className="border-b border-border px-5 py-4">
+                                                <Dialog.Title className="font-semibold text-text">Assign video</Dialog.Title>
+                                                <Dialog.Description className="text-xs text-text-muted">Choose who this video belongs to.</Dialog.Description>
+                                            </div>
+                                            <div className="border-b border-border p-3">
+                                                <input
+                                                    value={assignSearch}
+                                                    onChange={(e) => setAssignSearch(e.target.value)}
+                                                    placeholder="Search by name or email"
+                                                    className="h-9 w-full px-3 rounded-lg bg-background-main border border-border text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary/50"
+                                                />
+                                            </div>
+                                            <ul className="min-h-0 overflow-y-auto divide-y divide-border">
+                                                {assignees.map((p) => (
+                                                    <li key={p.id}>
+                                                        <button
+                                                            disabled={assign.isPending}
+                                                            onClick={() => assign.mutate(p.id)}
+                                                            className="w-full px-5 py-2.5 text-left hover:bg-background-main transition-colors disabled:opacity-50"
+                                                        >
+                                                            <p className="truncate text-sm font-medium text-text">{p.full_name}</p>
+                                                            <p className="truncate text-xs text-text-muted">{p.email}</p>
+                                                        </button>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </Dialog.Content>
+                                    </Dialog.Portal>
+                                </Dialog.Root>
                             )}
                             <ViewMenu
                                 panels={PANELS.map((p) => ({ id: p.id, label: p.label, icon: p.icon, available: isAvailable(p.needs) }))}

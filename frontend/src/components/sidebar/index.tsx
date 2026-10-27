@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { Home, Video, Camera, BarChart3, User2, Users, Search, ChevronDown, LogOut, Crosshair } from 'lucide-react';
+import { Home, Video, Camera, BarChart3, User2, Users, UsersRound, Search, ChevronDown, LogOut, Crosshair } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../dropdown/dropdown';
 import SidebarItem from './sidebarItem';
 import SectionTitle from './sectionTitle';
@@ -41,6 +41,7 @@ const Sidebar = () => {
                         <SidebarItem icon={Video} text="Videos" href="/video-test" />
                         <SidebarItem icon={Camera} text="Camera" href="/camera-capture" />
                         <SidebarItem icon={BarChart3} text="Analysis" href="/analysis" />
+                        <SidebarItem icon={UsersRound} text={user?.role === 'athlete' ? 'My group' : 'Groups'} href="/groups" />
                         {user?.role === 'admin' && (
                             <SidebarItem icon={Crosshair} text="Calibration" href="/calibration" />
                         )}

@@ -22,8 +22,8 @@ export interface DashboardUserRow {
 }
 
 export interface Dashboard {
-    /** "all" for admins (every user's videos), "mine" for everyone else. */
-    scope: 'all' | 'mine';
+    /** "all" for admins (every user's videos), "group" for coaches (theirs and their athletes'), "mine" otherwise. */
+    scope: 'all' | 'group' | 'mine';
     totals: { videos: number; recordings: number; analysed: number };
     /** The login before this session; null on a first login. */
     last_login: string | null;
