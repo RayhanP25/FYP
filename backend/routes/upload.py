@@ -65,7 +65,10 @@ async def upload_video(video: UploadFile = File(...), current_user: dict = Depen
     return {"object_name": object_name, "video_id": str(video_doc["_id"])}
 
 @router.get("/get-video/{video_id}")
-async def get_video(video_id: str, view: str = "left", current_user: dict = Depends(get_current_user)):
+async def get_video(video_id: str, view: str = "left", variant: str = "overlay",
+                    current_user: dict = Depends(get_current_user)):
+    """variant="plain": the camera view without a skeleton drawn (the analysis page draws raw or processed
+    keypoints over it). Falls back to the overlay video when there is no plain one (older analyses)."""
     # Find video metadata in MongoDB
     videos_collection = client[database_name]["videos"]
     
@@ -88,6 +91,14 @@ async def get_video(video_id: str, view: str = "left", current_user: dict = Depe
         object_name = right_object_name
     else:
         object_name = video_doc.get("processed_object_name") or video_doc["object_name"]
+    plain = None
+    if variant == "plain" and video_doc.get("processed_object_name"):
+        is_stereo = video_doc.get("layout") == "side_by_side" or video_doc.get("source") == "stereo_camera"
+        if is_stereo:
+            plain = video_doc.get("plain_object_name_right" if view == "right" else "plain_object_name")
+        elif view != "right":
+            plain = video_doc["object_name"]          # a 2D analysis ran on the upload itself
+        object_name = plain or object_name
     
     # Generate presigned URL from MinIO
     try:
@@ -109,6 +120,7 @@ async def get_video(video_id: str, view: str = "left", current_user: dict = Depe
         "uploaded_at": video_doc.get("uploaded_at") or video_doc.get("created_at"),
         "is_processed": bool(video_doc.get("processed_object_name")),
         "view": "right" if (view == "right" and right_object_name) else "left",
+        "variant": "plain" if plain else "overlay",
         "has_right_view": bool(right_object_name)
     }
 
@@ -177,7 +189,7 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=500, detail=f"Failed to delete video from storage: {str(e)}")
 
     # Delete processed videos if they exist
-    for key in ("processed_object_name", "processed_object_name_right"):
+    for key in ("processed_object_name", "processed_object_name_right", "plain_object_name", "plain_object_name_right"):
         if video_doc.get(key):
             try:
                 minio_client.remove_object(
@@ -196,7 +208,7 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
     # Delete associated pose analysis if exists
     try:
         analysis_collection.delete_one({"video_id": video_id})
-    except Exception:
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete associated pose analysis: {str(e)}")
 
     return {"message": "Video deleted successfully"}

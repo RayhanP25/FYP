@@ -2,13 +2,15 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from "react"
 
 type Pt = [number, number, number] | null;
 interface Frame3D { frame_index: number; keypoints_3d: Pt[]; angles_3d: Record<string, number>; }
-interface Props { videoId?: string; apiBase?: string; analysis?: { fps?: number; frames_3d?: Frame3D[] }; }
+// framing: frames to centre and zoom the view on (default: the ones shown). Lets raw and processed data
+// share one framing, so switching between them doesn't move the camera.
+interface Props { videoId?: string; apiBase?: string; analysis?: { fps?: number; frames_3d?: Frame3D[] }; framing?: Frame3D[]; }
 
 const BONES_LEFT: [number, number][] = [[1, 2], [2, 4], [4, 6], [6, 8], [2, 10], [10, 12], [12, 14], [14, 16]];
 const BONES_RIGHT: [number, number][] = [[1, 3], [3, 5], [5, 7], [7, 9], [3, 11], [11, 13], [13, 15], [15, 17]];
 const BONES_CENTER: [number, number][] = [[0, 1], [10, 11]];
 
-export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Props) {
+export default function Skeleton3DViewer({ videoId, apiBase = "", analysis, framing }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [frames, setFrames] = useState<Frame3D[]>([]);
   const [fps, setFps] = useState(30);
@@ -56,7 +58,7 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
 
   const { center, radius, floorY } = useMemo(() => {
     const pts: number[][] = [];
-    frames.forEach((f) => f.keypoints_3d?.forEach((p) => { if (p) pts.push(p); }));
+    (framing?.length ? framing : frames).forEach((f) => f.keypoints_3d?.forEach((p) => { if (p) pts.push(p); }));
     if (!pts.length) return { center: [0, 0, 0], radius: 1, floorY: 1 };
     const c = [0, 1, 2].map((i) => pts.reduce((s, p) => s + p[i], 0) / pts.length);
     let r = 1;
@@ -68,7 +70,7 @@ export default function Skeleton3DViewer({ videoId, apiBase = "", analysis }: Pr
     });
     // "Up" is -Y in this projection, so the largest Y is ground level (the feet)
     return { center: c, radius: r, floorY: maxY };
-  }, [frames]);
+  }, [frames, framing]);
 
   useEffect(() => {
     const handleSync = (e: Event) => {

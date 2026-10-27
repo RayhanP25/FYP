@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from database import client, database_name
 from minio_client import minio_client
 from routes.users import get_current_user
-from pose_estimator import process_video_with_overlays
+from pose_estimator import process_video_with_overlays, POSE_MIN_CONF, POSE_SURE_CONF
 from bson import ObjectId
 import calibration_store
 import os
@@ -59,6 +59,7 @@ async def process_video(
     is_stereo = (video_doc.get("layout") == "side_by_side"
                  or video_doc.get("source") == "stereo_camera")
     temp_output_right_path = None
+    plain_paths = ()                          # stereo: both camera views without a skeleton drawn
     # The calibration the recording was filmed with (falls back to the active one, calibration.npz).
     calib_path, calib_is_temp, calib_doc = CALIB_PATH, False, None
     if is_stereo:
@@ -71,9 +72,11 @@ async def process_video(
         if is_stereo and os.path.exists(calib_path):
             from stereo_process import process_stereo_video
             temp_output_right_path = tempfile.mktemp(suffix="_processed_right.mp4")
+            plain_paths = (tempfile.mktemp(suffix="_plain_L.mp4"), tempfile.mktemp(suffix="_plain_R.mp4"))
             result = process_stereo_video(temp_input_path, temp_output_path,
                                           calib_path=calib_path,
-                                          output_path_right=temp_output_right_path)
+                                          output_path_right=temp_output_right_path,
+                                          plain_paths=plain_paths)
         else:
             # If it's stereo but calibration is missing, fall back to 2D so it
             # still works (analyses the left half is not split here -- whole frame).
@@ -87,6 +90,9 @@ async def process_video(
             os.unlink(temp_output_path)
         if temp_output_right_path and os.path.exists(temp_output_right_path):
             os.unlink(temp_output_right_path)
+        for p in plain_paths:
+            if os.path.exists(p):
+                os.unlink(p)
         raise HTTPException(status_code=500, detail=f"Pose estimation failed: {str(e)}")
     finally:
         if calib_is_temp and os.path.exists(calib_path):
@@ -133,11 +139,31 @@ async def process_video(
         finally:
             os.unlink(temp_output_right_path)
 
+    # 7c. Stereo: also upload both views WITHOUT a skeleton, so the analysis page can draw the raw or the
+    #     processed keypoints over them itself (2D videos use the original upload for this).
+    plain_names = {}
+    for key, path in zip(("plain_object_name", "plain_object_name_right"), plain_paths):
+        if not os.path.exists(path):
+            continue
+        try:
+            name = f"{key.replace('_object_name', '')}_{uuid.uuid4()}.mp4"
+            with open(path, 'rb') as f:
+                minio_client.put_object(bucket_name="sport-pose-videos", object_name=name, data=f, length=-1,
+                                        part_size=10*1024*1024, content_type="video/mp4")
+            plain_names[key] = name
+        except Exception:
+            pass                               # the page falls back to the overlay videos
+        finally:
+            os.unlink(path)
+
     # 8. Update video metadata with processed video info
-    update_fields = {"processed_object_name": processed_object_name}
+    update_fields = {"processed_object_name": processed_object_name, **plain_names}
     if processed_object_name_right:
         update_fields["processed_object_name_right"] = processed_object_name_right
     videos_collection.update_one({"_id": ObjectId(video_id)}, {"$set": update_fields})
+
+    # How the page should draw keypoints itself (same rules as the overlay videos).
+    result["overlay_conf"] = {"min": POSE_MIN_CONF, "sure": POSE_SURE_CONF}
 
     # 9. Store keypoint analysis in MongoDB (stereo result also carries frames_3d)
     analysis_collection = client[database_name]["pose_analysis"]

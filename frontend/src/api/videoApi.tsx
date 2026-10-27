@@ -23,6 +23,8 @@ export interface VideoUrlResponse {
     content_type: string;
     uploaded_at: string;
     view?: 'left' | 'right';
+    /** "plain": the camera view without a skeleton drawn; "overlay": with the skeleton drawn in. */
+    variant?: 'plain' | 'overlay';
     has_right_view?: boolean;
 }
 
@@ -43,9 +45,13 @@ export const uploadVideo = async (formData: FormData): Promise<VideoUploadRespon
     }
 };
 
-export const getVideoUrl = async (videoId: string, view: 'left' | 'right' = 'left'): Promise<VideoUrlResponse> => {
+export const getVideoUrl = async (
+    videoId: string,
+    view: 'left' | 'right' = 'left',
+    variant: 'plain' | 'overlay' = 'overlay',
+): Promise<VideoUrlResponse> => {
     try {
-        const response = await api.get(`/api/get-video/${videoId}`, { params: { view } });
+        const response = await api.get(`/api/get-video/${videoId}`, { params: { view, variant } });
         return response.data;
     } catch (error) {
         throw new Error('Failed to get video URL');

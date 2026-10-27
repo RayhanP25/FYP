@@ -563,9 +563,11 @@ def heal_and_render(raw_result: dict, video_path: str, output_path: str, heal_kw
     raw_frames = raw_result["frames"]
     for i, fr in enumerate(healed_result["frames"]):
         src = raw_frames[i] if i < len(raw_frames) else {}
-        fr["angles_raw"] = src.get("angles", {})
         kp_raw = raw_keypoints[i] if raw_keypoints is not None and i < len(raw_keypoints) else src.get("keypoints")
         fr["keypoints_raw"] = kp_raw
+        # Angles of the untouched detections (raw_result's own angles may already include caller fixes).
+        fr["angles_raw"] = (calculate_frame_angles(kp_raw) if kp_raw else {}) if raw_keypoints is not None \
+            else src.get("angles", {})
 
     healed_result["timing"] = dict(healed_result.get("timing", {}))
     healed_result["timing"]["healing_seconds"] = round(heal_time, 2)
