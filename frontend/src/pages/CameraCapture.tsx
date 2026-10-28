@@ -4,6 +4,7 @@ import { api } from '../api/axiosInstance';
 import { Camera, VideoOff, Video, StopCircle } from 'lucide-react';
 import { toast } from 'react-toastify';
 import AppLayout from '../layout/AppLayout';
+import { useShortcut } from '@/shortcuts/useShortcut';
 
 export default function CameraCapture() {
     const navigate = useNavigate();
@@ -104,6 +105,12 @@ export default function CameraCapture() {
             });
         }
     };
+
+    useShortcut('camera.record', (e) => {
+        if (e.repeat) return;
+        if (isRecording) handleStopRecording();
+        else if (isStreaming) handleStartRecording();
+    });
 
     const status = isStreaming
         ? {

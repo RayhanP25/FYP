@@ -6,6 +6,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ToastContainer } from 'react-toastify';
 
 import Router from './router';
+import { ShortcutListener } from './shortcuts/useShortcut';
 
 import './styles/app.css';
 
@@ -14,6 +15,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
     <QueryProvider>
       <AuthProvider>
         <BrowserRouter>
+          <ShortcutListener />
           <Router />
         </BrowserRouter>
       </AuthProvider>

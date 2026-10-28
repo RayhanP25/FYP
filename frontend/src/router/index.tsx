@@ -14,6 +14,7 @@ import AnalysisLibraryPage from '../pages/AnalysisLibraryPage';
 import AnalysisStudioPage from '../pages/AnalysisStudioPage';
 import CalibrationPage from '../pages/CalibrationPage';
 import GroupsPage from '../pages/GroupsPage';
+import SettingsPage from '../pages/SettingsPage';
 
 const AuthLoading = () => (
   <div className="flex h-screen items-center justify-center bg-background text-text-secondary">
@@ -72,6 +73,10 @@ const AppRoutes = () => {
     {
       path: '/user-profile',
       element: <PrivateRoute element={<UserProfilePage />} />,
+    },
+    {
+      path: '/settings',
+      element: <PrivateRoute element={<SettingsPage />} />,
     },
     {
       path: '/camera-capture',

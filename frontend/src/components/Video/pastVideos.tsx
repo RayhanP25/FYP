@@ -7,6 +7,8 @@ import { toast } from 'react-toastify';
 import * as Dialog from '@radix-ui/react-dialog';
 import Button from '@/components/ui/button';
 import { useAuth } from '../../hooks/useAuth';
+import { useListNav } from '@/shortcuts/useListNav';
+import { useShortcut } from '@/shortcuts/useShortcut';
 
 import VideoThumbnail from './videoThumbnail';
 
@@ -73,10 +75,19 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
 
     const visiblePages = Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i);
 
-    const handleDelete = (videoId: string, e: React.MouseEvent) => {
-        e.stopPropagation(); // Prevent row click
+    const openVideo = (videoId: string) => getVideoUrl(videoId).then((videoData) => onVideoSelect?.(videoId, videoData.presigned_url));
+    const askDelete = (videoId: string) => {
         setVideoToDelete(videoId);
         setIsDeleteDialogOpen(true);
+    };
+    const activeRow = useListNav(currentVideos.length, `${currentPage}|${searchTerm}|${ownerFilter}`, (i) => openVideo(currentVideos[i].video_id));
+    useShortcut('page.prev', () => setCurrentPage((p) => Math.max(p - 1, 1)), currentPage > 1);
+    useShortcut('page.next', () => setCurrentPage((p) => Math.min(p + 1, totalPages)), currentPage < totalPages);
+    useShortcut('videos.delete', () => askDelete(currentVideos[activeRow].video_id), activeRow >= 0);
+
+    const handleDelete = (videoId: string, e: React.MouseEvent) => {
+        e.stopPropagation(); // Prevent row click
+        askDelete(videoId);
     };
 
     const deleteVideoMutation = useMutation({
@@ -130,6 +141,7 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                         <input
                             type="text"
+                            data-search
                             placeholder="Search videos..."
                             value={searchTerm}
                             onChange={(e) => {
@@ -175,15 +187,12 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {currentVideos.map((video) => (
+                                    {currentVideos.map((video, i) => (
                                         <tr
                                             key={video.video_id}
-                                            className="border-b hover:bg-background-main/50 transition-colors cursor-pointer"
-                                            onClick={() => {
-                                                getVideoUrl(video.video_id).then(videoData => {
-                                                    onVideoSelect?.(video.video_id, videoData.presigned_url);
-                                                });
-                                            }}
+                                            data-row={i}
+                                            className={`border-b hover:bg-background-main/50 transition-colors cursor-pointer ${activeRow === i ? 'bg-background-main' : ''}`}
+                                            onClick={() => openVideo(video.video_id)}
                                         >
                                             <td className="py-3 px-4 max-w-0">
                                                 <div className="flex items-center gap-3 min-w-0">

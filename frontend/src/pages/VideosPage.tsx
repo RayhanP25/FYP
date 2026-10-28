@@ -2,9 +2,11 @@ import AppLayout from "../layout/AppLayout"
 import VideoUpload from "../components/Video/videoUpload"
 import PastVideos from "../components/Video/pastVideos"
 import { useNavigate } from 'react-router-dom'
+import { useShortcut } from '@/shortcuts/useShortcut'
 
 const VideosPage = () => {
     const navigate = useNavigate();
+    useShortcut('videos.upload', () => document.getElementById('file-upload')?.click());
 
     // When a video is clicked (or just uploaded), open it in the analysis studio
     const handleVideoSelect = (videoId: string) => {

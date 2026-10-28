@@ -12,6 +12,7 @@ import { athletesInGroups, getGroups } from '@/api/groupApi';
 import { useAuth } from '@/hooks/useAuth';
 import { getEdits, revertEdits, saveEdits } from '@/api/editsApi';
 import { getCalibrationOptions } from '@/api/calibrationApi';
+import { useShortcut } from '@/shortcuts/useShortcut';
 import { JOINT_NAMES, LIMB_BONES, pointFrom2D, projectToCamera } from '@/utils/skeleton';
 import Skeleton3DViewer from '@/components/Skeleton3DViewer';
 import KinematicChart, { type ChartMode } from '@/components/Video/kinematicChart';
@@ -319,21 +320,7 @@ const AnalysisStudioPage = () => {
         });
         setBigMove(null);
     };
-    // Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) while editing, unless typing in a field.
-    const undoRef = useRef(undo);
-    const redoRef = useRef(redo);
-    useEffect(() => { undoRef.current = undo; redoRef.current = redo; });
-    useEffect(() => {
-        if (!editing) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (!(e.ctrlKey || e.metaKey) || (e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable]')) return;
-            const k = e.key.toLowerCase();
-            if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoRef.current(); }
-            else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redoRef.current(); }
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [editing]);
+    useShortcut('edit.undo', undo, editing);
     const refreshEdits = () => Promise.all([
         queryClient.invalidateQueries({ queryKey: ['analysis', videoId] }),
         queryClient.invalidateQueries({ queryKey: ['edits', videoId] }),
@@ -377,6 +364,27 @@ const AnalysisStudioPage = () => {
             toast.error(errorText(e, 'Could not revert the edits.'));
         }
     };
+    const tryStopEditing = () => {
+        if (pendingCount) { toast.info('Save or discard your changes first.'); return; }
+        stopEditing();
+    };
+    const togglePanel = (index: number) => {
+        const panel = PANELS[index];
+        if (isAvailable(panel.needs)) toggleVisible(panel.id);
+    };
+    useShortcut('edit.toggle', () => (editing ? tryStopEditing() : canEdit && startEditing()));
+    useShortcut('edit.done', tryStopEditing, editing);
+    useShortcut('edit.save', () => { if (pendingCount && !saving && !bigMoveShown) save(); }, editing);
+    useShortcut('panel.1', () => togglePanel(0));
+    useShortcut('panel.2', () => togglePanel(1));
+    useShortcut('panel.3', () => togglePanel(2));
+    useShortcut('panel.4', () => togglePanel(3));
+    useShortcut('panel.5', () => togglePanel(4));
+    useShortcut('panel.6', () => togglePanel(5));
+    useShortcut('panel.7', () => togglePanel(6));
+    useShortcut('layout.reset', reset);
+    useShortcut('sizes.reset', resetSizes);
+
     // Don't lose unsaved edits by closing or reloading the tab.
     useEffect(() => {
         if (!pendingCount) return;
@@ -549,7 +557,7 @@ const AnalysisStudioPage = () => {
                     <div className="sticky top-2 z-20 -mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-primary/50 bg-background-main/95 backdrop-blur px-4 py-2.5">
                         <span className="inline-flex items-center gap-2 text-sm font-medium text-text"><Pencil className="w-4 h-4 text-primary" /> Editing keypoints</span>
                         <span className="text-xs text-text-muted">
-                            Drag a joint on either video or in the 3D view; the other views follow. Ctrl+Z / Ctrl+Y undo and redo. Saved edits ease into the {editInfo?.fade_frames ?? 5} frames on each side,
+                            Drag a joint on either video or in the 3D view; the other views follow. Ctrl+Z undoes the last change. Saved edits ease into the {editInfo?.fade_frames ?? 5} frames on each side,
                             and edits of a joint up to {editInfo?.keyframe_gap ?? 30} frames apart are joined.
                         </span>
                         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -560,7 +568,7 @@ const AnalysisStudioPage = () => {
                             <button onClick={undo} disabled={!history.length} title="Undo (Ctrl+Z)" className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
                                 <Undo2 className="w-4 h-4" /> Undo
                             </button>
-                            <button onClick={redo} disabled={!future.length} title="Redo (Ctrl+Y)" className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
+                            <button onClick={redo} disabled={!future.length} title="Redo" className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
                                 <Redo2 className="w-4 h-4" /> Redo
                             </button>
                             {selectedSaved && (

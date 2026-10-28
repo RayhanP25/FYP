@@ -6,6 +6,8 @@ import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import VideoThumbnail from '@/components/Video/videoThumbnail';
 import { getMyVideos, type Video } from '@/api/videoApi';
+import { useListNav } from '@/shortcuts/useListNav';
+import { useShortcut } from '@/shortcuts/useShortcut';
 
 const PAGE_SIZE = 25;
 const TOP_UPLOADERS = 5;
@@ -48,6 +50,9 @@ const AnalysisLibraryPage = () => {
     const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
     const current = Math.min(page, pageCount);
     const rows = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
+    const active = useListNav(rows.length, `${current}|${search}|${uploader}|${showPending}`, (i) => navigate(`/analysis/${rows[i].video_id}`));
+    useShortcut('page.prev', () => setPage(current - 1), current > 1);
+    useShortcut('page.next', () => setPage(current + 1), current < pageCount);
 
     const selectUploader = (name: string | null) => { setUploader(name); setPage(1); };
     const filterClass = (active: boolean) =>
@@ -75,7 +80,7 @@ const AnalysisLibraryPage = () => {
                         <div className="relative w-72">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
                             <input
-                                type="text" placeholder="Search by video name" value={search}
+                                data-search type="text" placeholder="Search by video name" value={search}
                                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                                 className="w-full h-9 pl-9 pr-3 rounded-md bg-background border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/30 transition"
                             />
@@ -132,11 +137,12 @@ const AnalysisLibraryPage = () => {
 
                         {error && <p className="px-4 py-6 text-sm text-red-500">Error: {(error as Error).message}</p>}
 
-                        {!isLoading && !error && rows.map((v) => (
+                        {!isLoading && !error && rows.map((v, i) => (
                             <button
                                 key={v.video_id}
+                                data-row={i}
                                 onClick={() => navigate(`/analysis/${v.video_id}`)}
-                                className={`${ROW_GRID} w-full h-[72px] text-left text-sm border-t border-border hover:bg-background focus:outline-none focus-visible:bg-background transition-colors`}
+                                className={`${ROW_GRID} w-full h-[72px] text-left text-sm border-t border-border hover:bg-background focus:outline-none focus-visible:bg-background transition-colors ${active === i ? 'bg-background' : ''}`}
                             >
                                 <span className="min-w-0 flex items-center gap-3">
                                     <VideoThumbnail videoId={v.video_id} className="w-24 aspect-video rounded-sm" iconClassName="w-4 h-4" />

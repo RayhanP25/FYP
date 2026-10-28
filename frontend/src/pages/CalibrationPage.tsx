@@ -20,8 +20,8 @@ import CalibrationPreview from '@/components/calibration/CalibrationPreview';
 import CoverageChecks from '@/components/calibration/CoverageChecks';
 import CalibrationReport from '@/components/calibration/CalibrationReport';
 import CalibrationLibrary from '@/components/calibration/CalibrationLibrary';
+import { useShortcut } from '@/shortcuts/useShortcut';
 
-const SHORTCUT_BLOCKERS = ['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT'];
 
 const captureRequest = async () => {
     const result = await capturePair();
@@ -81,16 +81,7 @@ const CalibrationPage = () => {
         lastJob.current = job;
     }, [status?.job, status?.message, queryClient]);
 
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            if (e.code !== 'Space' || e.repeat || !canCapture || isPending) return;
-            if (SHORTCUT_BLOCKERS.includes((e.target as HTMLElement).tagName)) return;
-            e.preventDefault();
-            mutate(captureRequest);
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [canCapture, isPending, mutate]);
+    useShortcut('calibration.capture', (e) => { if (!e.repeat && canCapture && !isPending) mutate(captureRequest); });
 
     const startSession = () =>
         mutate(async () => {

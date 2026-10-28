@@ -1,8 +1,10 @@
 import React from 'react';
 import Header from '@/components/header';
 import Sidebar from '@/components/sidebar';
+import { useGlobalShortcuts } from '@/shortcuts/useGlobalShortcuts';
 
 const AppLayout = (props: { children?: React.ReactNode }) => {
+  useGlobalShortcuts();
   return (
     <div className="main min-h-screen">
       <Sidebar />

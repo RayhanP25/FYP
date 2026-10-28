@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
+import { useShortcut } from '@/shortcuts/useShortcut';
 
 interface TransportBarProps {
     leftRef: RefObject<HTMLVideoElement | null>;
@@ -90,18 +91,13 @@ const TransportBar = ({ leftRef, rightRef, layoutKey, fps }: TransportBarProps) 
         seek((Math.round(timeRef.current * fps) + dir + 0.25) / fps);
     };
 
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            const t = e.target as HTMLElement;
-            if (t.closest('input:not([type=range]), textarea, select, [contenteditable], [role=menu]')) return;
-            if (e.code === 'Space') { e.preventDefault(); if (t.tagName === 'BUTTON') t.blur(); togglePlay(); }
-            else if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) { videos().forEach((v) => v.pause()); seek(0); }
-            else if (e.code === 'ArrowLeft') { e.preventDefault(); step(-1); }
-            else if (e.code === 'ArrowRight') { e.preventDefault(); step(1); }
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    });
+    useShortcut('play.toggle', togglePlay);
+    useShortcut('play.restart', () => { videos().forEach((v) => v.pause()); seek(0); });
+    useShortcut('frame.prev', () => step(-1));
+    useShortcut('frame.next', () => step(1));
+    useShortcut('second.prev', () => step(-Math.round(fps)));
+    useShortcut('second.next', () => step(Math.round(fps)));
+    useShortcut('frame.last', () => seek(duration));
 
     const changeRate = (r: number) => { setRate(r); rateRef.current = r; videos().forEach((v) => { v.playbackRate = r; }); };
 
