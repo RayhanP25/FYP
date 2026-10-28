@@ -541,9 +541,20 @@ def process_video_with_overlays(
         raw_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
         return raw_result
 
-    healed_result = heal_and_render(raw_result, video_path, output_path, heal_kwargs)
+    healed_result = heal_and_render(raw_result, video_path, output_path, {**UPLOAD_HEAL, **(heal_kwargs or {})})
     healed_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
     return healed_result
+
+
+# Clean-up for single-camera uploads (stereo recordings use pose_postprocess's own defaults). Gentler than
+# those: only points under 30% confidence are dropped (the overlay already hides them), gaps of up to 8 frames
+# are filled, and a 5-frame window smooths. On fast movement the stricter settings drew joints several % of the
+# frame off (straight-line fills through the motion, smoothing lag); these keep the model's own positions.
+UPLOAD_HEAL = dict(
+    conf_threshold=float(os.environ.get("POSE_2D_HEAL_CONF", "0.3")),
+    max_gap=int(os.environ.get("POSE_2D_HEAL_MAX_GAP", "8")),
+    window_length=int(os.environ.get("POSE_2D_HEAL_WINDOW", "5")),
+)
 
 
 def heal_and_render(raw_result: dict, video_path: str, output_path: str, heal_kwargs: dict = None,
