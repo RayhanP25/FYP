@@ -1,7 +1,6 @@
 import io
 import re
 import uuid
-from datetime import datetime
 from typing import Optional
 
 import bcrypt
@@ -110,11 +109,15 @@ def delete_account(body: PasswordConfirm, response: Response, current_user: dict
         raise HTTPException(status_code=403, detail="Admins can't delete their own account. Ask another admin.")
     user = _user_doc(current_user)
     _require_password(user, body.password)
-    now = datetime.now()
     if user["role"] == "coach":
         group_ids = [str(g["_id"]) for g in db["groups"].find({"coach_id": str(user["_id"])}, {"_id": 1})]
         db["users"].update_many({"group_id": {"$in": group_ids}}, {"$set": {"group_id": None}})
         db["groups"].delete_many({"coach_id": str(user["_id"])})
-    db["users"].update_one({"_id": user["_id"]}, {"$set": {"deactivated_at": now, "group_id": None}})
+    if user.get("profile_picture_object"):
+        try:
+            minio_client.remove_object(AVATAR_BUCKET, user["profile_picture_object"])
+        except Exception:
+            pass
+    db["users"].delete_one({"_id": user["_id"]})
     response.delete_cookie("auth_token")
     return {"message": "Account deleted"}

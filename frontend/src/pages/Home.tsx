@@ -96,15 +96,6 @@ function HomePage() {
             <div className="flex flex-col gap-8 max-w-[1500px] mx-auto">
                 <div>
                     <h1 className="text-3xl font-semibold tracking-tight text-text">{firstName ? `Welcome back, ${firstName}` : 'Dashboard'}</h1>
-                    <p className="mt-2 text-sm text-text-muted">
-                        {data
-                            ? data.last_login
-                                ? <>Last login {formatDateTime(data.last_login)} ({timeAgo(data.last_login)})</>
-                                : 'This is your first login.'
-                            : ' '}
-                        {data?.scope === 'all' && <> · showing every user's videos</>}
-                        {data?.scope === 'group' && <> · showing your videos and your athletes'</>}
-                    </p>
                 </div>
 
                 {isLoading && <div className="py-24 text-center text-sm text-text-muted">Loading...</div>}

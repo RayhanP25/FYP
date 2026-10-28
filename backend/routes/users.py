@@ -106,8 +106,6 @@ def login(user_credentials: UserLogin, response: Response):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
         )
-    if user.get("deactivated_at"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been deleted.")
     
     # Create access token
     token_data = {"sub": user["email"], "role": user["role"]}
@@ -156,7 +154,7 @@ def get_current_user(response: Response, auth_token: Optional[str] = Cookie(None
     # Get user from database
     users_collection = db["users"]
     user = users_collection.find_one({"email": payload.get("sub")})
-    if not user or user.get("deactivated_at"):
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
@@ -402,15 +400,6 @@ def delete_user(user_id: str, current_user: dict = Depends(require_admin)):
     users_collection.update_many({"group_id": {"$in": group_ids}}, {"$set": {"group_id": None}})
     
     return {"message": "User deleted successfully"}
-
-@router.post("/users/{user_id}/restore")
-def restore_user(user_id: str, current_user: dict = Depends(require_admin)):
-    if not ObjectId.is_valid(user_id):
-        raise HTTPException(status_code=404, detail="User not found")
-    result = db["users"].update_one({"_id": ObjectId(user_id)}, {"$unset": {"deactivated_at": ""}})
-    if not result.matched_count:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "Account restored"}
 
 @router.post("/logout")
 def logout(response: Response):
