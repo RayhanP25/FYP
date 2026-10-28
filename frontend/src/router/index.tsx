@@ -5,7 +5,6 @@ import HomePage from '../pages/Home';
 import Login from '../pages/Login';
 import NotFound from '../pages/notFound';
 import ViewUserPage from '../pages/viewUser';
-import UserProfilePage from '../pages/userProfile';
 // import VideoTest from '../pages/videoTest';
 import type { JSX } from 'react';
 import CameraCapture from '../pages/CameraCapture';
@@ -69,10 +68,6 @@ const AppRoutes = () => {
     {
       path: '/view-users',
       element: <AdminRoute element={<ViewUserPage />} />,
-    },
-    {
-      path: '/user-profile',
-      element: <PrivateRoute element={<UserProfilePage />} />,
     },
     {
       path: '/settings',

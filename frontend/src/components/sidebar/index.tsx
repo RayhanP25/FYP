@@ -86,7 +86,7 @@ const Sidebar = () => {
                             </div>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent className="w-48 bg-background-main border border-border">
-                            <DropdownMenuItem onClick={() => navigate('/user-profile')}>
+                            <DropdownMenuItem onClick={() => navigate('/settings?section=account')}>
                                 <User2 className="w-4 h-4 mr-2" />
                                 Account
                             </DropdownMenuItem>

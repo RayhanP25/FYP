@@ -14,7 +14,6 @@ const Header = () => {
     '/view-users': 'Users',
     '/groups': 'Groups',
     '/calibration': 'Calibration',
-    '/user-profile': 'Account',
     '/settings': 'Settings',
   };
 

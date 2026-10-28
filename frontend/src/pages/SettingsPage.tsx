@@ -1,15 +1,18 @@
-import { useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Keyboard, type LucideIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Keyboard, UserRound, type LucideIcon } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
+import AccountSettings from '@/components/settings/AccountSettings';
 import ShortcutSettings from '@/components/settings/ShortcutSettings';
 
 const SECTIONS: { id: string; label: string; icon: LucideIcon; Component: () => ReactNode }[] = [
+    { id: 'account', label: 'Account settings', icon: UserRound, Component: AccountSettings },
     { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard, Component: ShortcutSettings },
 ];
 
 const SettingsPage = () => {
-    const [activeId, setActiveId] = useState(SECTIONS[0].id);
+    const [searchParams, setSearchParams] = useSearchParams();
+    const activeId = searchParams.get('section') ?? SECTIONS[0].id;
     const section = SECTIONS.find((s) => s.id === activeId) ?? SECTIONS[0];
     const Active = section.Component;
     const navigate = useNavigate();
@@ -26,7 +29,7 @@ const SettingsPage = () => {
                         {SECTIONS.map((s) => (
                             <button
                                 key={s.id}
-                                onClick={() => setActiveId(s.id)}
+                                onClick={() => setSearchParams({ section: s.id })}
                                 className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors ${s.id === section.id
                                     ? 'border border-border bg-background-main font-medium text-text'
                                     : 'text-text-secondary hover:bg-background-main hover:text-text'}`}
@@ -37,8 +40,7 @@ const SettingsPage = () => {
                         ))}
                     </nav>
 
-                    <section className="flex min-w-0 flex-col gap-4">
-                        <h2 className="text-lg font-semibold text-text">{section.label}</h2>
+                    <section className="min-w-0">
                         <Active />
                     </section>
                 </div>

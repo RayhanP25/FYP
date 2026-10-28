@@ -59,6 +59,10 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setToken(null);
     };
 
+    const refreshUser = async () => {
+        setUser(await getCurrentUser());
+    };
+
     const isAuthenticated = () => {
         return !!user;
     };
@@ -81,6 +85,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         loading,
         login,
         logout,
+        refreshUser,
         isAuthenticated,
         isAdmin,
         isCoach,
