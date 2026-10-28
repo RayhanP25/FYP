@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from database import client, database_name
 from minio_client import minio_client
@@ -22,6 +24,7 @@ CALIB_PATH = os.path.join(os.path.dirname(__file__), "..", "calibration.npz")
 async def process_video(
     video_id: str,
     force: bool = False,                      # set ?force=true to re-process
+    calibration_id: Optional[str] = None,     # stereo: analyse with this saved calibration (kept for next time)
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -47,6 +50,14 @@ async def process_video(
     if video_doc.get("processed_object_name") and not force:
         return {"status": "already_processed", "processed_object_name": video_doc["processed_object_name"]}
 
+    # A calibration picked on the page replaces the one the recording was filmed with.
+    picked_calibration = None
+    if calibration_id:
+        picked_calibration = (calibration_store.col.find_one({"_id": ObjectId(calibration_id)}, {"npz": 0})
+                              if ObjectId.is_valid(calibration_id) else None)
+        if not picked_calibration:
+            raise HTTPException(status_code=404, detail="Calibration not found")
+
     # 3. Download video from MinIO to a temporary file
     try:
         response = minio_client.get_object(video_doc["bucket_name"], video_doc["object_name"])
@@ -66,7 +77,8 @@ async def process_video(
     calib_path, calib_is_temp, calib_doc = CALIB_PATH, False, None
     if is_stereo:
         try:
-            calib_path, calib_is_temp, calib_doc = calibration_store.file_for(video_doc.get("calibration_id"))
+            calib_path, calib_is_temp, calib_doc = calibration_store.file_for(
+                calibration_id or video_doc.get("calibration_id"))
         except Exception as ex:
             print(f"calibration library unavailable, using calibration.npz: {ex!r}")
     try:
@@ -162,6 +174,9 @@ async def process_video(
     update_fields = {"processed_object_name": processed_object_name, **plain_names}
     if processed_object_name_right:
         update_fields["processed_object_name_right"] = processed_object_name_right
+    if picked_calibration and is_stereo:          # later re-analyses and keypoint edits use it too
+        update_fields["calibration_id"] = str(picked_calibration["_id"])
+        update_fields["calibration_setup"] = picked_calibration.get("setup")
     videos_collection.update_one({"_id": ObjectId(video_id)}, {"$set": update_fields})
 
     # How the page should draw keypoints itself (same rules as the overlay videos).

@@ -11,6 +11,7 @@ import { getVideoUrl, moveVideo, renameVideo } from '@/api/videoApi';
 import { athletesInGroups, getGroups } from '@/api/groupApi';
 import { useAuth } from '@/hooks/useAuth';
 import { getEdits, revertEdits, saveEdits } from '@/api/editsApi';
+import { getCalibrationOptions } from '@/api/calibrationApi';
 import { JOINT_NAMES, LIMB_BONES, pointFrom2D, projectToCamera } from '@/utils/skeleton';
 import Skeleton3DViewer from '@/components/Skeleton3DViewer';
 import KinematicChart, { type ChartMode } from '@/components/Video/kinematicChart';
@@ -91,7 +92,11 @@ const AnalysisStudioPage = () => {
     const { data: meta } = useQuery({ queryKey: ['studio-video', videoId, 'left'], queryFn: () => getVideoUrl(videoId, 'left'), staleTime: 30 * 60 * 1000 });
     const { data: analysis, isLoading, isError } = useQuery({
         queryKey: ['analysis', videoId],
-        queryFn: async () => (await api.get(`/api/get-analysis/${videoId}`)).data.result,
+        queryFn: async () => {
+            const doc = (await api.get(`/api/get-analysis/${videoId}`)).data;
+            // Which saved calibration the analysis used, for the Re-analyze picker.
+            return { ...doc.result, calibration_id: doc.calibration_id ?? null, calibration_setup: doc.calibration_setup ?? null };
+        },
         retry: false,
     });
     const [renaming, setRenaming] = useState(false);
@@ -191,10 +196,31 @@ const AnalysisStudioPage = () => {
     const totalFrames = analysis?.total_frames ?? analysis?.frames?.length;
     const stats = analysis ? [`${Math.round(fps)} fps`, `${totalFrames} frames`, `${(totalFrames / fps).toFixed(1)} s`] : [];
 
-    const analyze = async () => {
+    // Stereo recordings: choose the calibration first (the one it was analysed with is preselected).
+    const [reanalyzeOpen, setReanalyzeOpen] = useState(false);
+    const [pickedCalibration, setPickedCalibration] = useState<string | null>(null);
+    const { data: calibrationOptions, isLoading: loadingCalibrations } = useQuery({
+        queryKey: ['calibration-options'], queryFn: getCalibrationOptions, enabled: reanalyzeOpen,
+    });
+    // The calibration it was analysed with, if it's still saved (else the one in use is preselected).
+    const usedCalibration = calibrationOptions?.some((c) => c.id === analysis?.calibration_id) ? analysis.calibration_id as string : null;
+    const defaultCalibration = usedCalibration ?? calibrationOptions?.find((c) => c.active)?.id ?? null;
+    const chosenCalibration = pickedCalibration ?? defaultCalibration;
+    const sortedCalibrations = [...(calibrationOptions ?? [])].sort((a, b) =>
+        Number(b.id === usedCalibration) - Number(a.id === usedCalibration) || Number(b.active) - Number(a.active));
+    const formatCalibrationDate = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-');
+    const requestAnalyze = () => {
+        if (!hasRight) { analyze(); return; }
+        setPickedCalibration(null);
+        setReanalyzeOpen(true);
+    };
+    const analyze = async (calibrationId?: string | null) => {
+        setReanalyzeOpen(false);
         setIsAnalyzing(true);
         try {
-            await api.post(`/api/process-video/${videoId}${analysis ? '?force=true' : ''}`);
+            await api.post(`/api/process-video/${videoId}`, null, {
+                params: { ...(analysis ? { force: true } : {}), ...(calibrationId ? { calibration_id: calibrationId } : {}) },
+            });
             toast.success('Pose analysis completed!');
             await Promise.all(['analysis', 'studio-video', 'my-videos'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
         } catch {
@@ -512,7 +538,7 @@ const AnalysisStudioPage = () => {
                             <button onClick={resetSizes} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors" title="Put all panel sizes back to default (keeps hidden panels hidden)">
                                 <RotateCcw className="w-4 h-4" /> Reset sizes
                             </button>
-                            <button onClick={analyze} disabled={isAnalyzing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors disabled:opacity-50">
+                            <button onClick={requestAnalyze} disabled={isAnalyzing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors disabled:opacity-50">
                                 {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Re-analyze
                             </button>
                         </div>
@@ -579,7 +605,7 @@ const AnalysisStudioPage = () => {
                         <Wand2 className="w-8 h-8 text-primary" strokeWidth={1.5} />
                         <h3 className="text-lg font-medium text-text">This video has not been analyzed yet</h3>
                         <p className="text-sm text-text-muted -mt-2">Extract kinematics to unlock both camera views, the 3D skeleton and the graphs.</p>
-                        <Button onClick={analyze} disabled={isAnalyzing} className="px-6 gap-2">
+                        <Button onClick={requestAnalyze} disabled={isAnalyzing} className="px-6 gap-2">
                             {isAnalyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing AI...</> : <><Wand2 className="w-4 h-4" /> Extract Kinematics</>}
                         </Button>
                     </div>
@@ -611,6 +637,50 @@ const AnalysisStudioPage = () => {
                     </>
                 )}
             </div>
+            <Dialog.Root open={reanalyzeOpen} onOpenChange={setReanalyzeOpen}>
+                <Dialog.Portal>
+                    <Dialog.Overlay className="fixed inset-0 z-40 bg-black/70" />
+                    <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[75vh] w-[92vw] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background shadow-xl focus:outline-none">
+                        <div className="border-b border-border px-5 py-4">
+                            <Dialog.Title className="font-semibold text-text">{analysis ? 'Re-analyze recording' : 'Analyze recording'}</Dialog.Title>
+                            <Dialog.Description className="mt-1 text-xs text-text-muted">
+                                Pick the calibration of the camera setup this was filmed with. A wrong one swaps joints and puts the 3D in the wrong place.
+                            </Dialog.Description>
+                        </div>
+                        <div className="min-h-0 overflow-y-auto p-3">
+                            {loadingCalibrations && <p className="px-2 py-6 text-center text-sm text-text-muted">Loading calibrations...</p>}
+                            {!loadingCalibrations && !sortedCalibrations.length && <p className="px-2 py-6 text-center text-sm text-text-muted">No saved calibrations.</p>}
+                            <ul className="flex flex-col gap-1.5">
+                                {sortedCalibrations.map((c) => (
+                                    <li key={c.id}>
+                                        <label className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors ${chosenCalibration === c.id ? 'border-primary/70 bg-primary/5' : 'border-border hover:bg-background-main'}`}>
+                                            <input type="radio" name="calibration" className="accent-primary" checked={chosenCalibration === c.id} onChange={() => setPickedCalibration(c.id)} />
+                                            <span className="min-w-0 flex-1">
+                                                <span className="flex items-center gap-2">
+                                                    <span className="text-sm font-medium text-text truncate">{c.setup}</span>
+                                                    {c.id === usedCalibration && <span className="shrink-0 px-1.5 py-0.5 rounded bg-border text-[10px] font-medium text-text-secondary">Used last time</span>}
+                                                    {c.active && <span className="shrink-0 px-1.5 py-0.5 rounded bg-primary/15 text-[10px] font-medium text-primary">In use</span>}
+                                                </span>
+                                                <span className="block text-xs text-text-muted tabular-nums">
+                                                    {formatCalibrationDate(c.calibrated_at ?? c.created_at)} · RMS {c.rms != null ? `${c.rms.toFixed(2)} px` : '-'} · baseline {(c.baseline_mm / 1000).toFixed(2)} m{c.floor_set ? '' : ' · floor not set'}
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                        <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
+                            <Dialog.Close asChild>
+                                <button className="h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text">Cancel</button>
+                            </Dialog.Close>
+                            <Button size="sm" className="h-9 gap-2" disabled={!chosenCalibration} onClick={() => analyze(chosenCalibration)}>
+                                <RefreshCw className="w-4 h-4" /> {analysis ? 'Re-analyze' : 'Analyze'}
+                            </Button>
+                        </div>
+                    </Dialog.Content>
+                </Dialog.Portal>
+            </Dialog.Root>
         </AppLayout>
     );
 };

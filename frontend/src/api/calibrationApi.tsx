@@ -121,3 +121,21 @@ export const renameCalibration = async (id: string, setup: string): Promise<Cali
 export const deleteCalibration = async (id: string): Promise<void> => {
     await api.delete(`/api/calibration/library/${id}`);
 };
+
+/** A saved calibration to pick when re-analysing a recording (GET /api/calibration/options, any signed-in user). */
+export interface CalibrationOption {
+    id: string;
+    setup: string;
+    active: boolean;
+    calibrated_at: string | null;
+    created_at: string;
+    rms: number | null;
+    baseline_mm: number;
+    floor_set: boolean;
+    camera_size: [number, number];
+}
+
+export const getCalibrationOptions = async (): Promise<CalibrationOption[]> => {
+    const response = await api.get('/api/calibration/options');
+    return response.data.entries;
+};

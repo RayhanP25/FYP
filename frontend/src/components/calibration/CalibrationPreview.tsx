@@ -6,11 +6,12 @@ interface CalibrationPreviewProps {
     onError: () => void;
 }
 
+// Fills its parent's height (the page doesn't scroll); the picture keeps its shape inside.
 const CalibrationPreview = ({ src, starting, onError }: CalibrationPreviewProps) => (
-    <div className="relative rounded-xl overflow-hidden bg-black border border-border">
+    <div className="relative h-full min-h-0 rounded-xl overflow-hidden bg-black border border-border flex items-center justify-center">
         {src ? (
             <>
-                <img src={src} alt="Stereo calibration preview" className="w-full h-auto object-contain" onError={onError} />
+                <img src={src} alt="Stereo calibration preview" className="max-w-full max-h-full object-contain" onError={onError} />
                 <span className="absolute top-3 right-3 px-2 py-1 rounded border border-border bg-background/90 text-[10px] font-medium uppercase tracking-[0.14em] text-text">
                     Left | Right
                 </span>

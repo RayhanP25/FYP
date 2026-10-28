@@ -27,7 +27,7 @@ from pydantic import BaseModel
 import calibration_store as store
 import stereo_calibrate as sc
 from routes.camera import manager, recorder
-from routes.users import require_admin
+from routes.users import get_current_user, require_admin
 
 router = APIRouter(prefix="/calibration", tags=["calibration"])
 
@@ -318,6 +318,15 @@ def _no_job():
 @router.get("/library")
 def library(current_user: dict = Depends(require_admin)):
     return dict(entries=store.list_entries(), setups=store.setups())
+
+
+OPTION_KEYS = ("id", "setup", "active", "calibrated_at", "created_at", "rms", "baseline_mm", "floor_set", "camera_size")
+
+
+@router.get("/options")
+def options(current_user: dict = Depends(get_current_user)):
+    """The saved calibrations to pick from when re-analysing a recording (any signed-in user; no files)."""
+    return dict(entries=[{k: e.get(k) for k in OPTION_KEYS} for e in store.list_entries()])
 
 
 @router.post("/library/{entry_id}/activate")
