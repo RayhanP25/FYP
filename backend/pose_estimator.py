@@ -44,6 +44,10 @@ POSE_CHANNELS_LAST = os.environ.get("POSE_CHANNELS_LAST", "0") == "1"  # no meas
 # Flip test = run every crop twice (mirrored too) and average: ~1.4x slower, but turning it off moved
 # keypoints by 0.6 px median / 6 px max in bench_speed.py, so it stays on unless you choose speed.
 POSE_FLIP_TEST = os.environ.get("POSE_FLIP_TEST", "1") == "1"
+# RTMDet keeps every box above 0.001 (thousands, 80 classes) and runs NMS on all of them: ~75 ms per
+# image. We only use the best person above 0.3 (_person_box), and greedy NMS never lets a box below
+# 0.3 suppress one above it, so dropping those first returns the same box much faster. 0 = default.
+DET_SCORE_THR = float(os.environ.get("POSE_DET_SCORE_THR", "0.3"))
 _direct_det = None
 _pose_model = None
 _detector = None
@@ -65,8 +69,21 @@ def _load_models():
         _pose_model.test_cfg["flip_test"] = POSE_FLIP_TEST
         _detector = DetInferencer(model="rtmdet_tiny_8xb32-300e_coco",
                                   device=_DEVICE, show_progress=False)
+        tune_detector(DET_SCORE_THR)
         if _DEVICE.startswith("cuda"):
             _setup_gpu_paths()
+
+
+def tune_detector(score_thr):
+    """Set RTMDet's pre-NMS score threshold (see DET_SCORE_THR). Returns the previous settings."""
+    cfg = getattr(getattr(_detector.model, "bbox_head", None), "test_cfg", None)
+    if cfg is None:
+        return None
+    old = dict(score_thr=cfg.get("score_thr"), nms_pre=cfg.get("nms_pre"))
+    if score_thr > 0:
+        cfg["score_thr"] = max(float(old["score_thr"] or 0), score_thr)
+        cfg["nms_pre"] = min(int(old["nms_pre"] or 1000), 1000)
+    return old
 
 
 def _setup_gpu_paths():
@@ -524,9 +541,20 @@ def process_video_with_overlays(
         raw_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
         return raw_result
 
-    healed_result = heal_and_render(raw_result, video_path, output_path, heal_kwargs)
+    healed_result = heal_and_render(raw_result, video_path, output_path, {**UPLOAD_HEAL, **(heal_kwargs or {})})
     healed_result["timing"]["total_seconds"] = round(time.perf_counter() - t_start, 2)
     return healed_result
+
+
+# Clean-up for single-camera uploads (stereo recordings use pose_postprocess's own defaults). Gentler than
+# those: only points under 30% confidence are dropped (the overlay already hides them), gaps of up to 8 frames
+# are filled, and a 5-frame window smooths. On fast movement the stricter settings drew joints several % of the
+# frame off (straight-line fills through the motion, smoothing lag); these keep the model's own positions.
+UPLOAD_HEAL = dict(
+    conf_threshold=float(os.environ.get("POSE_2D_HEAL_CONF", "0.3")),
+    max_gap=int(os.environ.get("POSE_2D_HEAL_MAX_GAP", "8")),
+    window_length=int(os.environ.get("POSE_2D_HEAL_WINDOW", "5")),
+)
 
 
 def heal_and_render(raw_result: dict, video_path: str, output_path: str, heal_kwargs: dict = None,
@@ -546,9 +574,11 @@ def heal_and_render(raw_result: dict, video_path: str, output_path: str, heal_kw
     raw_frames = raw_result["frames"]
     for i, fr in enumerate(healed_result["frames"]):
         src = raw_frames[i] if i < len(raw_frames) else {}
-        fr["angles_raw"] = src.get("angles", {})
         kp_raw = raw_keypoints[i] if raw_keypoints is not None and i < len(raw_keypoints) else src.get("keypoints")
         fr["keypoints_raw"] = kp_raw
+        # Angles of the untouched detections (raw_result's own angles may already include caller fixes).
+        fr["angles_raw"] = (calculate_frame_angles(kp_raw) if kp_raw else {}) if raw_keypoints is not None \
+            else src.get("angles", {})
 
     healed_result["timing"] = dict(healed_result.get("timing", {}))
     healed_result["timing"]["healing_seconds"] = round(heal_time, 2)

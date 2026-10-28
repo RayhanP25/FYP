@@ -43,6 +43,11 @@ ANGLE_TRIPLETS = {
 }
 
 
+def _round_kp(kp, nd=4):
+    """2D keypoints [[x, y, conf], ...] rounded (x, y are 0-1: 4 decimals is < 0.3 px at 2560 wide)."""
+    return [[round(float(v), nd) for v in p] if p else p for p in kp] if kp else kp
+
+
 def _out_size(fw, fh, target_w):
     if fw <= target_w:
         return fw, fh
@@ -129,7 +134,7 @@ def _split_to_temp(input_path, target_w):
 
 
 def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
-                         target_w=1280, output_path_right=None):
+                         target_w=1280, output_path_right=None, plain_paths=None):
     """
     input_path        : the side-by-side recording
     output_path       : where to write the 2D overlay of the LEFT view
@@ -137,6 +142,8 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
                         view. When given it is kept (not deleted) so the caller
                         can store it and let the user switch between views.
     calib_path        : calibration.npz from stereo_calibrate.py
+    plain_paths       : optional (left, right) paths: the two camera views without a skeleton drawn
+                        are moved there, so the page can draw raw or processed keypoints itself.
     """
     t_start = time.perf_counter()
     if not os.path.exists(calib_path):
@@ -153,6 +160,7 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         rawL = _run_inference(lp)
         rawR = _run_inference(rp)
         origL = [copy.deepcopy(f.get("keypoints")) for f in rawL["frames"]]
+        origR = [copy.deepcopy(f.get("keypoints")) for f in rawR["frames"]]
         t_pose_done = time.perf_counter()
 
         # 2. Cross-check the views: put left/right labels back where one camera mixed them up.
@@ -185,6 +193,16 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
             rejected_by_frame.append(list(rejected))
             rejected_counts[rejected] += 1
 
+        # Raw 3D for comparison: the detections exactly as the model gave them (no left/right fixes,
+        # healing, smoothing, spike removal or bone fit), triangulated without the reprojection check.
+        P_raw = np.full((n, NUM_KEYPOINTS, 3), np.nan)
+        for i in range(n):
+            X_raw, e_raw, _ = triangulate_checked(origL[i] if i < len(origL) else None,
+                                                  origR[i] if i < len(origR) else None,
+                                                  calib, DEFAULT_CONF_THRESHOLD, max_px=np.inf)
+            X_raw[~np.isfinite(e_raw)] = np.nan          # behind a camera: not a point at all
+            P_raw[i] = X_raw
+
         # 5. Drop one-frame 3D spikes (depth errors along the epipolar line that reprojection can't see).
         spikes = spike_mask(P)
         P[spikes] = np.nan
@@ -201,9 +219,29 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
                     f["angles"] = calculate_frame_angles(f["keypoints"])
         t_bones_done = time.perf_counter()
 
-        # 7. Overlay videos (now showing the filled-in joints too).
-        _render_overlay(lp, framesL, output_path, fps=rawL["fps"], stabilize_confidence=True)
-        _render_overlay(rp, framesR, roTmp, fps=rawR["fps"], stabilize_confidence=True)
+        # 7. Overlay videos (now showing the filled-in joints too), both at once: OpenCV drawing
+        #    releases the GIL and each video is decoded / encoded by its own ffmpeg process.
+        import threading
+        errors = []
+
+        def draw(src, frames_v, dst, fps_v):
+            try:
+                _render_overlay(src, frames_v, dst, fps=fps_v, stabilize_confidence=True)
+            except Exception as e:
+                errors.append(e)
+        threads = [threading.Thread(target=draw, args=(lp, framesL, output_path, rawL["fps"])),
+                   threading.Thread(target=draw, args=(rp, framesR, roTmp, rawR["fps"]))]
+        if os.environ.get("POSE_PARALLEL_OVERLAY", "0") == "1":
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+        else:                                   # one at a time (default)
+            for th in threads:
+                th.start()
+                th.join()
+        if errors:
+            raise errors[0]
         t_overlay_done = time.perf_counter()
 
         frames_3d = []
@@ -216,7 +254,15 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
                     angles[name] = round(ang, 2)
             kp_list = [None if np.any(np.isnan(p)) else [round(float(p[0]), 1), round(float(p[1]), 1),
                                                         round(float(p[2]), 1)] for p in pts3d]
+            angles_raw = {}
+            for name, (a, b, c) in ANGLE_TRIPLETS.items():
+                ang = angle_3d(P_raw[i][a], P_raw[i][b], P_raw[i][c])
+                if ang is not None:
+                    angles_raw[name] = round(ang, 2)
             f3 = {"frame_index": i, "keypoints_3d": kp_list, "angles_3d": angles,
+                  "keypoints_3d_raw": [None if not np.isfinite(p).all() else [round(float(v), 1) for v in p]
+                                       for p in P_raw[i]],
+                  "angles_3d_raw": angles_raw,
                   "reproj_px": [None if not np.isfinite(e) else round(float(e), 1) for e in errs[i]]}
             if rejected_by_frame[i]:
                 f3["rejected"] = rejected_by_frame[i]
@@ -235,6 +281,10 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
 
         t_triang = time.perf_counter()
     finally:
+        if plain_paths:                         # keep the clean views instead of deleting them
+            for src, dst in zip((lp, rp), plain_paths):
+                if dst and os.path.exists(src):
+                    os.replace(src, dst)
         cleanup = [lp, rp] if keep_right else [lp, rp, roTmp]
         for p in cleanup:
             if os.path.exists(p):
@@ -246,6 +296,8 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         "mode": "stereo_3d",
         "units": "mm",
         "frames": framesL[:n],          # 2D LEFT view -> keeps the existing chart working
+        "frames_right": [dict(keypoints=_round_kp(framesR[i].get("keypoints")),   # 2D RIGHT view, processed + raw
+                              keypoints_raw=_round_kp(origR[i] if i < len(origR) else None)) for i in range(n)],
         "frames_3d": frames_3d,         # triangulated 3D + true 3D angles
         "stereo_report": {               # how much the two cameras agreed (see stereo_refine.py)
             "swaps": {k: v for k, v in swap_report.items() if k != "per_frame"},

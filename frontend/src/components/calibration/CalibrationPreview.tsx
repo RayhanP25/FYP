@@ -11,7 +11,7 @@ const CalibrationPreview = ({ src, starting, onError }: CalibrationPreviewProps)
         {src ? (
             <>
                 <img src={src} alt="Stereo calibration preview" className="w-full h-auto object-contain" onError={onError} />
-                <span className="absolute top-3 left-3 px-2 py-1 rounded border border-border bg-background/90 text-[10px] font-medium uppercase tracking-[0.14em] text-text">
+                <span className="absolute top-3 right-3 px-2 py-1 rounded border border-border bg-background/90 text-[10px] font-medium uppercase tracking-[0.14em] text-text">
                     Left | Right
                 </span>
             </>

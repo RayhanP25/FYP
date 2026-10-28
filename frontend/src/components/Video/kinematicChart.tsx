@@ -16,6 +16,8 @@ const KP_NAMES = ['Nose', 'Neck', 'Left Shoulder', 'Right Shoulder', 'Left Elbow
 const KP_COLORS = ['#F55036', '#EE6983', '#D1C49F', '#9B8EC4', '#E8A04C', '#C97F6B', '#8FA98F', '#7FA3B8', '#E8C06B', '#B08BB0', '#4CC9F0', '#F72585', '#80ED99', '#FFD166', '#06D6A0', '#EF476F', '#E0E0E0', '#9CA3AF'];
 const AXES = ['X', 'Y', 'Z'];
 const DASHES = ['solid', 'dashed', 'dotted'];
+// One keypoint: X / Y / Z each get their own colour. Several: the keypoint's colour, with the axis as the dash.
+const AXIS_COLORS = ['#F55036', '#80ED99', '#4CC9F0'];
 interface Sample { i: number; p: number[]; }
 
 const getTrack = (frames: any[], kp: number): Sample[] =>
@@ -173,7 +175,9 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
             series = selectedKps.flatMap((kp) => {
                 const track = getTrack(analysisData.frames_3d, kp);
                 const start = posMode === 'displacement' && track.length ? track[0].p : [0, 0, 0];
-                return AXES.map((ax, a) => lineOf(`${KP_NAMES[kp]} ${ax}`, KP_COLORS[kp], track.map((s) => [toX(s.i), (s.p[a] - start[a]) / div]), DASHES[a]));
+                const single = selectedKps.length === 1;
+                return AXES.map((ax, a) => lineOf(`${KP_NAMES[kp]} ${ax}`, single ? AXIS_COLORS[a] : KP_COLORS[kp],
+                    track.map((s) => [toX(s.i), (s.p[a] - start[a]) / div]), single ? 'solid' : DASHES[a]));
             });
         } else if (activeTab === 'distance') {
             yName = `Distance from A (${unit})`;

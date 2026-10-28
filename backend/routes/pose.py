@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from database import client, database_name
 from minio_client import minio_client
+from access import can_access_analysis, can_access_video
 from routes.users import get_current_user
-from pose_estimator import process_video_with_overlays
+from routes.edits import apply_to as apply_keypoint_edits
+from pose_estimator import process_video_with_overlays, POSE_MIN_CONF, POSE_SURE_CONF
 from bson import ObjectId
+import calibration_store
 import os
 import tempfile
 import uuid
@@ -33,11 +36,11 @@ async def process_video(
     # 1. Verify video exists and belongs to user
     videos_collection = client[database_name]["videos"]
     try:
-        video_doc = videos_collection.find_one({"_id": ObjectId(video_id), "user_id": str(current_user["_id"])})
+        video_doc = videos_collection.find_one({"_id": ObjectId(video_id)})
     except:
         raise HTTPException(status_code=400, detail="Invalid video ID")
 
-    if not video_doc:
+    if not video_doc or not can_access_video(current_user, video_doc):
         raise HTTPException(status_code=404, detail="Video not found or access denied")
 
     # 2. Skip only if already processed AND not forcing a re-run
@@ -58,14 +61,24 @@ async def process_video(
     is_stereo = (video_doc.get("layout") == "side_by_side"
                  or video_doc.get("source") == "stereo_camera")
     temp_output_right_path = None
+    plain_paths = ()                          # stereo: both camera views without a skeleton drawn
+    # The calibration the recording was filmed with (falls back to the active one, calibration.npz).
+    calib_path, calib_is_temp, calib_doc = CALIB_PATH, False, None
+    if is_stereo:
+        try:
+            calib_path, calib_is_temp, calib_doc = calibration_store.file_for(video_doc.get("calibration_id"))
+        except Exception as ex:
+            print(f"calibration library unavailable, using calibration.npz: {ex!r}")
     try:
         temp_output_path = tempfile.mktemp(suffix="_processed.mp4")
-        if is_stereo and os.path.exists(CALIB_PATH):
+        if is_stereo and os.path.exists(calib_path):
             from stereo_process import process_stereo_video
             temp_output_right_path = tempfile.mktemp(suffix="_processed_right.mp4")
+            plain_paths = (tempfile.mktemp(suffix="_plain_L.mp4"), tempfile.mktemp(suffix="_plain_R.mp4"))
             result = process_stereo_video(temp_input_path, temp_output_path,
-                                          calib_path=CALIB_PATH,
-                                          output_path_right=temp_output_right_path)
+                                          calib_path=calib_path,
+                                          output_path_right=temp_output_right_path,
+                                          plain_paths=plain_paths)
         else:
             # If it's stereo but calibration is missing, fall back to 2D so it
             # still works (analyses the left half is not split here -- whole frame).
@@ -79,7 +92,13 @@ async def process_video(
             os.unlink(temp_output_path)
         if temp_output_right_path and os.path.exists(temp_output_right_path):
             os.unlink(temp_output_right_path)
+        for p in plain_paths:
+            if os.path.exists(p):
+                os.unlink(p)
         raise HTTPException(status_code=500, detail=f"Pose estimation failed: {str(e)}")
+    finally:
+        if calib_is_temp and os.path.exists(calib_path):
+            os.unlink(calib_path)
 
     # 5. Delete input temp file
     os.unlink(temp_input_path)
@@ -122,21 +141,50 @@ async def process_video(
         finally:
             os.unlink(temp_output_right_path)
 
+    # 7c. Stereo: also upload both views WITHOUT a skeleton, so the analysis page can draw the raw or the
+    #     processed keypoints over them itself (2D videos use the original upload for this).
+    plain_names = {}
+    for key, path in zip(("plain_object_name", "plain_object_name_right"), plain_paths):
+        if not os.path.exists(path):
+            continue
+        try:
+            name = f"{key.replace('_object_name', '')}_{uuid.uuid4()}.mp4"
+            with open(path, 'rb') as f:
+                minio_client.put_object(bucket_name="sport-pose-videos", object_name=name, data=f, length=-1,
+                                        part_size=10*1024*1024, content_type="video/mp4")
+            plain_names[key] = name
+        except Exception:
+            pass                               # the page falls back to the overlay videos
+        finally:
+            os.unlink(path)
+
     # 8. Update video metadata with processed video info
-    update_fields = {"processed_object_name": processed_object_name}
+    update_fields = {"processed_object_name": processed_object_name, **plain_names}
     if processed_object_name_right:
         update_fields["processed_object_name_right"] = processed_object_name_right
     videos_collection.update_one({"_id": ObjectId(video_id)}, {"$set": update_fields})
+
+    # How the page should draw keypoints itself (same rules as the overlay videos).
+    result["overlay_conf"] = {"min": POSE_MIN_CONF, "sure": POSE_SURE_CONF}
 
     # 9. Store keypoint analysis in MongoDB (stereo result also carries frames_3d)
     analysis_collection = client[database_name]["pose_analysis"]
     analysis_doc = {
         "video_id": video_id,
-        "user_id": str(current_user["_id"]),
+        "user_id": video_doc["user_id"],
         "status": "completed",
         "result": result,
         "created_at": datetime.now()
     }
+    if is_stereo and "frames_3d" in result:
+        if calib_doc is None:
+            try:
+                calib_doc = calibration_store.active()
+            except Exception:
+                calib_doc = None
+        if calib_doc:
+            analysis_doc["calibration_id"] = str(calib_doc["_id"])
+            analysis_doc["calibration_setup"] = calib_doc.get("setup")
     existing_analysis = analysis_collection.find_one({"video_id": video_id})
     if existing_analysis:
         analysis_collection.update_one({"_id": existing_analysis["_id"]}, {"$set": analysis_doc})
@@ -160,8 +208,12 @@ async def process_video(
 async def get_analysis(video_id: str, current_user: dict = Depends(get_current_user)):
     """Retrieve pose analysis results for a video."""
     analysis_collection = client[database_name]["pose_analysis"]
-    analysis = analysis_collection.find_one({"video_id": video_id, "user_id": str(current_user["_id"])})
-    if not analysis:
+    analysis = analysis_collection.find_one({"video_id": video_id})
+    if not analysis or not can_access_analysis(current_user, analysis):
         raise HTTPException(status_code=404, detail="No analysis found for this video")
     analysis["_id"] = str(analysis["_id"])
+    try:                                        # manual keypoint corrections (routes/edits.py)
+        analysis["result"] = apply_keypoint_edits(analysis, analysis.get("result"))
+    except Exception as ex:                     # show the analysis even if the edits can't be applied
+        print(f"keypoint edits not applied for {video_id}: {ex!r}")
     return analysis

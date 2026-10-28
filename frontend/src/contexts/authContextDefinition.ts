@@ -9,6 +9,8 @@ export interface AuthContextType {
     logout: () => void;
     isAuthenticated: () => boolean;
     isAdmin: () => boolean;
+    isCoach: () => boolean;
+    isAthlete: () => boolean;
 }
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined);

@@ -23,6 +23,8 @@ export interface User {
     profile_picture?: string;
     created_at?: string;
     last_login?: string;
+    coach_id?: string | null;
+    coach_name?: string | null;
 }
 
 export const login = async (credentials: LoginCredentials): Promise<LoginResponse> => {

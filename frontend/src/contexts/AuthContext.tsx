@@ -67,6 +67,14 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         return user?.role === 'admin';
     };
 
+    const isCoach = () => {
+        return user?.role === 'coach';
+    };
+
+    const isAthlete = () => {
+        return user?.role === 'athlete';
+    };
+
     const value: AuthContextType = {
         user,
         token,
@@ -74,7 +82,9 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         login,
         logout,
         isAuthenticated,
-        isAdmin
+        isAdmin,
+        isCoach,
+        isAthlete
     };
 
     return (

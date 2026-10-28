@@ -83,7 +83,12 @@ const TransportBar = ({ leftRef, rightRef, layoutKey, fps }: TransportBarProps) 
         else vs.forEach((v) => v.pause());
     };
 
-    const step = (dir: number) => { videos().forEach((v) => v.pause()); seek(timeRef.current + dir / fps); };
+    // One frame back / forward, landing a quarter into the frame so every panel (videos round the time to a
+    // frame, the 3D view floors it) shows the same frame - needed when editing keypoints frame by frame.
+    const step = (dir: number) => {
+        videos().forEach((v) => v.pause());
+        seek((Math.round(timeRef.current * fps) + dir + 0.25) / fps);
+    };
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {

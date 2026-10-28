@@ -3,12 +3,17 @@ from minio_client import minio_client
 from datetime import timedelta, datetime
 from database import client, database_name
 from bson import ObjectId
+from pydantic import BaseModel
 import uuid
 from routes.users import get_current_user
+from access import can_access_owner, can_access_video, names, visible_owner_ids
 
 # from database.minio_config import minio_client
 
 router = APIRouter()
+
+class OwnerUpdate(BaseModel):
+    owner_id: str
 
 @router.post("/upload-video")
 async def upload_video(video: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
@@ -65,7 +70,10 @@ async def upload_video(video: UploadFile = File(...), current_user: dict = Depen
     return {"object_name": object_name, "video_id": str(video_doc["_id"])}
 
 @router.get("/get-video/{video_id}")
-async def get_video(video_id: str, view: str = "left", current_user: dict = Depends(get_current_user)):
+async def get_video(video_id: str, view: str = "left", variant: str = "overlay",
+                    current_user: dict = Depends(get_current_user)):
+    """variant="plain": the camera view without a skeleton drawn (the analysis page draws raw or processed
+    keypoints over it). Falls back to the overlay video when there is no plain one (older analyses)."""
     # Find video metadata in MongoDB
     videos_collection = client[database_name]["videos"]
     
@@ -78,7 +86,7 @@ async def get_video(video_id: str, view: str = "left", current_user: dict = Depe
         raise HTTPException(status_code=404, detail="Video not found")
     
     # Verify user ownership (admin can access any video)
-    if current_user.get("role") != "admin" and video_doc["user_id"] != str(current_user["_id"]):
+    if not can_access_video(current_user, video_doc):
         raise HTTPException(status_code=403, detail="Access denied: You don't own this video")
     
     # Use processed video if available, otherwise use original.
@@ -88,6 +96,14 @@ async def get_video(video_id: str, view: str = "left", current_user: dict = Depe
         object_name = right_object_name
     else:
         object_name = video_doc.get("processed_object_name") or video_doc["object_name"]
+    plain = None
+    if variant == "plain" and video_doc.get("processed_object_name"):
+        is_stereo = video_doc.get("layout") == "side_by_side" or video_doc.get("source") == "stereo_camera"
+        if is_stereo:
+            plain = video_doc.get("plain_object_name_right" if view == "right" else "plain_object_name")
+        elif view != "right":
+            plain = video_doc["object_name"]          # a 2D analysis ran on the upload itself
+        object_name = plain or object_name
     
     # Generate presigned URL from MinIO
     try:
@@ -107,25 +123,29 @@ async def get_video(video_id: str, view: str = "left", current_user: dict = Depe
             or video_doc.get("object_name", "Untitled video"),
         "content_type": video_doc.get("content_type", "video/mp4"),
         "uploaded_at": video_doc.get("uploaded_at") or video_doc.get("created_at"),
+        "owner_id": video_doc["user_id"],
+        "owner_name": names([video_doc["user_id"]]).get(video_doc["user_id"]),
         "is_processed": bool(video_doc.get("processed_object_name")),
         "view": "right" if (view == "right" and right_object_name) else "left",
+        "variant": "plain" if plain else "overlay",
         "has_right_view": bool(right_object_name)
     }
 
 @router.get("/my-videos")
 async def get_my_videos(current_user: dict = Depends(get_current_user)):
-    # Get all videos for the current user
     videos_collection = client[database_name]["videos"]
-    
-    videos = list(videos_collection.find({"user_id": str(current_user["_id"])}))
-    
+    owners = visible_owner_ids(current_user)
+    videos = list(videos_collection.find({"user_id": {"$in": owners}} if owners is not None else {}))
+    ids = [str(v["_id"]) for v in videos]
+    user_names = names([v["user_id"] for v in videos])
+
     # Convert ObjectId to string and format response.
     # Use .get() with fallbacks so a document missing a field (e.g. a camera
     # recording) can never crash the whole list.
     analysis_modes = {
         a["video_id"]: (a.get("result") or {}).get("mode")
         for a in client[database_name]["pose_analysis"].find(
-            {"user_id": str(current_user["_id"])}, {"video_id": 1, "result.mode": 1})
+            {"video_id": {"$in": ids}}, {"video_id": 1, "result.mode": 1})
     }
 
     result = []
@@ -144,9 +164,29 @@ async def get_my_videos(current_user: dict = Depends(get_current_user)):
             "file_size": video.get("file_size", 0),
             "uploaded_at": video.get("uploaded_at") or video.get("created_at"),
             "source": video.get("source", "upload"),
+            "owner_id": video["user_id"],
+            "owner_name": user_names.get(video["user_id"]),
         })
 
     return {"videos": result}
+
+@router.put("/videos/{video_id}/owner")
+async def set_video_owner(video_id: str, body: OwnerUpdate, current_user: dict = Depends(get_current_user)):
+    try:
+        video_doc = client[database_name]["videos"].find_one({"_id": ObjectId(video_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid video ID format")
+    if not video_doc:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if current_user.get("role") == "athlete" or not can_access_video(current_user, video_doc):
+        raise HTTPException(status_code=403, detail="Access denied: You can't move this video")
+    if not ObjectId.is_valid(body.owner_id) or not client[database_name]["users"].find_one({"_id": ObjectId(body.owner_id)}):
+        raise HTTPException(status_code=404, detail="User not found")
+    if not can_access_owner(current_user, body.owner_id):
+        raise HTTPException(status_code=403, detail="You can only move videos to yourself or your athletes.")
+    client[database_name]["videos"].update_one({"_id": video_doc["_id"]}, {"$set": {"user_id": body.owner_id}})
+    client[database_name]["pose_analysis"].update_many({"video_id": video_id}, {"$set": {"user_id": body.owner_id}})
+    return {"video_id": video_id, "owner_id": body.owner_id}
 
 @router.delete("/delete-video/{video_id}")
 async def delete_video(video_id: str, current_user: dict = Depends(get_current_user)):
@@ -164,7 +204,7 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=404, detail="Video not found")
 
     # Verify user ownership (admin can delete any video)
-    if current_user.get("role") != "admin" and video_doc["user_id"] != str(current_user["_id"]):
+    if not can_access_video(current_user, video_doc):
         raise HTTPException(status_code=403, detail="Access denied: You don't own this video")
 
     # Delete from MinIO (both original and processed if exists)
@@ -177,7 +217,7 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=500, detail=f"Failed to delete video from storage: {str(e)}")
 
     # Delete processed videos if they exist
-    for key in ("processed_object_name", "processed_object_name_right"):
+    for key in ("processed_object_name", "processed_object_name_right", "plain_object_name", "plain_object_name_right"):
         if video_doc.get(key):
             try:
                 minio_client.remove_object(
@@ -196,7 +236,7 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
     # Delete associated pose analysis if exists
     try:
         analysis_collection.delete_one({"video_id": video_id})
-    except Exception:
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete associated pose analysis: {str(e)}")
 
     return {"message": "Video deleted successfully"}

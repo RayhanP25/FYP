@@ -4,7 +4,8 @@ calibration.py -- stereo calibration from the browser (admin only).
 Same capture / calibrate / floor-level logic as stereo_calibrate.py, but driven by the buttons on the
 Calibration page. It reuses the cameras already held by routes/camera.py, so the live feed and the
 calibration never open USB cameras twice. Output is backend/calibration.npz, the file routes/pose.py
-uses for every stereo video.
+uses for stereo videos; each result is also saved in the calibration library (calibration_store.py)
+under the setup name chosen when the session started, so setups can be switched later.
 
 Calibrate and floor take a while, so they run in a background thread; the page polls /status until
 `job` clears.
@@ -21,7 +22,9 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
+import calibration_store as store
 import stereo_calibrate as sc
 from routes.camera import manager, recorder
 from routes.users import require_admin
@@ -41,6 +44,8 @@ class _State:
         self.session = None      # sc.CalibrationSession while a session is open
         self.grab = None         # frame source for the open session
         self.job = None          # "calibrate" | "floor" while running in the background
+        self.setup = None        # setup name the session's calibration is saved under
+        self.entry_id = None     # library entry made by this session's calibrate
         self.message, self.message_t = "", 0.0
 
 
@@ -101,25 +106,36 @@ def _start_job(kind, fn):
 
 
 def _calibration_info():
-    """Summary of the saved calibration.npz (None if there is none yet)."""
+    """Summary of the active calibration.npz (None if there is none yet)."""
     if not os.path.exists(CALIB_PATH):
         return None
     d = sc.load(CALIB_PATH)
     meta = json.loads(str(d["meta_json"])) if "meta_json" in d else {}
-    return dict(
+    info = dict(
         updated_at=datetime.fromtimestamp(os.path.getmtime(CALIB_PATH)).isoformat(timespec="seconds"),
         rms=float(d["rms"]), square_mm=float(d["square_mm"]), pairs=int(d["n_pairs"]),
         camera_size=[int(v) for v in np.asarray(d["size1"]).ravel()[:2]],
         floor_set="R_level" in d,
+        baseline_mm=round(float(np.linalg.norm(np.asarray(d["T"], float))), 1),
+        calibrated_at=meta.get("date"),
         report=meta.get("report", []), floor_report=meta.get("floor_report", []),
+        id=None, setup=None,
     )
+    if not state.job:                  # don't race the job that is writing calibration.npz
+        try:
+            doc = store.active()
+            if doc:
+                info.update(id=str(doc["_id"]), setup=doc.get("setup"))
+        except Exception as ex:        # the library is optional for this page; report and carry on
+            print(f"calibration library unavailable: {ex!r}")
+    return info
 
 
 def _session_info(s):
     lines, ok = s.cov.summary()
     return dict(folder=s.folder, pairs=len(s.objpoints), min_pairs=sc.MIN_PAIRS, aim_pairs=AIM_PAIRS,
                 checks=[dict(text=t, ok=bool(g)) for t, g in zip(lines, ok.values())],
-                saved=len(s.saved), camera_size=list(s.sizeL))
+                saved=len(s.saved), camera_size=list(s.sizeL), setup=state.setup)
 
 
 @router.get("/status")
@@ -187,8 +203,12 @@ def preview(current_user: dict = Depends(require_admin)):
                              media_type="multipart/x-mixed-replace; boundary=frame")
 
 
+class SessionStart(BaseModel):
+    setup: str = ""
+
+
 @router.post("/session/start")
-def start_session(current_user: dict = Depends(require_admin)):
+def start_session(body: SessionStart = SessionStart(), current_user: dict = Depends(require_admin)):
     with state.lock:
         if recorder.active:
             raise HTTPException(status_code=409, detail="Stop the camera recording first.")
@@ -209,6 +229,8 @@ def start_session(current_user: dict = Depends(require_admin)):
             date=datetime.now().isoformat(timespec="seconds"), session=folder,
             board=list(sc.CHECKERBOARD), square_mm=sc.SQUARE_MM, source="web"))
         state.grab = _frame_source()
+        state.setup = body.setup.strip() or store.UNASSIGNED
+        state.entry_id = None
         _say("Session started. Hold the board in both views and press Capture.")
     return {"status": "active"}
 
@@ -254,7 +276,12 @@ def calibrate(current_user: dict = Depends(require_admin)):
         s = _active_session()
         if len(s.objpoints) < sc.MIN_PAIRS:
             raise HTTPException(status_code=409, detail=f"Need at least {sc.MIN_PAIRS} pairs (have {len(s.objpoints)}).")
-        _start_job("calibrate", s.calibrate)
+        setup, user = state.setup, current_user.get("email")
+
+        def run():
+            s.calibrate()
+            state.entry_id = store.record_current(setup, created_by=user)
+        _start_job("calibrate", run)
     return {"status": "running"}
 
 
@@ -263,5 +290,63 @@ def floor(current_user: dict = Depends(require_admin)):
     with state.lock:
         s = _active_session()
         grab = state.grab
-        _start_job("floor", lambda: s.set_floor(grab))
+        # The floor is added to the active calibration: this session's, or the one in use before it.
+        target = state.entry_id
+        if target is None:
+            doc = store.active()
+            target = doc["_id"] if doc else None
+
+        def run():
+            s.set_floor(grab)
+            if target is not None:
+                store.update_current(target)
+        _start_job("floor", run)
     return {"status": "running"}
+
+
+# ---- calibration library: one entry per calibration, grouped by setup ----
+
+class EntryUpdate(BaseModel):
+    setup: str
+
+
+def _no_job():
+    if state.job:
+        raise HTTPException(status_code=409, detail=f"Wait for '{state.job}' to finish.")
+
+
+@router.get("/library")
+def library(current_user: dict = Depends(require_admin)):
+    return dict(entries=store.list_entries(), setups=store.setups())
+
+
+@router.post("/library/{entry_id}/activate")
+def activate_entry(entry_id: str, current_user: dict = Depends(require_admin)):
+    with state.lock:
+        _no_job()
+        if recorder.active:
+            raise HTTPException(status_code=409, detail="Stop the camera recording first.")
+        entry = store.activate(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Calibration not found.")
+    _say(f"Using the {entry['setup']} calibration.")
+    return entry
+
+
+@router.patch("/library/{entry_id}")
+def rename_entry(entry_id: str, body: EntryUpdate, current_user: dict = Depends(require_admin)):
+    entry = store.rename(entry_id, body.setup)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Calibration not found.")
+    return entry
+
+
+@router.delete("/library/{entry_id}")
+def delete_entry(entry_id: str, current_user: dict = Depends(require_admin)):
+    _no_job()
+    try:
+        if not store.delete(entry_id):
+            raise HTTPException(status_code=404, detail="Calibration not found.")
+    except ValueError as ex:
+        raise HTTPException(status_code=409, detail=str(ex))
+    return {"status": "deleted"}

@@ -9,6 +9,7 @@ import {
     capturePair,
     endCalibrationSession,
     errorDetail,
+    getCalibrationLibrary,
     getCalibrationStatus,
     runCalibration,
     runFloorLevel,
@@ -18,6 +19,7 @@ import {
 import CalibrationPreview from '@/components/calibration/CalibrationPreview';
 import CoverageChecks from '@/components/calibration/CoverageChecks';
 import CalibrationReport from '@/components/calibration/CalibrationReport';
+import CalibrationLibrary from '@/components/calibration/CalibrationLibrary';
 
 const SHORTCUT_BLOCKERS = ['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT'];
 
@@ -37,6 +39,7 @@ const CalibrationPage = () => {
     const queryClient = useQueryClient();
     const backendUrl = api.defaults.baseURL || 'http://localhost:8000';
     const [streamKey, setStreamKey] = useState(0);
+    const [setupName, setSetupName] = useState<string | null>(null);
     const lastJob = useRef<string | null>(null);
 
     const { data: status } = useQuery({
@@ -44,6 +47,8 @@ const CalibrationPage = () => {
         queryFn: getCalibrationStatus,
         refetchInterval: (query) => (query.state.data?.session || query.state.data?.job ? 1000 : 4000),
     });
+
+    const { data: library } = useQuery({ queryKey: ['calibration-library'], queryFn: getCalibrationLibrary });
 
     const session = status?.session ?? null;
     const calibration = status?.calibration ?? null;
@@ -53,10 +58,16 @@ const CalibrationPage = () => {
     const minPairs = session?.min_pairs ?? 15;
     const aimPairs = session?.aim_pairs ?? 25;
     const canCapture = !!session && live && !busy;
+    // Default the setup box to the setup in use (until the user types something).
+    const activeSetup = calibration?.setup && calibration.setup !== 'Unassigned' ? calibration.setup : '';
+    const setup = setupName ?? activeSetup;
 
     const { mutate, isPending } = useMutation({
         mutationFn: (request: () => Promise<unknown>) => request(),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['calibration-status'] }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['calibration-status'] });
+            queryClient.invalidateQueries({ queryKey: ['calibration-library'] });
+        },
         onError: (error) => toast.error(errorDetail(error, 'Something went wrong.')),
     });
 
@@ -66,8 +77,9 @@ const CalibrationPage = () => {
             if (status.message.includes('failed')) toast.error(status.message);
             else toast.success(status.message);
         }
+        if (lastJob.current && !job) queryClient.invalidateQueries({ queryKey: ['calibration-library'] });
         lastJob.current = job;
-    }, [status?.job, status?.message]);
+    }, [status?.job, status?.message, queryClient]);
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -82,7 +94,7 @@ const CalibrationPage = () => {
 
     const startSession = () =>
         mutate(async () => {
-            await startCalibrationSession();
+            await startCalibrationSession(setup.trim());
             setStreamKey((k) => k + 1);
             toast.success('Calibration session started.');
         });
@@ -99,7 +111,8 @@ const CalibrationPage = () => {
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight text-text">Calibration</h1>
                         <p className="mt-2 text-sm text-text-muted">
-                            Calibrate the stereo cameras after they move. Recalibrating replaces the calibration used for all stereo videos.
+                            Calibrate the stereo cameras after they move. Each calibration is saved under its setup, so you can switch back to an earlier one.
+                            Recordings keep the calibration they were filmed with.
                         </p>
                     </div>
                     {status?.camera_size && (
@@ -119,9 +132,22 @@ const CalibrationPage = () => {
 
                         <div className="flex flex-wrap items-center gap-3">
                             {!session ? (
-                                <Button onClick={startSession} disabled={isPending} className="gap-2">
-                                    <Play className="w-4 h-4" /> Start session
-                                </Button>
+                                <>
+                                    <input
+                                        list="calibration-setups"
+                                        value={setup}
+                                        onChange={(e) => setSetupName(e.target.value)}
+                                        placeholder="Setup name, e.g. NeuonAI or Home Rig"
+                                        aria-label="Setup name"
+                                        className="w-72 max-w-full px-3 py-2 rounded-md bg-background-main border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                                    />
+                                    <datalist id="calibration-setups">
+                                        {library?.setups.filter((s) => s !== 'Unassigned').map((s) => <option key={s} value={s} />)}
+                                    </datalist>
+                                    <Button onClick={startSession} disabled={isPending || !setup.trim()} className="gap-2">
+                                        <Play className="w-4 h-4" /> Start session
+                                    </Button>
+                                </>
                             ) : (
                                 <>
                                     <Button onClick={() => mutate(captureRequest)} disabled={!canCapture || isPending} className="gap-2">
@@ -166,6 +192,7 @@ const CalibrationPage = () => {
                                         <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.min(100, (pairs / aimPairs) * 100)}%` }} />
                                     </div>
                                     <p className="font-mono text-[11px] text-text-muted truncate" title={session.folder}>{session.folder.split(/[\\/]/).pop()}</p>
+                                    <p className="text-xs text-text-muted">Saves to setup <span className="text-text">{session.setup ?? 'Unassigned'}</span></p>
                                 </div>
                             ) : (
                                 <p className="text-sm text-text-muted">No session running.</p>
@@ -187,21 +214,29 @@ const CalibrationPage = () => {
                                         </p>
                                     )}
                                     <dl className="grid grid-cols-2 gap-y-2.5 text-sm">
+                                        <dt className="text-text-muted">Setup</dt>
+                                        <dd className="text-text text-right truncate">{calibration.setup ?? '-'}</dd>
                                         <dt className="text-text-muted">Stereo RMS</dt>
                                         <dd className="text-text tabular-nums text-right">{calibration.rms.toFixed(3)} px</dd>
                                         <dt className="text-text-muted">Square size</dt>
                                         <dd className="text-text tabular-nums text-right">{calibration.square_mm} mm</dd>
+                                        <dt className="text-text-muted">Baseline</dt>
+                                        <dd className="text-text tabular-nums text-right">{(calibration.baseline_mm / 1000).toFixed(2)} m</dd>
                                         <dt className="text-text-muted">Pairs used</dt>
                                         <dd className="text-text tabular-nums text-right">{calibration.pairs}</dd>
                                         <dt className="text-text-muted">Floor level</dt>
                                         <dd className={`text-right ${calibration.floor_set ? 'text-green-500' : 'text-text-muted'}`}>{calibration.floor_set ? 'Set' : 'Not set'}</dd>
-                                        <dt className="text-text-muted">Updated</dt>
-                                        <dd className="text-text text-right">{new Date(calibration.updated_at).toLocaleString()}</dd>
+                                        <dt className="text-text-muted">Calibrated</dt>
+                                        <dd className="text-text text-right">{new Date(calibration.calibrated_at ?? calibration.updated_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</dd>
                                     </dl>
                                 </div>
                             ) : (
                                 <p className="text-sm text-text-muted">No calibration yet. Capture pairs, then calibrate.</p>
                             )}
+                        </Panel>
+
+                        <Panel title="Saved calibrations">
+                            <CalibrationLibrary disabled={busy || !!status?.recording} />
                         </Panel>
 
                         <Panel title="Report">

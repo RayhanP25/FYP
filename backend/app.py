@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import client, database_name
-from routes import users, ping, upload, pose, camera, calibration
+from routes import users, ping, upload, pose, camera, calibration, dashboard, edits
 
 '''cd .venv/Scripts
  .\Activate.ps1
@@ -26,10 +26,12 @@ app.include_router(upload.router, prefix="/api")
 app.include_router(pose.router, prefix="/api")
 app.include_router(camera.router, prefix="/api")
 app.include_router(calibration.router, prefix="/api")
+app.include_router(dashboard.router, prefix="/api")
+app.include_router(edits.router, prefix="/api")
 
 
 @app.on_event("startup")
 def _report_video_backend():
     # Probes NVENC / libx264 once and logs which one this machine will use.
     import threading, video_io
-    threading.Thread(target=lambda: print(video_io.describe()), daemon=True).start()
+    threading.Thread(target=lambda: print(video_io.describe()), daemon=True).start()
