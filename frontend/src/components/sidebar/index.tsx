@@ -22,7 +22,7 @@ const Sidebar = () => {
 
     return (
         <aside className="w-64 bg-background-main border-r border-border h-screen flex flex-col fixed left-0 top-0">
-            <div className="p-6 border-b border-border">
+            <div className="h-16 px-6 border-b border-border flex items-center">
                 <div className="flex items-center gap-2">
                     <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
                         <Video className="w-5 h-5 text-white" />
@@ -102,4 +102,4 @@ const Sidebar = () => {
     );
 };
 
-export default Sidebar
+export default Sidebar

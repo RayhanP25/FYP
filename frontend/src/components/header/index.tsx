@@ -20,8 +20,8 @@ const Header = () => {
   const getBreadcrumb = () => BREADCRUMB_MAP[Object.keys(BREADCRUMB_MAP).find((p) => location.pathname === p || location.pathname.startsWith(p + '/')) ?? ''] || 'Dashboard';
 
   return (
-    <header className="bg-background-main border-b border-border">
-      <div className="flex items-center justify-between px-6 py-2">
+    <header className="h-16 bg-background-main border-b border-border">
+      <div className="h-full flex items-center justify-between px-6">
         <div className="flex items-center gap-3">
           <Menu className="w-5 h-5 text-text-muted" />
           <div className="flex items-center gap-2 text-sm">
