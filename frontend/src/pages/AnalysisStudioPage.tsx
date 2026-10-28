@@ -7,7 +7,7 @@ import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, Pencil, Redo2, Refres
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
-import { getVideoUrl, moveVideo } from '@/api/videoApi';
+import { getVideoUrl, moveVideo, renameVideo } from '@/api/videoApi';
 import { athletesInGroups, getGroups } from '@/api/groupApi';
 import { useAuth } from '@/hooks/useAuth';
 import { getEdits, revertEdits, saveEdits } from '@/api/editsApi';
@@ -94,6 +94,20 @@ const AnalysisStudioPage = () => {
         queryFn: async () => (await api.get(`/api/get-analysis/${videoId}`)).data.result,
         retry: false,
     });
+    const [renaming, setRenaming] = useState(false);
+    const [nameDraft, setNameDraft] = useState('');
+    const rename = useMutation({
+        mutationFn: (name: string) => renameVideo(videoId, name),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['my-videos'] });
+            queryClient.invalidateQueries({ queryKey: ['studio-video', videoId] });
+        },
+    });
+    const saveName = (value: string) => {
+        setRenaming(false);
+        const name = value.trim();
+        if (name && name !== meta?.original_filename) rename.mutate(name);
+    };
 
     const is3D = !!analysis?.frames_3d?.length;
     const { data: editInfo } = useQuery({ queryKey: ['edits', videoId], queryFn: () => getEdits(videoId), enabled: is3D, retry: false });
@@ -386,7 +400,33 @@ const AnalysisStudioPage = () => {
                         <button onClick={() => navigate('/analysis')} className="inline-flex items-center gap-1.5 mb-3 text-xs uppercase tracking-[0.16em] text-text-muted hover:text-text transition-colors">
                             <ArrowLeft className="w-3.5 h-3.5" /> Library
                         </button>
-                        <h1 className="text-3xl font-semibold tracking-tight text-text truncate">{meta?.original_filename || 'Analysis'}</h1>
+                        <div className="flex items-center gap-3 min-w-0">
+                            {renaming ? (
+                                <input
+                                    autoFocus type="text" value={nameDraft}
+                                    onChange={(e) => setNameDraft(e.target.value)}
+                                    onBlur={(e) => saveName(e.currentTarget.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') e.currentTarget.blur();
+                                        if (e.key === 'Escape') { e.currentTarget.value = meta?.original_filename || ''; e.currentTarget.blur(); }
+                                    }}
+                                    className="text-3xl font-semibold tracking-tight text-text bg-background border border-primary rounded px-2 py-0.5 min-w-0 w-full focus:outline-none"
+                                />
+                            ) : (
+                                <>
+                                    <h1 className="text-3xl font-semibold tracking-tight text-text truncate">{meta?.original_filename || 'Analysis'}</h1>
+                                    {meta && (
+                                        <button
+                                            onClick={() => { setNameDraft(meta.original_filename); setRenaming(true); }}
+                                            className="shrink-0 p-1.5 rounded text-text-muted hover:text-primary transition-colors"
+                                            aria-label="Edit video name"
+                                        >
+                                            <Pencil className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                </>
+                            )}
+                        </div>
                         {analysis && (
                             <div className="mt-2 flex items-center gap-4 text-sm text-text-muted tabular-nums">
                                 <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium">{is3D ? 'Stereo 3D' : '2D'}</span>
