@@ -17,6 +17,22 @@
     --color-text-muted: #8C8C8C;
     /* text-gray-400 white*/
     --color-text-inverse: white;
+
+    /* Dashboard motion (used with motion-safe:, so reduced-motion users see a still page). */
+    --animate-rise: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    --animate-grow: grow 0.9s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    --animate-twinkle: twinkle 2.4s ease-in-out infinite;
+
+    @keyframes rise {
+        from { opacity: 0; transform: translateY(10px); }
+    }
+    @keyframes grow {
+        from { transform: scaleX(0); }
+    }
+    @keyframes twinkle {
+        0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        50% { transform: scale(1.25) rotate(15deg); opacity: 0.7; }
+    }
 }
 
 @utility no-scrollbar {
