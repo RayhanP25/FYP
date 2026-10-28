@@ -133,10 +133,7 @@ export default function CameraCapture() {
             <div className="p-6 h-full flex flex-col overflow-hidden max-w-6xl mx-auto">
                 <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 shrink-0">
                     <div>
-                        <h1 className="text-3xl font-bold text-text mb-2">3D Triangulation Capture</h1>
                         <div className="flex items-center gap-3 text-sm text-text-muted">
-                            <p>Stereo capture from two cameras, recorded side by side.</p>
-                            <span className="hidden sm:inline-block w-1 h-1 rounded-full bg-border"></span>
                             <p className="flex items-center gap-1.5 font-mono text-xs bg-background px-2 py-1 rounded border border-border">
                                 <span className={`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-text-muted'}`}></span>
                                 MODE: {isStreaming ? mode : 'IDLE'}

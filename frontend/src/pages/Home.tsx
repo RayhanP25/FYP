@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, CircleDashed, Clock, FileVideo, Sparkles, Upload, Video } from 'lucide-react';
 import AppLayout from '../layout/AppLayout';
-import { useAuth } from '../hooks/useAuth';
 import { getDashboard, type DashboardVideo } from '../api/dashboardApi';
 
 const formatDateTime = (iso: string) =>
@@ -87,15 +86,13 @@ const VideoList = ({ videos, empty }: { videos: DashboardVideo[]; empty: string 
 };
 
 function HomePage() {
-    const { user } = useAuth();
     const { data, isLoading, isError } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboard, refetchOnWindowFocus: true });
-    const firstName = user?.full_name?.split(' ')[0];
 
     return (
         <AppLayout>
             <div className="flex flex-col gap-8 max-w-[1500px] mx-auto">
                 <div>
-                    <h1 className="text-3xl font-semibold tracking-tight text-text">{firstName ? `Welcome back, ${firstName}` : 'Dashboard'}</h1>
+
                 </div>
 
                 {isLoading && <div className="py-24 text-center text-sm text-text-muted">Loading...</div>}

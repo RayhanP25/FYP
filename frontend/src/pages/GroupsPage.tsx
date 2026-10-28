@@ -352,15 +352,7 @@ const ManageGroups = () => {
     return (
         <AppLayout>
             <div className="flex flex-col gap-6">
-                <div className="flex flex-wrap items-end justify-between gap-4">
-                    <div>
-                        <h1 className="text-2xl font-semibold text-text">Groups</h1>
-                        <p className="mt-1 text-sm text-text-muted">
-                            {admin
-                                ? 'Pick a coach to manage their groups. Every athlete belongs to one group.'
-                                : 'Every athlete belongs to one group, and you can see the videos of everyone in your groups.'}
-                        </p>
-                    </div>
+                <div className="flex flex-wrap items-end justify-end gap-4">
                     <button onClick={() => { setShowUnassigned(true); setUnassignedSearch(''); }} className={secondaryBtn}>
                         <Users className="h-4 w-4" /> Unassigned athletes
                         <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">{unassigned.length}</span>

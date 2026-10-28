@@ -118,11 +118,6 @@ const CalibrationPage = () => {
             <div className="h-[calc(100dvh-6.5rem)] min-h-[560px] flex flex-col gap-5 max-w-[1800px] mx-auto overflow-hidden">
                 <div className="flex items-end justify-between gap-6">
                     <div className="min-w-0">
-                        <h1 className="text-3xl font-semibold tracking-tight text-text">Calibration</h1>
-                        <p className="mt-1.5 text-sm text-text-muted truncate">
-                            Calibrate after the cameras move. Pick which saved calibration is in use; recordings keep the one they were filmed with
-                            (choose another when you re-analyze).
-                        </p>
                     </div>
                     {status?.camera_size && (
                         <span className="shrink-0 px-2.5 py-1 rounded border border-border text-xs font-medium tabular-nums text-text-secondary">
