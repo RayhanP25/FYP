@@ -58,7 +58,6 @@ const AnalysisLibraryPage = () => {
             <div className="flex flex-col gap-5 max-w-[1800px] mx-auto">
                 <div className="flex items-end justify-between gap-6 flex-wrap">
                     <div>
-                        <h1 className="text-2xl font-semibold tracking-tight text-text">Analysis</h1>
                         <p className="mt-1 text-sm text-text-muted tabular-nums">
                             {all.length.toLocaleString()} {all.length === 1 ? 'video' : 'videos'}
                         </p>
@@ -86,12 +85,13 @@ const AnalysisLibraryPage = () => {
 
                 <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-5 items-start">
                     <aside className="sticky top-4 flex flex-col gap-2">
-                        <p className="px-1 text-xs font-medium text-text-muted">Uploaded by</p>
-                        <input
-                            type="text" placeholder="Search by name" value={uploaderSearch}
-                            onChange={(e) => setUploaderSearch(e.target.value)}
-                            className="h-8 px-2.5 rounded-md bg-background border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
-                        />
+                        <div className="h-10 flex items-center">
+                            <input
+                                type="text" placeholder="Search by name" value={uploaderSearch}
+                                onChange={(e) => setUploaderSearch(e.target.value)}
+                                className="w-full h-10 px-2.5 rounded-md bg-background border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
+                            />
+                        </div>
                         <div className="flex flex-col gap-0.5">
                             <button onClick={() => selectUploader(null)} className={filterClass(!uploader)}>
                                 <span>All uploaders</span>
