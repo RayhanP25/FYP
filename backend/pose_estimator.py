@@ -4,6 +4,8 @@ import time
 import cv2
 import numpy as np
 import math
+import mmcv_ext_shim
+mmcv_ext_shim.install()   # before mmpose/mmdet: lets a venv with mmcv-lite run (RTX 50-series)
 from mmpose.apis import init_model, inference_topdown
 from mmdet.apis import DetInferencer
 
