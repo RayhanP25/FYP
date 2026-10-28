@@ -497,8 +497,8 @@ const AnalysisStudioPage = () => {
                                         </button>
                                     </Dialog.Trigger>
                                     <Dialog.Portal>
-                                        <Dialog.Overlay className="fixed inset-0 bg-black/70" />
-                                        <Dialog.Content className="fixed left-1/2 top-1/2 flex max-h-[70vh] w-[90vw] max-w-[420px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background shadow-xl focus:outline-none">
+                                        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/70" />
+                                        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[70vh] w-[90vw] max-w-[420px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background shadow-xl focus:outline-none">
                                             <div className="border-b border-border px-5 py-4">
                                                 <Dialog.Title className="font-semibold text-text">Assign video</Dialog.Title>
                                                 <Dialog.Description className="text-xs text-text-muted">Choose who this video belongs to.</Dialog.Description>
