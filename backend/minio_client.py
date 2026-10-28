@@ -9,5 +9,5 @@ minio_client = Minio(
     MINIO_API,
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
-    secure=False
+    secure=True
 )
