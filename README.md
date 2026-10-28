@@ -118,11 +118,16 @@ secrets from the team **privately**: never put them in git, chats or screenshots
 | `MINIO_API` | Cloudflare R2 endpoint **without** `https://`, e.g. `<account-id>.r2.cloudflarestorage.com` |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | R2 API token keys |
 | `MINIO_BUCKET` | Video bucket, default `sport-pose-videos` |
-| `CAMERA_LEFT_INDEX` / `CAMERA_RIGHT_INDEX` | Which cameras are left and right (see step 7) |
-| `CAMERA_WIDTH` / `CAMERA_HEIGHT` | Capture size, `1280` x `720` |
+| `CAMERA_LEFT_INDEX` / `CAMERA_RIGHT_INDEX` | Which cameras are left and right, usually `1` and `2` (see step 7) |
+| `CAMERA_WIDTH` / `CAMERA_HEIGHT` | Capture size: `2560` x `1440` for the 2K cameras |
+| `CAMERA_FPS` | `30` |
+| `CAMERA_OPEN_TIMEOUT_SEC` | `120`: 2K cameras can take a while to open |
+| `POSE_DET_EVERY` | `10`: how often the person detector re-runs (every N frames) |
+| `POSE_FP16` | **`1`**: half precision on the GPU. Much faster with practically the same keypoints, but it defaults to off, so set it |
 
 All the other settings (`POSE_*`, `CAMERA_*`, `CALIB_*`, `VIDEO_GPU`, ...) have sensible defaults and can
-stay unset.
+stay unset. If you change the camera resolution, calibrate again: a calibration only fits the resolution
+it was made at.
 
 ### MongoDB Atlas: allow this PC
 
@@ -167,9 +172,14 @@ accepts the app from port 5173, and `npm start` serves it on 3000, so every requ
 ## 7. First-time setup on a new PC
 
 1. **Log in** with an admin account. Users are in the shared database, so existing accounts work.
-2. **Cameras:** with both USB cameras plugged in, open http://localhost:8000/api/camera/list to see the
-   detected indices. Set `CAMERA_LEFT_INDEX` / `CAMERA_RIGHT_INDEX` in `backend\.env` (with a built-in
-   laptop camera the USB ones are often 1 and 2), restart the backend, then check the live feed on the
+2. **Cameras:** plug in both USB cameras, stop the backend, and run this in the activated venv:
+   ```bat
+   cd /d D:\FYP\backend
+   python probe_cams.py
+   ```
+   It lists the camera indices that work and saves a `probe_*.jpg` snapshot from each, so you can see
+   which camera is which. Set `CAMERA_LEFT_INDEX` / `CAMERA_RIGHT_INDEX` in `backend\.env` (with a
+   built-in laptop camera the USB ones are often 1 and 2). Start the backend and check the live feed on the
    **Camera** page. If left and right are the wrong way round, swap the two numbers.
 3. **Calibration:** the calibration must match *these* cameras in *this* position. On the
    **Calibration** page, enter the setup name (e.g. the room), click **New calibration**, capture at least
