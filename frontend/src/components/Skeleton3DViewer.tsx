@@ -15,6 +15,10 @@ interface Props {
   editing?: boolean;
   onEditJoint?: (frame: number, joint: number, value: [number, number, number]) => void;
   onSelectJoint?: (frame: number, joint: number | null) => void;
+  /** Video time (s) to open on, e.g. when the panel moves while the videos are paused. */
+  initialTime?: number;
+  /** A joint drag finished (the joint was let go). */
+  onDragEnd?: (frame: number, joint: number) => void;
   selectedJoint?: number | null;
   /** Usual bone lengths (mm) by "parent-child" joint key, shown while editing. */
   boneLengths?: Record<string, number>;
@@ -47,13 +51,16 @@ const BONES_RIGHT: [number, number][] = [[1, 3], [3, 5], [5, 7], [7, 9], [3, 11]
 const BONES_CENTER: [number, number][] = [[0, 1], [10, 11]];
 
 export default function Skeleton3DViewer({
-  videoId, apiBase = "", analysis, framing, editing = false, onEditJoint, onSelectJoint, selectedJoint = null,
+  videoId, apiBase = "", analysis, framing, editing = false, onEditJoint, onSelectJoint, onDragEnd, initialTime = 0, selectedJoint = null,
   boneLengths, lockBones = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [frames, setFrames] = useState<Frame3D[]>([]);
   const [fps, setFps] = useState(30);
-  const [idx, setIdx] = useState(0);
+  const [idx, setIdx] = useState(() => {
+    const n = analysis?.frames_3d?.length ?? 0;
+    return n ? Math.max(0, Math.min(n - 1, Math.floor(initialTime * (analysis?.fps || 30)))) : 0;
+  });
   const [yaw, setYaw] = useState(0.5);
   const [pitch, setPitch] = useState(0.15);
   const [zoom, setZoom] = useState(1);
@@ -307,7 +314,10 @@ export default function Skeleton3DViewer({
     setYaw((y) => y + dx * 0.01);
     setPitch((p) => Math.max(-1.4, Math.min(1.4, p + dy * 0.01)));
   };
-  const onUp = () => { drag.current = null; jointDrag.current = null; setDragging(false); };
+  const onUp = () => {
+    if (jointDrag.current) onDragEnd?.(idx, jointDrag.current.joint);
+    drag.current = null; jointDrag.current = null; setDragging(false);
+  };
 
   // Lengths of the bones at the selected joint, against this person's usual length.
   const boneReadout = useMemo(() => {

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { toast } from 'react-toastify';
-import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, Pencil, RefreshCw, RotateCcw, Ruler, Undo2, Users, Video, Wand2, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, Pencil, Redo2, RefreshCw, RotateCcw, Ruler, TriangleAlert, Undo2, Users, Video, Wand2, type LucideIcon } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
@@ -11,7 +11,7 @@ import { getVideoUrl, moveVideo } from '@/api/videoApi';
 import { athletesInGroups, getGroups } from '@/api/groupApi';
 import { useAuth } from '@/hooks/useAuth';
 import { getEdits, revertEdits, saveEdits } from '@/api/editsApi';
-import { LIMB_BONES, pointFrom2D, projectToCamera } from '@/utils/skeleton';
+import { JOINT_NAMES, LIMB_BONES, pointFrom2D, projectToCamera } from '@/utils/skeleton';
 import Skeleton3DViewer from '@/components/Skeleton3DViewer';
 import KinematicChart, { type ChartMode } from '@/components/Video/kinematicChart';
 import PanelCard from '@/components/analysis/PanelCard';
@@ -21,6 +21,14 @@ import type { Keypoints2D } from '@/components/analysis/SkeletonOverlay';
 import TransportBar from '@/components/analysis/TransportBar';
 import ResizableRow from '@/components/analysis/ResizableRow';
 import { useStudioLayout, ROWS, type PanelId } from '@/components/analysis/useStudioLayout';
+
+// While editing, the 3D view sits beside the two videos so a dragged joint can be checked in all three at once.
+const EDIT_ROWS = [
+    { id: 'stage' as const, panels: ['left', 'right', 'skeleton'] as PanelId[] },
+    ...ROWS.filter((r) => r.id !== 'stage' && r.id !== 'recon'),
+];
+// A single drag that moves a joint further than this (mm) is held until confirmed: likely an accidental grab.
+const BIG_MOVE_MM = 400;
 
 const PANELS: { id: PanelId; label: string; icon: LucideIcon; needs: 'always' | 'right' | '3d' }[] = [
     { id: 'left', label: 'Left camera', icon: Video, needs: 'always' },
@@ -64,10 +72,17 @@ const AnalysisStudioPage = () => {
     const rightRef = useRef<HTMLVideoElement>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [mode, setMode] = useState<KeypointMode>('processed');
-    // Keypoint editing (admins, coaches and athletes, stereo analyses): unsaved edits, undo history, selected joint.
+    // Keypoint editing (admins and coaches, stereo analyses): unsaved edits, undo history, selected joint.
     const [editing, setEditing] = useState(false);
     const [pending, setPending] = useState<Record<string, PendingEdit>>({});
     const [history, setHistory] = useState<Record<string, PendingEdit>[]>([]);
+    const [future, setFuture] = useState<Record<string, PendingEdit>[]>([]);
+    // A drag that moved a joint a long way, waiting for Keep / Undo (shown while that edit is still the pending one).
+    const [bigMove, setBigMove] = useState<{ key: string; edit: PendingEdit; dist: number } | null>(null);
+    const dragStart = useRef<{ key: string; X: number[] | null } | null>(null);
+    const pendingRef = useRef<Record<string, PendingEdit>>({});
+    // Where the videos are when the 3D panel moves (entering / leaving edit mode), so it opens on that frame.
+    const [viewerTime, setViewerTime] = useState(0);
     const [selected, setSelected] = useState<{ frame: number; joint: number } | null>(null);
     const [lockBones, setLockBones] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -175,23 +190,46 @@ const AnalysisStudioPage = () => {
         }
     };
 
+    useEffect(() => { pendingRef.current = pending; }, [pending]);
     const startEditing = () => {
         [leftRef.current, rightRef.current].forEach((v) => v?.pause());
         setMode('processed');
         if (!layout.visible.skeleton) toggleVisible('skeleton');
+        setViewerTime(leftRef.current?.currentTime ?? rightRef.current?.currentTime ?? 0);
         setEditing(true);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     };
-    const stopEditing = () => { setEditing(false); setSelected(null); };
+    // One undo step per drag: the edits as they were before the joint first moved. A new step clears redo.
+    const pushHistory = () => {
+        const snapshot = beforeDrag.current;
+        if (!snapshot) return;
+        setHistory((h) => [...h.slice(-49), snapshot]);
+        setFuture([]);
+        beforeDrag.current = null;
+    };
+    const jointAt = (frame: number, joint: number): number[] | null =>
+        pending[editKey(frame, joint)]?.X ?? analysis?.frames_3d?.[frame]?.keypoints_3d?.[joint] ?? null;
+    const onDragEnd = (frame: number, joint: number) => {
+        const start = dragStart.current;
+        dragStart.current = null;
+        const key = editKey(frame, joint);
+        const edit = pendingRef.current[key];
+        if (!start || start.key !== key || !start.X || !edit?.X) return;
+        const dist = Math.hypot(edit.X[0] - start.X[0], edit.X[1] - start.X[1], edit.X[2] - start.X[2]);
+        if (dist > BIG_MOVE_MM) setBigMove({ key, edit, dist });
+    };
+    const stopEditing = () => {
+        setViewerTime(leftRef.current?.currentTime ?? rightRef.current?.currentTime ?? 0);
+        setEditing(false);
+        setSelected(null);
+    };
     const onSelectJoint = (frame: number, joint: number | null) => {
         setSelected(joint == null ? null : { frame, joint });
         beforeDrag.current = joint == null ? null : pending;      // becomes an undo step once the joint moves
+        dragStart.current = joint == null ? null : { key: editKey(frame, joint), X: jointAt(frame, joint) };
     };
     const onEditJoint = (frame: number, joint: number, value: [number, number, number]) => {
-        if (beforeDrag.current) {
-            const snapshot = beforeDrag.current;
-            setHistory((h) => [...h.slice(-49), snapshot]);
-            beforeDrag.current = null;
-        }
+        pushHistory();
         setPending((p) => ({ ...p, [editKey(frame, joint)]: { frame, joint, target: '3d', value, X: value } }));
     };
     // Dragging a joint on one of the videos: the other camera's point for it gives its depth.
@@ -204,25 +242,58 @@ const AnalysisStudioPage = () => {
     };
     const onDragJoint2D = (view: 'left' | 'right') => (phase: 'start' | 'move' | 'end', frame: number, joint: number, uv: [number, number]) => {
         if (phase === 'start') { onSelectJoint(frame, joint); return; }
+        if (phase === 'end') { onDragEnd(frame, joint); return; }
         const cal = editInfo?.calibration;
         if (!cal) return;
         const other = pointIn(view === 'left' ? 'right' : 'left', frame, joint);
         const current = pending[editKey(frame, joint)]?.X ?? analysis?.frames_3d?.[frame]?.keypoints_3d?.[joint] ?? null;
         const X = pointFrom2D(uv, view, other, current, cal);
-        if (beforeDrag.current) {
-            const snapshot = beforeDrag.current;
-            setHistory((h) => [...h.slice(-49), snapshot]);
-            beforeDrag.current = null;
-        }
+        pushHistory();
         setPending((p) => ({ ...p, [editKey(frame, joint)]: { frame, joint, target: view, value: uv, X } }));
     };
     const undo = () => {
         const prev = history[history.length - 1];
         if (!prev) return;
+        setFuture((f) => [...f, pending]);
         setPending(prev);
         setHistory(history.slice(0, -1));
     };
-    const discard = () => { setPending({}); setHistory([]); };
+    const redo = () => {
+        const next = future[future.length - 1];
+        if (!next) return;
+        setHistory((h) => [...h, pending]);
+        setPending(next);
+        setFuture(future.slice(0, -1));
+    };
+    const discard = () => { setPending({}); setHistory([]); setFuture([]); };
+    // The big move still waiting for an answer (gone once that joint is undone, redragged or saved).
+    const bigMoveShown = bigMove && pending[bigMove.key] === bigMove.edit ? bigMove : null;
+    const undoBigMove = () => {
+        if (!bigMoveShown) return;
+        setHistory((h) => [...h.slice(-49), pending]);
+        setFuture([]);
+        setPending((p) => {
+            const rest = { ...p };
+            delete rest[bigMoveShown.key];
+            return rest;
+        });
+        setBigMove(null);
+    };
+    // Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) while editing, unless typing in a field.
+    const undoRef = useRef(undo);
+    const redoRef = useRef(redo);
+    useEffect(() => { undoRef.current = undo; redoRef.current = redo; });
+    useEffect(() => {
+        if (!editing) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey) || (e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable]')) return;
+            const k = e.key.toLowerCase();
+            if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoRef.current(); }
+            else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redoRef.current(); }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [editing]);
     const refreshEdits = () => Promise.all([
         queryClient.invalidateQueries({ queryKey: ['analysis', videoId] }),
         queryClient.invalidateQueries({ queryKey: ['edits', videoId] }),
@@ -235,6 +306,7 @@ const AnalysisStudioPage = () => {
             await refreshEdits();
             setPending({});
             setHistory([]);
+            setFuture([]);
             toast.success(`Saved ${n} edit${n === 1 ? '' : 's'}. Nearby frames ease into ${n === 1 ? 'it' : 'them'}.`);
         } catch (e) {
             toast.error(errorText(e, 'Could not save the edits.'));
@@ -295,6 +367,8 @@ const AnalysisStudioPage = () => {
                     editing={editing}
                     onEditJoint={onEditJoint}
                     onSelectJoint={onSelectJoint}
+                    onDragEnd={onDragEnd}
+                    initialTime={viewerTime}
                     selectedJoint={selected?.joint ?? null}
                     boneLengths={boneLengths}
                     lockBones={lockBones}
@@ -409,7 +483,7 @@ const AnalysisStudioPage = () => {
                     <div className="sticky top-2 z-20 -mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-primary/50 bg-background-main/95 backdrop-blur px-4 py-2.5">
                         <span className="inline-flex items-center gap-2 text-sm font-medium text-text"><Pencil className="w-4 h-4 text-primary" /> Editing keypoints</span>
                         <span className="text-xs text-text-muted">
-                            Drag a joint on either video or in the 3D view; the other views follow. Saved edits ease into the {editInfo?.fade_frames ?? 5} frames on each side,
+                            Drag a joint on either video or in the 3D view; the other views follow. Ctrl+Z / Ctrl+Y undo and redo. Saved edits ease into the {editInfo?.fade_frames ?? 5} frames on each side,
                             and edits of a joint up to {editInfo?.keyframe_gap ?? 30} frames apart are joined.
                         </span>
                         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -417,8 +491,11 @@ const AnalysisStudioPage = () => {
                                 <input type="checkbox" checked={lockBones} onChange={(e) => setLockBones(e.target.checked)} className="accent-primary" />
                                 Keep bone length
                             </label>
-                            <button onClick={undo} disabled={!history.length} className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
+                            <button onClick={undo} disabled={!history.length} title="Undo (Ctrl+Z)" className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
                                 <Undo2 className="w-4 h-4" /> Undo
+                            </button>
+                            <button onClick={redo} disabled={!future.length} title="Redo (Ctrl+Y)" className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
+                                <Redo2 className="w-4 h-4" /> Redo
                             </button>
                             {selectedSaved && (
                                 <button onClick={revertSelected} className="h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text">Revert this joint</button>
@@ -427,7 +504,7 @@ const AnalysisStudioPage = () => {
                                 <button onClick={revertAll} className="h-8 px-2.5 text-sm rounded-md text-text-muted hover:text-red-500">Revert all</button>
                             )}
                             <button onClick={discard} disabled={!pendingCount} className="h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">Discard</button>
-                            <Button size="sm" onClick={save} disabled={!pendingCount || saving} className="h-8 gap-1.5">
+                            <Button size="sm" onClick={save} disabled={!pendingCount || saving || !!bigMoveShown} title={bigMoveShown ? 'Keep or undo the big move first' : undefined} className="h-8 gap-1.5">
                                 {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                                 Save{pendingCount ? ` ${pendingCount} ${pendingCount === 1 ? 'edit' : 'edits'}` : ''}
                             </Button>
@@ -440,6 +517,18 @@ const AnalysisStudioPage = () => {
                                 Done
                             </button>
                         </div>
+                        {bigMoveShown && (
+                            <div className="basis-full flex flex-wrap items-center gap-3 rounded-lg bg-amber-500/15 border border-amber-500/40 px-3 py-2 text-sm text-amber-500">
+                                <TriangleAlert className="w-4 h-4 shrink-0" />
+                                <span className="text-text">
+                                    {JOINT_NAMES[bigMoveShown.edit.joint]} moved {(bigMoveShown.dist / 10).toFixed(0)} cm in one drag (frame {bigMoveShown.edit.frame}). Keep it?
+                                </span>
+                                <span className="ml-auto flex gap-2">
+                                    <button onClick={undoBigMove} className="h-7 px-2.5 rounded-md border border-border text-text-secondary hover:text-text">Undo it</button>
+                                    <button onClick={() => setBigMove(null)} className="h-7 px-2.5 rounded-md bg-amber-500 text-black font-medium hover:bg-amber-400">Keep</button>
+                                </span>
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -459,7 +548,7 @@ const AnalysisStudioPage = () => {
                 {analysis && (
                     visiblePanels.length ? (
                         <div className="-mt-2">
-                            {ROWS.map((row) => {
+                            {(editing ? EDIT_ROWS : ROWS).map((row) => {
                                 const items = visiblePanels.filter((p) => row.panels.includes(p.id)).map((p) => ({
                                     id: p.id,
                                     weight: layout.weights[p.id],
