@@ -6,7 +6,7 @@ edits.py -- manual keypoint corrections for an analysis (see keypoint_edits.py f
     PUT    /api/analysis/{video_id}/edits      save edits: {"edits": [{frame, joint, target, value}, ...]}
     DELETE /api/analysis/{video_id}/edits      revert: ?frame=&joint= for one, nothing for all
 
-Admins, coaches and athletes can edit the analyses they can open. Stored in "keypoint_edits",
+Admins and coaches can edit the analyses they can open; athletes can view the edits. Stored in "keypoint_edits",
 one per video, frame and joint (the newest wins).
 """
 from datetime import datetime
@@ -25,7 +25,7 @@ from triangulate import load_calibration
 router = APIRouter(prefix="/analysis", tags=["edits"])
 db = client[database_name]
 edits_col = db["keypoint_edits"]
-EDITOR_ROLES = ("admin", "coach", "athlete")
+EDITOR_ROLES = ("admin", "coach")
 CALIB_KEYS = ("K1", "D1", "K2", "D2", "R", "T", "R_level", "size1", "size2")
 
 try:
@@ -56,7 +56,7 @@ def _analysis(video_id, user):
 
 def _require_editor(user):
     if user.get("role") not in EDITOR_ROLES:
-        raise HTTPException(status_code=403, detail="Only admins, coaches and athletes can edit keypoints.")
+        raise HTTPException(status_code=403, detail="Only admins and coaches can edit keypoints.")
 
 
 def calibration_for(analysis_doc):
