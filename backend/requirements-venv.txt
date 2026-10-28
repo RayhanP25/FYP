@@ -1,0 +1,69 @@
+# Backend requirements for a plain venv (no conda). Works on RTX 50-series (e.g. 5060 Ti)
+# and older NVIDIA cards. Needs Python 3.10 (3.11 also works) and NVIDIA driver 570+.
+# The CUDA runtime ships inside the torch wheels; no CUDA toolkit or Visual Studio needed.
+#
+# Setup with uv (it fetches its own Python 3.10; nothing installed system-wide), from backend\:
+#   uv venv --python 3.10 .venv
+#   .venv\Scripts\activate
+#   uv pip install -r requirements-venv.txt --index-strategy unsafe-best-match
+#   uv pip install --no-deps mmpose==1.3.2
+#
+# mmpose goes in with --no-deps because it asks for chumpy, which fails to build and is
+# never used. mmcv is mmcv-lite (no compiled ops); backend/mmcv_ext_shim.py supplies the
+# one op the person detector needs (NMS) through torchvision.
+#
+# Check:
+#   python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# PyTorch, CUDA 12.8 build (needed for RTX 50-series)
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+
+# OpenMMLab
+mmengine==0.10.7
+mmcv-lite==2.1.0           # pure-Python mmcv; see backend/mmcv_ext_shim.py
+mmdet==3.2.0
+mmpretrain==1.2.0          # ViTPose's backbone is mmpretrain.VisionTransformer
+
+# mmpose 1.3.2 runtime dependencies (mmpose itself: see setup above)
+json-tricks==3.17.3
+munkres==1.1.4
+xtcocotools==1.14.3        # Windows wheels only up to Python 3.11
+
+# mmdet / mmpretrain / mmengine runtime dependencies
+pycocotools==2.0.11
+shapely==2.1.2
+terminaltables==3.1.10
+einops==0.8.2
+mat4py==0.6.0
+modelindex==0.0.2
+addict==2.4.0
+yapf==0.43.0
+pyyaml==6.0.3
+regex==2026.9.10
+rich==13.4.2
+
+# Numeric / imaging
+numpy==1.26.4              # keep below 2 for the mm* packages
+scipy==1.15.3
+matplotlib==3.10.9
+pillow==12.3.0
+opencv-python==4.10.0.84
+imageio-ffmpeg==0.6.0      # bundled ffmpeg for GPU (NVENC) video encoding, see video_io.py
+
+# Packaging helpers (a uv venv starts empty; mmengine still imports pkg_resources)
+setuptools==75.8.2
+
+# API server
+fastapi==0.135.1
+pydantic==2.13.5
+starlette==1.6.0
+uvicorn==0.41.0
+python-multipart==0.0.9
+python-dotenv==1.2.3
+bcrypt==4.2.0
+PyJWT==2.9.0
+pymongo==4.16.0
+minio==7.2.20              # also used for Cloudflare R2
