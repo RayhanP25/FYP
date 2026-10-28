@@ -5,7 +5,6 @@ import HomePage from '../pages/Home';
 import Login from '../pages/Login';
 import NotFound from '../pages/notFound';
 import ViewUserPage from '../pages/viewUser';
-import UserProfilePage from '../pages/userProfile';
 // import VideoTest from '../pages/videoTest';
 import type { JSX } from 'react';
 import CameraCapture from '../pages/CameraCapture';
@@ -14,6 +13,7 @@ import AnalysisLibraryPage from '../pages/AnalysisLibraryPage';
 import AnalysisStudioPage from '../pages/AnalysisStudioPage';
 import CalibrationPage from '../pages/CalibrationPage';
 import GroupsPage from '../pages/GroupsPage';
+import SettingsPage from '../pages/SettingsPage';
 
 const AuthLoading = () => (
   <div className="flex h-screen items-center justify-center bg-background text-text-secondary">
@@ -70,8 +70,8 @@ const AppRoutes = () => {
       element: <AdminRoute element={<ViewUserPage />} />,
     },
     {
-      path: '/user-profile',
-      element: <PrivateRoute element={<UserProfilePage />} />,
+      path: '/settings',
+      element: <PrivateRoute element={<SettingsPage />} />,
     },
     {
       path: '/camera-capture',

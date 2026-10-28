@@ -49,6 +49,7 @@ def can_access_analysis(user, analysis_doc):
 
 
 def names(ids):
-    """{user id: full name} for the given ids."""
-    oids = [ObjectId(i) for i in set(ids) if i and ObjectId.is_valid(i)]
-    return {str(u["_id"]): u.get("full_name") for u in db["users"].find({"_id": {"$in": oids}}, {"full_name": 1})}
+    """{user id: full name} for the given ids; ids of deleted accounts map to "Deleted user"."""
+    valid = {i for i in ids if i and ObjectId.is_valid(i)}
+    found = {str(u["_id"]): u.get("full_name") for u in db["users"].find({"_id": {"$in": [ObjectId(i) for i in valid]}}, {"full_name": 1})}
+    return {i: found.get(i, "Deleted user") for i in valid}

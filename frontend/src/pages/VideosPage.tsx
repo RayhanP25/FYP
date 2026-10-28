@@ -2,9 +2,11 @@ import AppLayout from "../layout/AppLayout"
 import VideoUpload from "../components/Video/videoUpload"
 import PastVideos from "../components/Video/pastVideos"
 import { useNavigate } from 'react-router-dom'
+import { useShortcut } from '@/shortcuts/useShortcut'
 
 const VideosPage = () => {
     const navigate = useNavigate();
+    useShortcut('videos.upload', () => document.getElementById('file-upload')?.click());
 
     // When a video is clicked (or just uploaded), open it in the analysis studio
     const handleVideoSelect = (videoId: string) => {
@@ -13,7 +15,7 @@ const VideosPage = () => {
 
     return (
         <AppLayout>
-            <div className="flex flex-row gap-6">
+            <div className="h-full min-h-0 flex flex-row gap-6">
                 <div className="flex-1 h-fit">
                     <VideoUpload onUploadSuccess={handleVideoSelect} />
                 </div>

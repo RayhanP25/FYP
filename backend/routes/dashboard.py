@@ -75,7 +75,7 @@ def dashboard(current_user: dict = Depends(get_current_user)):
     users = {str(u["_id"]): u for u in db["users"].find({}, {"full_name": 1, "role": 1, "email": 1})}
 
     def row(v):
-        who = users.get(v.get("user_id"), {})
+        who = users.get(v.get("user_id"), {"full_name": "Deleted user"})
         frames, fps = v.get("frames"), v.get("fps")
         if not (frames and fps):
             frames, fps = analysis_len.get(str(v["_id"]), (None, None))
@@ -104,7 +104,7 @@ def dashboard(current_user: dict = Depends(get_current_user)):
             if _when(v) and (c["last"] is None or _when(v) > c["last"]):
                 c["last"] = _when(v)
         for uid, c in counts.items():
-            u = users.get(uid, {})
+            u = users.get(uid, {"full_name": "Deleted user"})
             per_user.append(dict(user_id=uid, name=u.get("full_name") or "Unknown user", role=u.get("role"),
                                  videos=c["videos"], recordings=c["recordings"], analysed=c["analysed"],
                                  last_upload=_iso(c["last"])))

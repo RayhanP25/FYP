@@ -15,6 +15,9 @@ router = APIRouter()
 class OwnerUpdate(BaseModel):
     owner_id: str
 
+class NameUpdate(BaseModel):
+    original_filename: str
+
 @router.post("/upload-video")
 async def upload_video(video: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     # Validate file type
@@ -187,6 +190,22 @@ async def set_video_owner(video_id: str, body: OwnerUpdate, current_user: dict =
     client[database_name]["videos"].update_one({"_id": video_doc["_id"]}, {"$set": {"user_id": body.owner_id}})
     client[database_name]["pose_analysis"].update_many({"video_id": video_id}, {"$set": {"user_id": body.owner_id}})
     return {"video_id": video_id, "owner_id": body.owner_id}
+
+@router.patch("/videos/{video_id}/name")
+async def rename_video(video_id: str, body: NameUpdate, current_user: dict = Depends(get_current_user)):
+    try:
+        video_doc = client[database_name]["videos"].find_one({"_id": ObjectId(video_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid video ID format")
+    if not video_doc:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if not can_access_video(current_user, video_doc):
+        raise HTTPException(status_code=403, detail="Access denied: You don't own this video")
+    name = body.original_filename.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Video name cannot be empty")
+    client[database_name]["videos"].update_one({"_id": video_doc["_id"]}, {"$set": {"original_filename": name}})
+    return {"video_id": video_id, "original_filename": name}
 
 @router.delete("/delete-video/{video_id}")
 async def delete_video(video_id: str, current_user: dict = Depends(get_current_user)):

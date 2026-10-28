@@ -61,7 +61,7 @@ const MyGroupView = () => {
 
     return (
         <AppLayout>
-            <div className="flex flex-col gap-6">
+            <div className="h-full min-h-0 flex flex-col gap-6">
                 <div>
                     <h1 className="text-2xl font-semibold text-text">My group</h1>
                     <p className="mt-1 text-sm text-text-muted">Your coach and the athletes you train with.</p>
@@ -297,7 +297,7 @@ const ManageGroups = () => {
     );
 
     const groupsPanel = coach && (
-        <section className="min-w-0 rounded-xl border border-border bg-background">
+        <section className="min-w-0 min-h-0 max-h-full flex flex-col rounded-xl border border-border bg-background">
             <div className="flex items-center justify-between gap-4 border-b border-border px-5 py-4">
                 <div className="min-w-0">
                     <h2 className="font-semibold text-text truncate">{admin ? coach.full_name : 'My groups'}</h2>
@@ -313,7 +313,7 @@ const ManageGroups = () => {
                 )}
             </div>
 
-            <div className="flex flex-col gap-3 p-5">
+            <div className="flex flex-col gap-3 p-5 min-h-0 overflow-y-auto no-scrollbar">
                 {creating && (
                     <form
                         onSubmit={(e) => {
@@ -351,16 +351,8 @@ const ManageGroups = () => {
 
     return (
         <AppLayout>
-            <div className="flex flex-col gap-6">
-                <div className="flex flex-wrap items-end justify-between gap-4">
-                    <div>
-                        <h1 className="text-2xl font-semibold text-text">Groups</h1>
-                        <p className="mt-1 text-sm text-text-muted">
-                            {admin
-                                ? 'Pick a coach to manage their groups. Every athlete belongs to one group.'
-                                : 'Every athlete belongs to one group, and you can see the videos of everyone in your groups.'}
-                        </p>
-                    </div>
+            <div className="h-full min-h-0 flex flex-col gap-6">
+                <div className="flex flex-wrap items-end justify-end gap-4">
                     <button onClick={() => { setShowUnassigned(true); setUnassignedSearch(''); }} className={secondaryBtn}>
                         <Users className="h-4 w-4" /> Unassigned athletes
                         <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">{unassigned.length}</span>
@@ -374,12 +366,12 @@ const ManageGroups = () => {
                 )}
 
                 {data && coaches.length > 0 && (admin ? (
-                    <div className="grid items-start gap-6 md:grid-cols-[280px_minmax(0,1fr)]">
-                        <aside className="overflow-hidden rounded-xl border border-border bg-background">
+                    <div className="flex-1 min-h-0 grid items-start gap-6 md:grid-cols-[280px_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]">
+                        <aside className="overflow-hidden max-h-full flex flex-col rounded-xl border border-border bg-background">
                             <div className="border-b border-border p-3">
                                 <SearchInput value={coachSearch} onChange={setCoachSearch} placeholder={`Search ${coaches.length} coaches`} />
                             </div>
-                            <ul className="max-h-[65vh] overflow-y-auto">
+                            <ul className="min-h-0 overflow-y-auto">
                                 {visibleCoaches.map((c) => {
                                     const active = c.id === coach?.id;
                                     return (

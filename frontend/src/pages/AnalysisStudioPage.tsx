@@ -7,10 +7,12 @@ import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, Pencil, Redo2, Refres
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
-import { getVideoUrl, moveVideo } from '@/api/videoApi';
+import { getVideoUrl, moveVideo, renameVideo } from '@/api/videoApi';
 import { athletesInGroups, getGroups } from '@/api/groupApi';
 import { useAuth } from '@/hooks/useAuth';
 import { getEdits, revertEdits, saveEdits } from '@/api/editsApi';
+import { getCalibrationOptions } from '@/api/calibrationApi';
+import { useShortcut } from '@/shortcuts/useShortcut';
 import { JOINT_NAMES, LIMB_BONES, pointFrom2D, projectToCamera } from '@/utils/skeleton';
 import Skeleton3DViewer from '@/components/Skeleton3DViewer';
 import KinematicChart, { type ChartMode } from '@/components/Video/kinematicChart';
@@ -87,13 +89,32 @@ const AnalysisStudioPage = () => {
     const [lockBones, setLockBones] = useState(false);
     const [saving, setSaving] = useState(false);
     const beforeDrag = useRef<Record<string, PendingEdit> | null>(null);
+    const panelsRef = useRef<HTMLDivElement>(null);
 
     const { data: meta } = useQuery({ queryKey: ['studio-video', videoId, 'left'], queryFn: () => getVideoUrl(videoId, 'left'), staleTime: 30 * 60 * 1000 });
     const { data: analysis, isLoading, isError } = useQuery({
         queryKey: ['analysis', videoId],
-        queryFn: async () => (await api.get(`/api/get-analysis/${videoId}`)).data.result,
+        queryFn: async () => {
+            const doc = (await api.get(`/api/get-analysis/${videoId}`)).data;
+            // Which saved calibration the analysis used, for the Re-analyze picker.
+            return { ...doc.result, calibration_id: doc.calibration_id ?? null, calibration_setup: doc.calibration_setup ?? null };
+        },
         retry: false,
     });
+    const [renaming, setRenaming] = useState(false);
+    const [nameDraft, setNameDraft] = useState('');
+    const rename = useMutation({
+        mutationFn: (name: string) => renameVideo(videoId, name),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['my-videos'] });
+            queryClient.invalidateQueries({ queryKey: ['studio-video', videoId] });
+        },
+    });
+    const saveName = (value: string) => {
+        setRenaming(false);
+        const name = value.trim();
+        if (name && name !== meta?.original_filename) rename.mutate(name);
+    };
 
     const is3D = !!analysis?.frames_3d?.length;
     const { data: editInfo } = useQuery({ queryKey: ['edits', videoId], queryFn: () => getEdits(videoId), enabled: is3D, retry: false });
@@ -177,10 +198,31 @@ const AnalysisStudioPage = () => {
     const totalFrames = analysis?.total_frames ?? analysis?.frames?.length;
     const stats = analysis ? [`${Math.round(fps)} fps`, `${totalFrames} frames`, `${(totalFrames / fps).toFixed(1)} s`] : [];
 
-    const analyze = async () => {
+    // Stereo recordings: choose the calibration first (the one it was analysed with is preselected).
+    const [reanalyzeOpen, setReanalyzeOpen] = useState(false);
+    const [pickedCalibration, setPickedCalibration] = useState<string | null>(null);
+    const { data: calibrationOptions, isLoading: loadingCalibrations } = useQuery({
+        queryKey: ['calibration-options'], queryFn: getCalibrationOptions, enabled: reanalyzeOpen,
+    });
+    // The calibration it was analysed with, if it's still saved (else the one in use is preselected).
+    const usedCalibration = calibrationOptions?.some((c) => c.id === analysis?.calibration_id) ? analysis.calibration_id as string : null;
+    const defaultCalibration = usedCalibration ?? calibrationOptions?.find((c) => c.active)?.id ?? null;
+    const chosenCalibration = pickedCalibration ?? defaultCalibration;
+    const sortedCalibrations = [...(calibrationOptions ?? [])].sort((a, b) =>
+        Number(b.id === usedCalibration) - Number(a.id === usedCalibration) || Number(b.active) - Number(a.active));
+    const formatCalibrationDate = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-');
+    const requestAnalyze = () => {
+        if (!hasRight) { analyze(); return; }
+        setPickedCalibration(null);
+        setReanalyzeOpen(true);
+    };
+    const analyze = async (calibrationId?: string | null) => {
+        setReanalyzeOpen(false);
         setIsAnalyzing(true);
         try {
-            await api.post(`/api/process-video/${videoId}${analysis ? '?force=true' : ''}`);
+            await api.post(`/api/process-video/${videoId}`, null, {
+                params: { ...(analysis ? { force: true } : {}), ...(calibrationId ? { calibration_id: calibrationId } : {}) },
+            });
             toast.success('Pose analysis completed!');
             await Promise.all(['analysis', 'studio-video', 'my-videos'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
         } catch {
@@ -197,7 +239,7 @@ const AnalysisStudioPage = () => {
         if (!layout.visible.skeleton) toggleVisible('skeleton');
         setViewerTime(leftRef.current?.currentTime ?? rightRef.current?.currentTime ?? 0);
         setEditing(true);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        panelsRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     };
     // One undo step per drag: the edits as they were before the joint first moved. A new step clears redo.
     const pushHistory = () => {
@@ -279,21 +321,7 @@ const AnalysisStudioPage = () => {
         });
         setBigMove(null);
     };
-    // Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) while editing, unless typing in a field.
-    const undoRef = useRef(undo);
-    const redoRef = useRef(redo);
-    useEffect(() => { undoRef.current = undo; redoRef.current = redo; });
-    useEffect(() => {
-        if (!editing) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (!(e.ctrlKey || e.metaKey) || (e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable]')) return;
-            const k = e.key.toLowerCase();
-            if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoRef.current(); }
-            else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redoRef.current(); }
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [editing]);
+    useShortcut('edit.undo', undo, editing);
     const refreshEdits = () => Promise.all([
         queryClient.invalidateQueries({ queryKey: ['analysis', videoId] }),
         queryClient.invalidateQueries({ queryKey: ['edits', videoId] }),
@@ -337,6 +365,27 @@ const AnalysisStudioPage = () => {
             toast.error(errorText(e, 'Could not revert the edits.'));
         }
     };
+    const tryStopEditing = () => {
+        if (pendingCount) { toast.info('Save or discard your changes first.'); return; }
+        stopEditing();
+    };
+    const togglePanel = (index: number) => {
+        const panel = PANELS[index];
+        if (isAvailable(panel.needs)) toggleVisible(panel.id);
+    };
+    useShortcut('edit.toggle', () => (editing ? tryStopEditing() : canEdit && startEditing()));
+    useShortcut('edit.done', tryStopEditing, editing);
+    useShortcut('edit.save', () => { if (pendingCount && !saving && !bigMoveShown) save(); }, editing);
+    useShortcut('panel.1', () => togglePanel(0));
+    useShortcut('panel.2', () => togglePanel(1));
+    useShortcut('panel.3', () => togglePanel(2));
+    useShortcut('panel.4', () => togglePanel(3));
+    useShortcut('panel.5', () => togglePanel(4));
+    useShortcut('panel.6', () => togglePanel(5));
+    useShortcut('panel.7', () => togglePanel(6));
+    useShortcut('layout.reset', reset);
+    useShortcut('sizes.reset', resetSizes);
+
     // Don't lose unsaved edits by closing or reloading the tab.
     useEffect(() => {
         if (!pendingCount) return;
@@ -380,13 +429,39 @@ const AnalysisStudioPage = () => {
 
     return (
         <AppLayout>
-            <div className="flex flex-col gap-6 max-w-[1800px] mx-auto">
+            <div className="h-full min-h-0 flex flex-col gap-6 max-w-[1800px] mx-auto">
                 <div className="flex items-end justify-between gap-6 flex-wrap">
                     <div className="min-w-0">
                         <button onClick={() => navigate('/analysis')} className="inline-flex items-center gap-1.5 mb-3 text-xs uppercase tracking-[0.16em] text-text-muted hover:text-text transition-colors">
                             <ArrowLeft className="w-3.5 h-3.5" /> Library
                         </button>
-                        <h1 className="text-3xl font-semibold tracking-tight text-text truncate">{meta?.original_filename || 'Analysis'}</h1>
+                        <div className="flex items-center gap-3 min-w-0">
+                            {renaming ? (
+                                <input
+                                    autoFocus type="text" value={nameDraft}
+                                    onChange={(e) => setNameDraft(e.target.value)}
+                                    onBlur={(e) => saveName(e.currentTarget.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') e.currentTarget.blur();
+                                        if (e.key === 'Escape') { e.currentTarget.value = meta?.original_filename || ''; e.currentTarget.blur(); }
+                                    }}
+                                    className="text-3xl font-semibold tracking-tight text-text bg-background border border-primary rounded px-2 py-0.5 min-w-0 w-full focus:outline-none"
+                                />
+                            ) : (
+                                <>
+                                    <h1 className="text-3xl font-semibold tracking-tight text-text truncate">{meta?.original_filename || 'Analysis'}</h1>
+                                    {meta && (
+                                        <button
+                                            onClick={() => { setNameDraft(meta.original_filename); setRenaming(true); }}
+                                            className="shrink-0 p-1.5 rounded text-text-muted hover:text-primary transition-colors"
+                                            aria-label="Edit video name"
+                                        >
+                                            <Pencil className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                </>
+                            )}
+                        </div>
                         {analysis && (
                             <div className="mt-2 flex items-center gap-4 text-sm text-text-muted tabular-nums">
                                 <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium">{is3D ? 'Stereo 3D' : '2D'}</span>
@@ -431,8 +506,8 @@ const AnalysisStudioPage = () => {
                                         </button>
                                     </Dialog.Trigger>
                                     <Dialog.Portal>
-                                        <Dialog.Overlay className="fixed inset-0 bg-black/70" />
-                                        <Dialog.Content className="fixed left-1/2 top-1/2 flex max-h-[70vh] w-[90vw] max-w-[420px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background shadow-xl focus:outline-none">
+                                        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/70" />
+                                        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[70vh] w-[90vw] max-w-[420px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background shadow-xl focus:outline-none">
                                             <div className="border-b border-border px-5 py-4">
                                                 <Dialog.Title className="font-semibold text-text">Assign video</Dialog.Title>
                                                 <Dialog.Description className="text-xs text-text-muted">Choose who this video belongs to.</Dialog.Description>
@@ -472,7 +547,7 @@ const AnalysisStudioPage = () => {
                             <button onClick={resetSizes} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors" title="Put all panel sizes back to default (keeps hidden panels hidden)">
                                 <RotateCcw className="w-4 h-4" /> Reset sizes
                             </button>
-                            <button onClick={analyze} disabled={isAnalyzing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors disabled:opacity-50">
+                            <button onClick={requestAnalyze} disabled={isAnalyzing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors disabled:opacity-50">
                                 {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Re-analyze
                             </button>
                         </div>
@@ -483,7 +558,7 @@ const AnalysisStudioPage = () => {
                     <div className="sticky top-2 z-20 -mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-primary/50 bg-background-main/95 backdrop-blur px-4 py-2.5">
                         <span className="inline-flex items-center gap-2 text-sm font-medium text-text"><Pencil className="w-4 h-4 text-primary" /> Editing keypoints</span>
                         <span className="text-xs text-text-muted">
-                            Drag a joint on either video or in the 3D view; the other views follow. Ctrl+Z / Ctrl+Y undo and redo. Saved edits ease into the {editInfo?.fade_frames ?? 5} frames on each side,
+                            Drag a joint on either video or in the 3D view; the other views follow. Ctrl+Z undoes the last change. Saved edits ease into the {editInfo?.fade_frames ?? 5} frames on each side,
                             and edits of a joint up to {editInfo?.keyframe_gap ?? 30} frames apart are joined.
                         </span>
                         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -494,7 +569,7 @@ const AnalysisStudioPage = () => {
                             <button onClick={undo} disabled={!history.length} title="Undo (Ctrl+Z)" className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
                                 <Undo2 className="w-4 h-4" /> Undo
                             </button>
-                            <button onClick={redo} disabled={!future.length} title="Redo (Ctrl+Y)" className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
+                            <button onClick={redo} disabled={!future.length} title="Redo" className="inline-flex items-center gap-1.5 h-8 px-2.5 text-sm rounded-md border border-border text-text-secondary hover:text-text disabled:opacity-40">
                                 <Redo2 className="w-4 h-4" /> Redo
                             </button>
                             {selectedSaved && (
@@ -539,7 +614,7 @@ const AnalysisStudioPage = () => {
                         <Wand2 className="w-8 h-8 text-primary" strokeWidth={1.5} />
                         <h3 className="text-lg font-medium text-text">This video has not been analyzed yet</h3>
                         <p className="text-sm text-text-muted -mt-2">Extract kinematics to unlock both camera views, the 3D skeleton and the graphs.</p>
-                        <Button onClick={analyze} disabled={isAnalyzing} className="px-6 gap-2">
+                        <Button onClick={requestAnalyze} disabled={isAnalyzing} className="px-6 gap-2">
                             {isAnalyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing AI...</> : <><Wand2 className="w-4 h-4" /> Extract Kinematics</>}
                         </Button>
                     </div>
@@ -547,7 +622,8 @@ const AnalysisStudioPage = () => {
 
                 {analysis && (
                     visiblePanels.length ? (
-                        <div className="-mt-2">
+                        // Panels scroll here; the title, buttons and edit toolbar above stay put.
+                        <div ref={panelsRef} className="-mt-2 flex-1 min-h-0 overflow-y-auto no-scrollbar">
                             {(editing ? EDIT_ROWS : ROWS).map((row) => {
                                 const items = visiblePanels.filter((p) => row.panels.includes(p.id)).map((p) => ({
                                     id: p.id,
@@ -571,6 +647,50 @@ const AnalysisStudioPage = () => {
                     </>
                 )}
             </div>
+            <Dialog.Root open={reanalyzeOpen} onOpenChange={setReanalyzeOpen}>
+                <Dialog.Portal>
+                    <Dialog.Overlay className="fixed inset-0 z-40 bg-black/70" />
+                    <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[75vh] w-[92vw] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background shadow-xl focus:outline-none">
+                        <div className="border-b border-border px-5 py-4">
+                            <Dialog.Title className="font-semibold text-text">{analysis ? 'Re-analyze recording' : 'Analyze recording'}</Dialog.Title>
+                            <Dialog.Description className="mt-1 text-xs text-text-muted">
+                                Pick the calibration of the camera setup this was filmed with. A wrong one swaps joints and puts the 3D in the wrong place.
+                            </Dialog.Description>
+                        </div>
+                        <div className="min-h-0 overflow-y-auto p-3">
+                            {loadingCalibrations && <p className="px-2 py-6 text-center text-sm text-text-muted">Loading calibrations...</p>}
+                            {!loadingCalibrations && !sortedCalibrations.length && <p className="px-2 py-6 text-center text-sm text-text-muted">No saved calibrations.</p>}
+                            <ul className="flex flex-col gap-1.5">
+                                {sortedCalibrations.map((c) => (
+                                    <li key={c.id}>
+                                        <label className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors ${chosenCalibration === c.id ? 'border-primary/70 bg-primary/5' : 'border-border hover:bg-background-main'}`}>
+                                            <input type="radio" name="calibration" className="accent-primary" checked={chosenCalibration === c.id} onChange={() => setPickedCalibration(c.id)} />
+                                            <span className="min-w-0 flex-1">
+                                                <span className="flex items-center gap-2">
+                                                    <span className="text-sm font-medium text-text truncate">{c.setup}</span>
+                                                    {c.id === usedCalibration && <span className="shrink-0 px-1.5 py-0.5 rounded bg-border text-[10px] font-medium text-text-secondary">Used last time</span>}
+                                                    {c.active && <span className="shrink-0 px-1.5 py-0.5 rounded bg-primary/15 text-[10px] font-medium text-primary">In use</span>}
+                                                </span>
+                                                <span className="block text-xs text-text-muted tabular-nums">
+                                                    {formatCalibrationDate(c.calibrated_at ?? c.created_at)} · RMS {c.rms != null ? `${c.rms.toFixed(2)} px` : '-'} · baseline {(c.baseline_mm / 1000).toFixed(2)} m{c.floor_set ? '' : ' · floor not set'}
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                        <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
+                            <Dialog.Close asChild>
+                                <button className="h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text">Cancel</button>
+                            </Dialog.Close>
+                            <Button size="sm" className="h-9 gap-2" disabled={!chosenCalibration} onClick={() => analyze(chosenCalibration)}>
+                                <RefreshCw className="w-4 h-4" /> {analysis ? 'Re-analyze' : 'Analyze'}
+                            </Button>
+                        </div>
+                    </Dialog.Content>
+                </Dialog.Portal>
+            </Dialog.Root>
         </AppLayout>
     );
 };

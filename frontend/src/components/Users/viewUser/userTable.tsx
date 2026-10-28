@@ -84,7 +84,7 @@ const UserTable = () => {
     };
 
     return (
-        <section className="bg-background rounded-xl shadow-sm border p-5 flex flex-col">
+        <section className="bg-background rounded-xl shadow-sm border p-5 flex flex-col h-full min-h-0">
             <div className="flex justify-between items-center mb-4">
                 <div>
                     <AddUserButton />
@@ -122,7 +122,7 @@ const UserTable = () => {
                 </div>
             </div>
 
-            <div className="overflow-x-auto">
+            <div className="overflow-auto flex-1 min-h-0 no-scrollbar">
                 <table className="w-full">
                     <thead>
                         <tr className="border-b">

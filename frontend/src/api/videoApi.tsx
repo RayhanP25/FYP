@@ -79,6 +79,14 @@ export const moveVideo = async (videoId: string, ownerId: string): Promise<void>
     }
 };
 
+export const renameVideo = async (videoId: string, originalFilename: string): Promise<void> => {
+    try {
+        await api.patch(`/api/videos/${videoId}/name`, { original_filename: originalFilename });
+    } catch (error) {
+        throw new Error('Failed to rename video');
+    }
+};
+
 export const deleteVideo = async (videoId: string): Promise<{ message: string }> => {
     try {
         const response = await api.delete(`/api/delete-video/${videoId}`);

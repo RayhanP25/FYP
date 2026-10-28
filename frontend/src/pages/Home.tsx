@@ -1,9 +1,8 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, CircleDashed, Clock, FileVideo, Sparkles, Upload, Video } from 'lucide-react';
 import AppLayout from '../layout/AppLayout';
-import { useAuth } from '../hooks/useAuth';
 import { getDashboard, type DashboardVideo } from '../api/dashboardApi';
 
 const formatDateTime = (iso: string) =>
@@ -21,15 +20,46 @@ const timeAgo = (iso: string) => {
     return days === 1 ? 'yesterday' : `${days} days ago`;
 };
 
+const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/** Counts from the last shown value to `target` (from 0 on first load), easing out. */
+const useCountUp = (target: number, duration = 800) => {
+    const [shown, setShown] = useState(reducedMotion() ? target : 0);
+    const from = useRef(shown);
+    useEffect(() => {
+        if (reducedMotion()) { from.current = target; return; }
+        const start = performance.now();
+        const begin = from.current;
+        let frame = 0;
+        const tick = (now: number) => {
+            const t = Math.min(1, (now - start) / duration);
+            const value = Math.round(begin + (target - begin) * (1 - Math.pow(1 - t, 3)));
+            setShown(value);
+            from.current = value;
+            if (t < 1) frame = requestAnimationFrame(tick);
+        };
+        frame = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(frame);
+    }, [target, duration]);
+    return reducedMotion() ? target : shown;
+};
+
+/** Staggered rise-in: the nth item waits a little longer than the one before it. */
+const rise = (index: number, base = 0): { className: string; style: CSSProperties } => ({
+    className: 'motion-safe:animate-rise',
+    style: { animationDelay: `${base + Math.min(index, 12) * 45}ms` },
+});
+
 const formatDuration = (s: number | null) => (s == null ? '-' : s < 60 ? `${s.toFixed(1)} s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')} min`);
 
-const Panel = ({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) => (
-    <section className="rounded-xl bg-background-main border border-border p-5 min-w-0">
+// The page fits the window: a panel takes the height it's given and its list scrolls inside it.
+const Panel = ({ title, aside, children, className = '', delay = 0 }: { title: string; aside?: ReactNode; children: ReactNode; className?: string; delay?: number }) => (
+    <section style={{ animationDelay: `${delay}ms` }} className={`rounded-xl bg-background-main border border-border p-5 min-w-0 min-h-0 flex flex-col motion-safe:animate-rise ${className}`}>
         <div className="mb-4 flex items-center justify-between">
             <h2 className="text-[11px] font-medium uppercase tracking-[0.16em] text-text-muted">{title}</h2>
             {aside}
         </div>
-        {children}
+        <div className="min-h-0 overflow-y-auto no-scrollbar">{children}</div>
     </section>
 );
 
@@ -39,26 +69,41 @@ interface StatProps {
     detail: string;
     icon: typeof Video;
     highlight?: boolean;
+    /** 0-1: draws a thin bar that fills to this share. */
+    progress?: number;
+    index: number;
 }
 
-const Stat = ({ label, value, detail, icon: Icon, highlight }: StatProps) => (
-    <div className={`rounded-xl border p-5 ${highlight ? 'border-primary/50 bg-primary/5' : 'border-border bg-background-main'}`}>
-        <div className="flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-text-muted">{label}</span>
-            <Icon className={`w-4 h-4 ${highlight ? 'text-primary' : 'text-text-muted'}`} />
+const Stat = ({ label, value, detail, icon: Icon, highlight, progress, index }: StatProps) => {
+    const counted = useCountUp(typeof value === 'number' ? value : 0);
+    const { className: riseClass, style } = rise(index);
+    return (
+        <div style={style} className={`rounded-xl border p-5 transition-[translate,box-shadow] duration-200 motion-safe:hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/40 ${riseClass} ${highlight ? 'border-primary/50 bg-primary/5' : 'border-border bg-background-main'}`}>
+            <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-text-muted">{label}</span>
+                <Icon className={`w-4 h-4 ${highlight ? 'text-primary motion-safe:animate-twinkle' : 'text-text-muted'}`} />
+            </div>
+            <p className="mt-3 text-4xl font-semibold tracking-tight tabular-nums text-text">{typeof value === 'number' ? counted : value}</p>
+            <p className="mt-1 text-sm text-text-muted">{detail}</p>
+            {progress !== undefined && (
+                <div className="mt-3 h-1 rounded-full bg-border overflow-hidden">
+                    <div
+                        className="h-full rounded-full bg-primary origin-left motion-safe:animate-grow"
+                        style={{ width: `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`, animationDelay: '250ms' }}
+                    />
+                </div>
+            )}
         </div>
-        <p className="mt-3 text-4xl font-semibold tracking-tight tabular-nums text-text">{value}</p>
-        <p className="mt-1 text-sm text-text-muted">{detail}</p>
-    </div>
-);
+    );
+};
 
 const VideoList = ({ videos, empty }: { videos: DashboardVideo[]; empty: string }) => {
     const navigate = useNavigate();
     if (!videos.length) return <p className="py-6 text-center text-sm text-text-muted">{empty}</p>;
     return (
         <ul className="divide-y divide-border -my-2">
-            {videos.map((v) => (
-                <li key={v.video_id}>
+            {videos.map((v, i) => (
+                <li key={v.video_id} {...rise(i, 250)}>
                     <button
                         onClick={() => navigate(`/analysis/${v.video_id}`)}
                         className="w-full py-3 flex items-center text-left rounded-md hover:bg-background transition-colors px-2 -mx-2"
@@ -87,24 +132,13 @@ const VideoList = ({ videos, empty }: { videos: DashboardVideo[]; empty: string 
 };
 
 function HomePage() {
-    const { user } = useAuth();
     const { data, isLoading, isError } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboard, refetchOnWindowFocus: true });
-    const firstName = user?.full_name?.split(' ')[0];
 
     return (
         <AppLayout>
-            <div className="flex flex-col gap-8 max-w-[1500px] mx-auto">
+            <div className="h-full min-h-0 flex flex-col gap-8 max-w-[1500px] mx-auto">
                 <div>
-                    <h1 className="text-3xl font-semibold tracking-tight text-text">{firstName ? `Welcome back, ${firstName}` : 'Dashboard'}</h1>
-                    <p className="mt-2 text-sm text-text-muted">
-                        {data
-                            ? data.last_login
-                                ? <>Last login {formatDateTime(data.last_login)} ({timeAgo(data.last_login)})</>
-                                : 'This is your first login.'
-                            : ' '}
-                        {data?.scope === 'all' && <> · showing every user's videos</>}
-                        {data?.scope === 'group' && <> · showing your videos and your athletes'</>}
-                    </p>
+
                 </div>
 
                 {isLoading && <div className="py-24 text-center text-sm text-text-muted">Loading...</div>}
@@ -113,15 +147,18 @@ function HomePage() {
                 {data && (
                     <>
                         <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-                            <Stat label="Recordings" value={data.totals.recordings} detail="from the stereo cameras" icon={Video} />
-                            <Stat label="Videos" value={data.totals.videos} detail={`${data.totals.videos - data.totals.recordings} uploaded, ${data.totals.recordings} recorded`} icon={FileVideo} />
+                            <Stat index={0} label="Recordings" value={data.totals.recordings} detail="from the stereo cameras" icon={Video} />
+                            <Stat index={1} label="Videos" value={data.totals.videos} detail={`${data.totals.videos - data.totals.recordings} uploaded, ${data.totals.recordings} recorded`} icon={FileVideo} />
                             <Stat
+                                index={2}
                                 label="Analysed"
                                 value={data.totals.analysed}
                                 detail={data.totals.videos ? `${Math.round((100 * data.totals.analysed) / data.totals.videos)}% of all videos` : 'no videos yet'}
                                 icon={CheckCircle2}
+                                progress={data.totals.videos ? data.totals.analysed / data.totals.videos : 0}
                             />
                             <Stat
+                                index={3}
                                 label="New since last login"
                                 value={data.new_since_login.count}
                                 detail={data.last_login ? `since ${formatDate(data.last_login)}` : 'first login'}
@@ -130,9 +167,11 @@ function HomePage() {
                             />
                         </div>
 
-                        <div className={`grid grid-cols-1 gap-6 items-start ${data.scope !== 'mine' ? '2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : ''}`}>
-                            <div className="flex flex-col gap-6 min-w-0">
+                        <div className={`flex-1 min-h-0 grid grid-cols-1 gap-6 ${data.scope !== 'mine' ? 'xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] grid-rows-[minmax(0,1fr)_minmax(0,1fr)] xl:grid-rows-[minmax(0,1fr)]' : 'grid-rows-[minmax(0,1fr)]'}`}>
+                            <div className="flex flex-col gap-6 min-w-0 min-h-0">
                                 <Panel
+                                    className="shrink-0 max-h-[50%]"
+                                    delay={180}
                                     title="New since your last login"
                                     aside={data.new_since_login.count > data.new_since_login.videos.length && (
                                         <span className="text-xs text-text-muted">latest {data.new_since_login.videos.length} of {data.new_since_login.count}</span>
@@ -140,13 +179,13 @@ function HomePage() {
                                 >
                                     <VideoList videos={data.new_since_login.videos} empty="Nothing new since your last login." />
                                 </Panel>
-                                <Panel title="Recent videos">
+                                <Panel title="Recent videos" className="flex-1" delay={240}>
                                     <VideoList videos={data.recent} empty="No videos yet. Record one on the Camera page or upload one on Videos." />
                                 </Panel>
                             </div>
 
                             {data.scope !== 'mine' && (
-                                <Panel title="Videos per user">
+                                <Panel title="Videos per user" delay={300}>
                                     {data.per_user.length ? (
                                         <table className="w-full text-sm">
                                             <thead>
@@ -159,11 +198,18 @@ function HomePage() {
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-border">
-                                                {data.per_user.map((u) => (
-                                                    <tr key={u.user_id}>
+                                                {data.per_user.map((u, i) => (
+                                                    <tr key={u.user_id} {...rise(i, 350)}>
                                                         <td className="py-2.5 pr-3">
                                                             <span className="block text-text truncate">{u.name}</span>
                                                             {u.role && <span className="block text-xs text-text-muted capitalize">{u.role}</span>}
+                                                            {/* This user's share of videos, against the busiest user. */}
+                                                            <span className="mt-1.5 block h-0.5 rounded-full bg-border overflow-hidden">
+                                                                <span
+                                                                    className="block h-full rounded-full bg-primary/70 origin-left motion-safe:animate-grow"
+                                                                    style={{ width: `${Math.round((100 * u.videos) / Math.max(1, ...data.per_user.map((p) => p.videos)))}%`, animationDelay: `${450 + Math.min(i, 12) * 45}ms` }}
+                                                                />
+                                                            </span>
                                                         </td>
                                                         <td className="py-2.5 text-right tabular-nums text-text">{u.videos}</td>
                                                         <td className="py-2.5 text-right tabular-nums text-text-secondary">{u.recordings}</td>

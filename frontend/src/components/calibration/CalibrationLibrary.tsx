@@ -1,8 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
-import { Check, Pencil, Trash2, X } from 'lucide-react';
-import Button from '@/components/ui/button';
+import { Check, Filter, Pencil, Search, Trash2, X } from 'lucide-react';
 import {
     activateCalibration,
     deleteCalibration,
@@ -13,42 +12,32 @@ import {
 } from '@/api/calibrationApi';
 
 interface CalibrationLibraryProps {
+    /** Switching or deleting is blocked (a calibration job or a camera recording is running). */
     disabled: boolean;
+    /** Shown on the left of the toolbar, like "Add user" on the Users page. */
+    action?: ReactNode;
 }
 
 const formatDate = (entry: CalibrationEntry) =>
     new Date(entry.calibrated_at ?? entry.created_at).toLocaleString('en-GB', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
+        day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
     });
 
-const groupBySetup = (entries: CalibrationEntry[]) => {
-    const groups = new Map<string, CalibrationEntry[]>();
-    entries.forEach((entry) => groups.set(entry.setup, [...(groups.get(entry.setup) ?? []), entry]));
-    // The setup in use first, then by name.
-    return [...groups.entries()].sort(([a, ea], [b, eb]) => {
-        const activeA = ea.some((e) => e.active);
-        const activeB = eb.some((e) => e.active);
-        return activeA === activeB ? a.localeCompare(b) : activeA ? -1 : 1;
-    });
-};
+const cell = 'py-2.5 px-3';
+const iconButton = 'p-1.5 rounded-md text-text-muted hover:text-text hover:bg-background-main transition-colors disabled:opacity-40 disabled:pointer-events-none';
 
-const EntryRow = ({ entry, disabled }: { entry: CalibrationEntry; disabled: boolean }) => {
+const Row = ({ entry, disabled }: { entry: CalibrationEntry; disabled: boolean }) => {
     const queryClient = useQueryClient();
     const [editing, setEditing] = useState(false);
     const [name, setName] = useState(entry.setup);
     const [confirmDelete, setConfirmDelete] = useState(false);
-
-    const refresh = () => {
-        queryClient.invalidateQueries({ queryKey: ['calibration-library'] });
-        queryClient.invalidateQueries({ queryKey: ['calibration-status'] });
-    };
     const { mutate, isPending } = useMutation({
         mutationFn: (request: () => Promise<unknown>) => request(),
-        onSuccess: refresh,
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['calibration-library'] });
+            queryClient.invalidateQueries({ queryKey: ['calibration-status'] });
+            queryClient.invalidateQueries({ queryKey: ['calibration-options'] });
+        },
         onError: (error) => toast.error(errorDetail(error, 'Something went wrong.')),
     });
 
@@ -58,18 +47,14 @@ const EntryRow = ({ entry, disabled }: { entry: CalibrationEntry; disabled: bool
         if (setup && setup !== entry.setup) mutate(() => renameCalibration(entry.id, setup));
         else setName(entry.setup);
     };
-
-    const stat = (label: string, value: string, tone = 'text-text') => (
-        <div className="px-2 py-1.5 text-center">
-            <dt className="text-[10px] font-medium uppercase tracking-[0.12em] text-text-muted">{label}</dt>
-            <dd className={`mt-0.5 text-xs font-medium tabular-nums ${tone}`}>{value}</dd>
-        </div>
-    );
-    const iconButton = 'inline-flex items-center px-1.5 py-1 rounded text-xs text-text-muted hover:text-text hover:bg-border disabled:opacity-50';
+    const use = () => mutate(async () => {
+        const used = await activateCalibration(entry.id);
+        toast.success(`Using the ${used.setup} calibration.`);
+    });
 
     return (
-        <li className={`rounded-lg border p-3 ${entry.active ? 'border-primary/60 bg-primary/5' : 'border-border'}`}>
-            <div className="flex items-center justify-between">
+        <tr className={`border-b border-border transition-colors ${entry.active ? 'bg-primary/5' : 'hover:bg-background-main/50'}`}>
+            <td className={cell}>
                 {editing ? (
                     <input
                         autoFocus
@@ -77,111 +62,144 @@ const EntryRow = ({ entry, disabled }: { entry: CalibrationEntry; disabled: bool
                         onChange={(e) => setName(e.target.value)}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') saveName();
-                            if (e.key === 'Escape') {
-                                setName(entry.setup);
-                                setEditing(false);
-                            }
+                            if (e.key === 'Escape') { setName(entry.setup); setEditing(false); }
                         }}
                         onBlur={saveName}
-                        className="min-w-0 flex-1 mr-2 px-2 py-1 rounded bg-background border border-border text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary/50"
                         aria-label="Setup name"
-                        placeholder="Setup name"
+                        className="w-40 px-2 py-1 rounded bg-background-main border border-border text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary/50"
                     />
                 ) : (
-                    <span className="text-sm font-medium text-text tabular-nums">{formatDate(entry)}</span>
+                    <span className={`font-medium ${entry.setup === 'Unassigned' ? 'text-text-muted italic' : 'text-text'}`}>{entry.setup}</span>
                 )}
+            </td>
+            <td className={`${cell} text-text-muted tabular-nums whitespace-nowrap`}>{formatDate(entry)}</td>
+            <td className={`${cell} text-right tabular-nums`}>{entry.rms !== null ? `${entry.rms.toFixed(2)} px` : '-'}</td>
+            <td className={`${cell} text-right tabular-nums`}>{(entry.baseline_mm / 1000).toFixed(2)} m</td>
+            <td className={`${cell} text-right tabular-nums text-text-muted`}>{entry.pairs ?? '-'}</td>
+            <td className={cell}>
+                <span className={`px-2 py-0.5 text-xs rounded-full ${entry.floor_set ? 'bg-green-500/15 text-green-400' : 'bg-amber-500/15 text-amber-400'}`}>
+                    {entry.floor_set ? 'Set' : 'Not set'}
+                </span>
+            </td>
+            <td className={cell}>
                 {entry.active ? (
-                    <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-[0.12em] bg-primary text-text-inverse">
-                        In use
-                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-[0.12em] bg-primary text-text-inverse">In use</span>
                 ) : (
-                    <Button
-                        size="sm"
-                        variant="secondary"
-                        className="shrink-0 !px-3 !py-1 text-xs"
+                    <button
+                        onClick={use}
                         disabled={disabled || isPending}
-                        onClick={() =>
-                            mutate(async () => {
-                                const used = await activateCalibration(entry.id);
-                                toast.success(`Using the ${used.setup} calibration.`);
-                            })
-                        }
+                        className="px-3 py-1 rounded-md border border-border text-xs font-medium text-text hover:border-primary hover:text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none"
                     >
                         Use
-                    </Button>
+                    </button>
                 )}
-            </div>
-
-            <dl className="mt-2.5 grid grid-cols-3 divide-x divide-border rounded-md border border-border bg-background/40">
-                {stat('RMS', entry.rms !== null ? `${entry.rms.toFixed(2)} px` : '-')}
-                {stat('Baseline', `${(entry.baseline_mm / 1000).toFixed(2)} m`)}
-                {stat('Floor', entry.floor_set ? 'Set' : 'Not set', entry.floor_set ? 'text-green-500' : 'text-amber-500')}
-            </dl>
-
-            <div className="mt-2 flex items-center justify-end">
+            </td>
+            <td className={`${cell} text-right whitespace-nowrap`}>
                 {confirmDelete ? (
-                    <>
-                        <span className="text-xs text-red-500 mr-auto">Delete?</span>
-                        <button
-                            className="inline-flex items-center px-2 py-1 rounded text-xs font-medium text-red-500 hover:bg-red-500/10"
-                            onClick={() => mutate(() => deleteCalibration(entry.id))}
-                            disabled={isPending}
-                        >
-                            <Check className="w-3.5 h-3.5 mr-1" /> Delete
+                    <span className="inline-flex items-center gap-1">
+                        <span className="text-xs text-red-500 mr-1">Delete?</span>
+                        <button className={`${iconButton} !text-red-500 hover:!bg-red-500/15`} onClick={() => mutate(() => deleteCalibration(entry.id))} disabled={isPending} title="Delete">
+                            <Check className="w-4 h-4" />
                         </button>
-                        <button className={`${iconButton} ml-1`} onClick={() => setConfirmDelete(false)}>
-                            <X className="w-3.5 h-3.5 mr-1" /> Cancel
+                        <button className={iconButton} onClick={() => setConfirmDelete(false)} title="Cancel">
+                            <X className="w-4 h-4" />
                         </button>
-                    </>
+                    </span>
                 ) : (
-                    <>
-                        <button className={iconButton} onClick={() => setEditing(true)} title="Move to another setup">
-                            <Pencil className="w-3.5 h-3.5 mr-1" /> Rename
+                    <span className="inline-flex items-center gap-1">
+                        <button className={iconButton} onClick={() => setEditing(true)} title="Rename / move to another setup">
+                            <Pencil className="w-4 h-4" />
                         </button>
-                        {!entry.active && (
-                            <button
-                                className={`${iconButton} ml-1 hover:!text-red-500`}
-                                onClick={() => setConfirmDelete(true)}
-                                disabled={disabled}
-                            >
-                                <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
-                            </button>
-                        )}
-                    </>
+                        <button
+                            className={`${iconButton} hover:!text-red-500 hover:!bg-red-500/15`}
+                            onClick={() => setConfirmDelete(true)}
+                            disabled={disabled || entry.active}
+                            title={entry.active ? "The calibration in use can't be deleted" : 'Delete'}
+                        >
+                            <Trash2 className="w-4 h-4" />
+                        </button>
+                    </span>
                 )}
-            </div>
-        </li>
+            </td>
+        </tr>
     );
 };
 
-const CalibrationLibrary = ({ disabled }: CalibrationLibraryProps) => {
+/** Saved calibrations as a table (like the Users page): search, filter by setup, switch with one click. */
+const CalibrationLibrary = ({ disabled, action }: CalibrationLibraryProps) => {
     const { data, isLoading, isError } = useQuery({ queryKey: ['calibration-library'], queryFn: getCalibrationLibrary });
+    const [search, setSearch] = useState('');
+    const [setupFilter, setSetupFilter] = useState('all');
 
-    if (isLoading) return <p className="text-sm text-text-muted">Loading...</p>;
-    if (isError) return <p className="text-sm text-text-muted">Could not load the saved calibrations.</p>;
-    if (!data?.entries.length) return <p className="text-sm text-text-muted">No calibrations saved yet.</p>;
+    const entries = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        return (data?.entries ?? [])
+            .filter((e) => setupFilter === 'all' || e.setup === setupFilter)
+            .filter((e) => !q || e.setup.toLowerCase().includes(q) || formatDate(e).toLowerCase().includes(q))
+            // The one in use first, then newest first (as the backend sends them).
+            .sort((a, b) => Number(b.active) - Number(a.active));
+    }, [data, search, setupFilter]);
 
     return (
-        <div className="flex flex-col gap-4 max-h-[520px] overflow-auto pr-1">
-            {groupBySetup(data.entries).map(([setup, entries]) => (
-                <div key={setup} className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-semibold text-text">{setup}</h3>
-                        <span className="text-xs text-text-muted tabular-nums">
-                            {entries.length} {entries.length === 1 ? 'calibration' : 'calibrations'}
-                        </span>
+        <section className="h-full min-h-0 flex flex-col rounded-xl border border-border bg-background p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>{action}</div>
+                <div className="flex gap-2">
+                    <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                        <input
+                            type="text"
+                            placeholder="Search calibrations..."
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            className="w-56 pl-10 pr-4 py-2 border border-border rounded-lg bg-background-main text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                        />
                     </div>
-                    {setup === 'Unassigned' && (
-                        <p className="-mt-1 text-xs text-text-muted">Rename these to group them under a setup.</p>
-                    )}
-                    <ul className="flex flex-col gap-2">
-                        {entries.map((entry) => (
-                            <EntryRow key={entry.id} entry={entry} disabled={disabled} />
-                        ))}
-                    </ul>
+                    <div className="relative">
+                        <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                        <select
+                            value={setupFilter}
+                            onChange={(e) => setSetupFilter(e.target.value)}
+                            className="pl-10 pr-8 py-2 border border-border rounded-lg bg-background-main text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 appearance-none"
+                        >
+                            <option value="all">All setups</option>
+                            {data?.setups.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                    </div>
                 </div>
-            ))}
-        </div>
+            </div>
+
+            {/* The table scrolls inside its card, so the page itself never scrolls. */}
+            <div className="min-h-0 flex-1 overflow-auto">
+                {isLoading && <p className="py-8 text-center text-sm text-text-muted">Loading calibrations...</p>}
+                {isError && <p className="py-8 text-center text-sm text-text-muted">Could not load the saved calibrations.</p>}
+                {data && !entries.length && (
+                    <p className="py-8 text-center text-sm text-text-muted">{data.entries.length ? 'No calibrations match.' : 'No calibrations saved yet.'}</p>
+                )}
+                {!!entries.length && (
+                    <table className="w-full text-sm">
+                        <thead className="sticky top-0 bg-background">
+                            <tr className="border-b border-border text-left text-text-secondary">
+                                <th className={`${cell} font-medium`}>Setup</th>
+                                <th className={`${cell} font-medium`}>Calibrated</th>
+                                <th className={`${cell} font-medium text-right`}>RMS</th>
+                                <th className={`${cell} font-medium text-right`}>Baseline</th>
+                                <th className={`${cell} font-medium text-right`}>Pairs</th>
+                                <th className={`${cell} font-medium`}>Floor</th>
+                                <th className={`${cell} font-medium`}>Status</th>
+                                <th className={cell} />
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {entries.map((entry) => <Row key={entry.id} entry={entry} disabled={disabled} />)}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+            {data?.entries.some((e) => e.setup === 'Unassigned') && (
+                <p className="mt-3 text-xs text-text-muted">Rename "Unassigned" calibrations (pencil) to group them under their setup.</p>
+            )}
+        </section>
     );
 };
 

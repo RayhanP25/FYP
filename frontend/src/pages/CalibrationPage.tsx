@@ -20,8 +20,8 @@ import CalibrationPreview from '@/components/calibration/CalibrationPreview';
 import CoverageChecks from '@/components/calibration/CoverageChecks';
 import CalibrationReport from '@/components/calibration/CalibrationReport';
 import CalibrationLibrary from '@/components/calibration/CalibrationLibrary';
+import { useShortcut } from '@/shortcuts/useShortcut';
 
-const SHORTCUT_BLOCKERS = ['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT'];
 
 const captureRequest = async () => {
     const result = await capturePair();
@@ -81,16 +81,7 @@ const CalibrationPage = () => {
         lastJob.current = job;
     }, [status?.job, status?.message, queryClient]);
 
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            if (e.code !== 'Space' || e.repeat || !canCapture || isPending) return;
-            if (SHORTCUT_BLOCKERS.includes((e.target as HTMLElement).tagName)) return;
-            e.preventDefault();
-            mutate(captureRequest);
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [canCapture, isPending, mutate]);
+    useShortcut('calibration.capture', (e) => { if (!e.repeat && canCapture && !isPending) mutate(captureRequest); });
 
     const startSession = () =>
         mutate(async () => {
@@ -104,52 +95,71 @@ const CalibrationPage = () => {
     const streamSrc = session && live ? `${backendUrl}/api/calibration/preview?t=${streamKey}` : null;
     const report = [...(calibration?.report ?? []), ...(calibration?.floor_report ?? [])];
 
+    const inUse = calibration && (
+        <dl className="grid grid-cols-2 gap-y-2 text-sm">
+            <dt className="text-text-muted">Setup</dt>
+            <dd className="text-text text-right truncate font-medium">{calibration.setup ?? '-'}</dd>
+            <dt className="text-text-muted">Calibrated</dt>
+            <dd className="text-text text-right">{new Date(calibration.calibrated_at ?? calibration.updated_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</dd>
+            <dt className="text-text-muted">Stereo RMS</dt>
+            <dd className="text-text tabular-nums text-right">{calibration.rms.toFixed(3)} px</dd>
+            <dt className="text-text-muted">Baseline</dt>
+            <dd className="text-text tabular-nums text-right">{(calibration.baseline_mm / 1000).toFixed(2)} m</dd>
+            <dt className="text-text-muted">Square / pairs</dt>
+            <dd className="text-text tabular-nums text-right">{calibration.square_mm} mm · {calibration.pairs}</dd>
+            <dt className="text-text-muted">Floor level</dt>
+            <dd className={`text-right ${calibration.floor_set ? 'text-green-500' : 'text-amber-500'}`}>{calibration.floor_set ? 'Set' : 'Not set'}</dd>
+        </dl>
+    );
+
     return (
         <AppLayout>
-            <div className="flex flex-col gap-8 max-w-[1800px] mx-auto">
-                <div className="flex items-end justify-between gap-6 flex-wrap">
-                    <div>
-                        <h1 className="text-3xl font-semibold tracking-tight text-text">Calibration</h1>
-                        <p className="mt-2 text-sm text-text-muted">
-                            Calibrate the stereo cameras after they move. Each calibration is saved under its setup, so you can switch back to an earlier one.
-                            Recordings keep the calibration they were filmed with.
-                        </p>
+            {/* Fits the window (header and padding taken off): the table or the preview scrolls/shrinks inside. */}
+            <div className="h-full min-h-[560px] flex flex-col gap-5 max-w-[1800px] mx-auto overflow-hidden">
+                <div className="flex items-end justify-between gap-6">
+                    <div className="min-w-0">
                     </div>
                     {status?.camera_size && (
-                        <span className="px-2.5 py-1 rounded border border-border text-xs font-medium tabular-nums text-text-secondary">
+                        <span className="shrink-0 px-2.5 py-1 rounded border border-border text-xs font-medium tabular-nums text-text-secondary">
                             {status.camera_size[0]} x {status.camera_size[1]} per camera
                         </span>
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-6 items-start">
-                    <div className="flex flex-col gap-4 min-w-0">
-                        <CalibrationPreview
-                            src={streamSrc}
-                            starting={isPending && !session}
-                            onError={() => toast.warn('Preview stopped. Is the session still running?')}
-                        />
-
-                        <div className="flex flex-wrap items-center gap-3">
-                            {!session ? (
-                                <>
-                                    <input
-                                        list="calibration-setups"
-                                        value={setup}
-                                        onChange={(e) => setSetupName(e.target.value)}
-                                        placeholder="Setup name, e.g. NeuonAI or Home Rig"
-                                        aria-label="Setup name"
-                                        className="w-72 max-w-full px-3 py-2 rounded-md bg-background-main border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_320px] gap-5">
+                    <div className="min-h-0 flex flex-col gap-3">
+                        {!session ? (
+                            <CalibrationLibrary
+                                disabled={busy || !!status?.recording}
+                                action={
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            list="calibration-setups"
+                                            value={setup}
+                                            onChange={(e) => setSetupName(e.target.value)}
+                                            placeholder="Setup name, e.g. NeuonAI"
+                                            aria-label="Setup name for a new calibration"
+                                            className="w-56 px-3 py-2 rounded-lg bg-background-main border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                                        />
+                                        <datalist id="calibration-setups">
+                                            {library?.setups.filter((s) => s !== 'Unassigned').map((s) => <option key={s} value={s} />)}
+                                        </datalist>
+                                        <Button onClick={startSession} disabled={isPending || !setup.trim()} className="gap-2 !py-2 text-sm">
+                                            <Play className="w-4 h-4" /> New calibration
+                                        </Button>
+                                    </div>
+                                }
+                            />
+                        ) : (
+                            <>
+                                <div className="flex-1 min-h-0">
+                                    <CalibrationPreview
+                                        src={streamSrc}
+                                        starting={isPending && !session}
+                                        onError={() => toast.warn('Preview stopped. Is the session still running?')}
                                     />
-                                    <datalist id="calibration-setups">
-                                        {library?.setups.filter((s) => s !== 'Unassigned').map((s) => <option key={s} value={s} />)}
-                                    </datalist>
-                                    <Button onClick={startSession} disabled={isPending || !setup.trim()} className="gap-2">
-                                        <Play className="w-4 h-4" /> Start session
-                                    </Button>
-                                </>
-                            ) : (
-                                <>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-3">
                                     <Button onClick={() => mutate(captureRequest)} disabled={!canCapture || isPending} className="gap-2">
                                         <Camera className="w-4 h-4" /> Capture
                                         <kbd className="ml-1 px-1.5 py-0.5 rounded bg-white/15 text-[10px] font-mono">Space</kbd>
@@ -166,20 +176,18 @@ const CalibrationPage = () => {
                                     <Button variant="ghost" onClick={endSession} disabled={busy || isPending} className="gap-2 ml-auto">
                                         <StopCircle className="w-4 h-4" /> End session
                                     </Button>
-                                </>
-                            )}
-                        </div>
-                        {session && (
-                            <p className="text-xs text-text-muted">
-                                Hold the board fully inside both views and keep it still, then capture. Calibrate needs at least {minPairs} pairs; {aimPairs} or more is best.
-                                Set the floor by lying the board flat where the athlete stands.
-                            </p>
+                                </div>
+                                <p className="text-xs text-text-muted">
+                                    Hold the board fully inside both views and keep it still, then capture. Calibrate needs at least {minPairs} pairs; {aimPairs} or more is best.
+                                    Set the floor by lying the board flat where the athlete stands.
+                                </p>
+                            </>
                         )}
                     </div>
 
-                    <aside className="flex flex-col gap-4">
-                        <Panel title="Session">
-                            {session ? (
+                    <aside className="min-h-0 flex flex-col gap-4 overflow-y-auto no-scrollbar">
+                        {session && (
+                            <Panel title="Session">
                                 <div className="flex flex-col gap-3">
                                     <div className="flex items-baseline justify-between">
                                         <span className="text-2xl font-semibold tabular-nums text-text">
@@ -191,56 +199,31 @@ const CalibrationPage = () => {
                                     <div className="h-1.5 rounded-full bg-border overflow-hidden">
                                         <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.min(100, (pairs / aimPairs) * 100)}%` }} />
                                     </div>
-                                    <p className="font-mono text-[11px] text-text-muted truncate" title={session.folder}>{session.folder.split(/[\\/]/).pop()}</p>
                                     <p className="text-xs text-text-muted">Saves to setup <span className="text-text">{session.setup ?? 'Unassigned'}</span></p>
+                                    <CoverageChecks checks={session.checks} />
                                 </div>
-                            ) : (
-                                <p className="text-sm text-text-muted">No session running.</p>
-                            )}
-                        </Panel>
-
-                        {session && (
-                            <Panel title="Coverage">
-                                <CoverageChecks checks={session.checks} />
                             </Panel>
                         )}
 
-                        <Panel title="Calibration">
+                        <Panel title="In use">
                             {calibration ? (
-                                <div className="flex flex-col gap-4">
+                                <div className="flex flex-col gap-3">
                                     {status?.size_mismatch && (
                                         <p className="text-xs text-amber-500">
                                             Cameras now deliver {status.camera_size?.join(' x ')} but this calibration was made at {calibration.camera_size.join(' x ')}. Recalibrate.
                                         </p>
                                     )}
-                                    <dl className="grid grid-cols-2 gap-y-2.5 text-sm">
-                                        <dt className="text-text-muted">Setup</dt>
-                                        <dd className="text-text text-right truncate">{calibration.setup ?? '-'}</dd>
-                                        <dt className="text-text-muted">Stereo RMS</dt>
-                                        <dd className="text-text tabular-nums text-right">{calibration.rms.toFixed(3)} px</dd>
-                                        <dt className="text-text-muted">Square size</dt>
-                                        <dd className="text-text tabular-nums text-right">{calibration.square_mm} mm</dd>
-                                        <dt className="text-text-muted">Baseline</dt>
-                                        <dd className="text-text tabular-nums text-right">{(calibration.baseline_mm / 1000).toFixed(2)} m</dd>
-                                        <dt className="text-text-muted">Pairs used</dt>
-                                        <dd className="text-text tabular-nums text-right">{calibration.pairs}</dd>
-                                        <dt className="text-text-muted">Floor level</dt>
-                                        <dd className={`text-right ${calibration.floor_set ? 'text-green-500' : 'text-text-muted'}`}>{calibration.floor_set ? 'Set' : 'Not set'}</dd>
-                                        <dt className="text-text-muted">Calibrated</dt>
-                                        <dd className="text-text text-right">{new Date(calibration.calibrated_at ?? calibration.updated_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</dd>
-                                    </dl>
+                                    {inUse}
+                                    {!!report.length && (
+                                        <details className="group">
+                                            <summary className="cursor-pointer select-none text-xs text-text-muted hover:text-text">Calibration report</summary>
+                                            <div className="mt-2 max-h-48 overflow-y-auto"><CalibrationReport lines={report} /></div>
+                                        </details>
+                                    )}
                                 </div>
                             ) : (
-                                <p className="text-sm text-text-muted">No calibration yet. Capture pairs, then calibrate.</p>
+                                <p className="text-sm text-text-muted">No calibration yet. Start a new calibration, capture pairs, then calibrate.</p>
                             )}
-                        </Panel>
-
-                        <Panel title="Saved calibrations">
-                            <CalibrationLibrary disabled={busy || !!status?.recording} />
-                        </Panel>
-
-                        <Panel title="Report">
-                            <CalibrationReport lines={report} />
                         </Panel>
                     </aside>
                 </div>

@@ -1,13 +1,13 @@
 :root {
   --font: "Inter", sans-serif;
-  --primary: #E0E0E0;
+  --primary: #F2F2F2;
   /*--primary: #333333; black*/
   --white: #ffffff;
   /*#fafafa*/
-  --bg-primary: #121418;
-  --bg-secondary: #1C1E22;
+  --bg-primary: #0E0E0E;
+  --bg-secondary: #171717;
 
-  --border: #222222;
+  --border: #2A2A2A;
 }
 
 * {

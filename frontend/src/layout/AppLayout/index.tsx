@@ -1,14 +1,16 @@
 import React from 'react';
 import Header from '@/components/header';
 import Sidebar from '@/components/sidebar';
+import { useGlobalShortcuts } from '@/shortcuts/useGlobalShortcuts';
 
 const AppLayout = (props: { children?: React.ReactNode }) => {
+  useGlobalShortcuts();
   return (
-    <div className="main min-h-screen">
+    <div className="main h-screen overflow-hidden">
       <Sidebar />
-      <div className="ml-64 flex flex-col min-h-screen">
+      <div className="ml-64 flex flex-col h-screen">
         <Header />
-        <main className="flex-1 p-6 bg-background-main overflow-y-auto no-scrollbar">{props.children}</main>
+        <main className="flex-1 min-h-0 p-6 bg-background-main overflow-y-auto no-scrollbar">{props.children}</main>
       </div>
     </div>
   );

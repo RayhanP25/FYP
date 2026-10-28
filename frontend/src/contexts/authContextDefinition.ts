@@ -7,6 +7,7 @@ export interface AuthContextType {
     loading: boolean;
     login: (token: string, user: User) => void;
     logout: () => void;
+    refreshUser: () => Promise<void>;
     isAuthenticated: () => boolean;
     isAdmin: () => boolean;
     isCoach: () => boolean;

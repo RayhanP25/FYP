@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from access import names
+from avatars import picture_url
 
 
 router = APIRouter()
@@ -128,7 +129,7 @@ def login(user_credentials: UserLogin, response: Response):
             "full_name": user["full_name"],
             "email": user["email"],
             "role": user["role"],
-            "profile_picture": user.get("profile_picture"),
+            "profile_picture": picture_url(user),
             **group_info(user)
         }
     }
@@ -168,7 +169,7 @@ def get_current_user(response: Response, auth_token: Optional[str] = Cookie(None
         "full_name": user["full_name"],
         "email": user["email"],
         "role": user["role"],
-        "profile_picture": user.get("profile_picture"),
+        "profile_picture": picture_url(user),
         "created_at": user.get("created_at"),
         "last_login": user.get("last_login"),
         **group_info(user)
@@ -272,12 +273,12 @@ def get_my_group(current_user: dict = Depends(get_current_user)):
     group = _group_doc(me.get("group_id"))
     if not group:
         return {"group": None}
-    fields = {"full_name": 1, "email": 1, "profile_picture": 1}
+    fields = {"full_name": 1, "email": 1, "profile_picture": 1, "profile_picture_object": 1}
     coach = db["users"].find_one({"_id": ObjectId(group["coach_id"])}, fields)
     members = []
     if group.get("members_visible"):
         members = list(db["users"].find({"role": "athlete", "group_id": str(group["_id"])}, fields).sort("full_name", 1))
-    person = lambda u: dict(id=str(u["_id"]), full_name=u.get("full_name"), email=u.get("email"), profile_picture=u.get("profile_picture"))
+    person = lambda u: dict(id=str(u["_id"]), full_name=u.get("full_name"), email=u.get("email"), profile_picture=picture_url(u))
     return {"group": dict(id=str(group["_id"]), name=group["name"], members_visible=bool(group.get("members_visible")),
                           coach=person(coach), members=[person(m) for m in members])}
 
