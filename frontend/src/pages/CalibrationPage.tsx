@@ -227,7 +227,7 @@ const CalibrationPage = () => {
                                         <dt className="text-text-muted">Floor level</dt>
                                         <dd className={`text-right ${calibration.floor_set ? 'text-green-500' : 'text-text-muted'}`}>{calibration.floor_set ? 'Set' : 'Not set'}</dd>
                                         <dt className="text-text-muted">Calibrated</dt>
-                                        <dd className="text-text text-right">{new Date(calibration.calibrated_at ?? calibration.updated_at).toLocaleString()}</dd>
+                                        <dd className="text-text text-right">{new Date(calibration.calibrated_at ?? calibration.updated_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</dd>
                                     </dl>
                                 </div>
                             ) : (

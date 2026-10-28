@@ -12,8 +12,9 @@ const Header = () => {
     '/kinematic-analysis': 'Analysis',
     '/analysis': 'Analysis',
     '/view-users': 'Users',
-    '/user-profile': 'Profile',
-    '/settings': 'Settings',
+    '/groups': 'Groups',
+    '/calibration': 'Calibration',
+    '/user-profile': 'Account',
   };
 
   const getBreadcrumb = () => BREADCRUMB_MAP[Object.keys(BREADCRUMB_MAP).find((p) => location.pathname === p || location.pathname.startsWith(p + '/')) ?? ''] || 'Dashboard';
@@ -31,7 +32,7 @@ const Header = () => {
         </div>
 
         <div className="flex items-center gap-4">
-          <button className="p-2 text-text-muted hover:text-text hover:bg-background rounded-lg transition-colors" onClick={() => navigate('/settings')}>
+          <button className="p-2 text-text-muted hover:text-text hover:bg-background rounded-lg transition-colors" onClick={() => navigate('/user-profile')} title="Account">
             <Settings className="w-5 h-5" />
           </button>
         </div>

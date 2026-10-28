@@ -65,12 +65,20 @@ def dashboard(current_user: dict = Depends(get_current_user)):
                                             "created_at": 1, "user_id": 1, "source": 1, "layout": 1,
                                             "frames": 1, "fps": 1}))
     ids = [str(v["_id"]) for v in videos]
-    analysed = {a["video_id"] for a in db["pose_analysis"].find({"video_id": {"$in": ids}}, {"video_id": 1})}
+    # Analysed videos, with frame count and fps from the analysis (uploads don't store them on the video).
+    analysis_len = {a["video_id"]: (a.get("n"), a.get("fps")) for a in db["pose_analysis"].aggregate([
+        {"$match": {"video_id": {"$in": ids}}},
+        {"$project": {"video_id": 1, "fps": "$result.fps",
+                      "n": {"$ifNull": ["$result.total_frames", {"$size": {"$ifNull": ["$result.frames", []]}}]}}},
+    ])}
+    analysed = set(analysis_len)
     users = {str(u["_id"]): u for u in db["users"].find({}, {"full_name": 1, "role": 1, "email": 1})}
 
     def row(v):
         who = users.get(v.get("user_id"), {})
         frames, fps = v.get("frames"), v.get("fps")
+        if not (frames and fps):
+            frames, fps = analysis_len.get(str(v["_id"]), (None, None))
         return dict(
             video_id=str(v["_id"]),
             name=v.get("original_filename") or v.get("filename") or v.get("object_name", "Untitled video"),

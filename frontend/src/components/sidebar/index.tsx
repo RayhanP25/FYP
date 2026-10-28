@@ -88,7 +88,7 @@ const Sidebar = () => {
                         <DropdownMenuContent className="w-48 bg-background-main border border-border">
                             <DropdownMenuItem onClick={() => navigate('/user-profile')}>
                                 <User2 className="w-4 h-4 mr-2" />
-                                Profile
+                                Account
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={handleLogout}>
                                 <LogOut className="w-4 h-4 mr-2" />
@@ -102,4 +102,4 @@ const Sidebar = () => {
     );
 };
 
-export default Sidebar
+export default Sidebar

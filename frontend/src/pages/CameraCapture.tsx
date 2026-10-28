@@ -128,7 +128,7 @@ export default function CameraCapture() {
                     <div>
                         <h1 className="text-3xl font-bold text-text mb-2">3D Triangulation Capture</h1>
                         <div className="flex items-center gap-3 text-sm text-text-muted">
-                            <p>Synchronized stereo capture from two cameras.</p>
+                            <p>Stereo capture from two cameras, recorded side by side.</p>
                             <span className="hidden sm:inline-block w-1 h-1 rounded-full bg-border"></span>
                             <p className="flex items-center gap-1.5 font-mono text-xs bg-background px-2 py-1 rounded border border-border">
                                 <span className={`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-text-muted'}`}></span>
@@ -171,12 +171,12 @@ export default function CameraCapture() {
                     {isStreaming ? (
                         <div className="relative bg-black w-full">
                             <span className="absolute top-3 left-3 z-10 px-2 py-1 text-xs font-bold uppercase tracking-wider bg-background/90 backdrop-blur rounded border border-border text-text">
-                                Left | Right (synchronized)
+                                Left | Right
                             </span>
                             <img
                                 key={`stereo-${streamKey}`}
                                 src={streamSrc}
-                                alt="Synchronized stereo feed"
+                                alt="Stereo feed"
                                 className="w-full h-auto object-contain"
                                 onError={() => toast.warn('Stereo stream failed — is the feed still running?')}
                             />

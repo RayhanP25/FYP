@@ -80,7 +80,9 @@ const AnalysisLibraryPage = () => {
                                 </div>
                             </div>
                             <p className="mt-3 text-sm font-medium text-text truncate group-hover:text-primary transition-colors" title={v.original_filename}>{v.original_filename}</p>
-                            <p className="mt-0.5 text-xs text-text-muted">{formatDate(v.uploaded_at)}</p>
+                            <p className="mt-0.5 text-xs text-text-muted truncate">
+                                {v.owner_name && <>{v.owner_name} · </>}{formatDate(v.uploaded_at)}
+                            </p>
                         </button>
                     ))}
                 </div>
