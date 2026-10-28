@@ -56,7 +56,7 @@ const AnalysisLibraryPage = () => {
 
     const selectUploader = (name: string | null) => { setUploader(name); setPage(1); };
     const filterClass = (active: boolean) =>
-        `flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md text-sm text-left transition-colors ${active ? 'bg-background text-text font-medium border border-border' : 'text-text-secondary border border-transparent hover:bg-background hover:text-text'}`;
+        `flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md text-sm text-left transition-colors ${active ? 'bg-background text-text font-medium' : 'text-text-secondary hover:bg-background hover:text-text'}`;
 
     return (
         <AppLayout>
