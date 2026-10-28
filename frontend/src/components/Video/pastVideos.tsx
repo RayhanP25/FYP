@@ -131,7 +131,7 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
 
     return (
         <>
-            <section className="bg-background rounded-xl shadow-sm border p-5 flex flex-col min-w-[300px] max-w-[500px]">
+            <section className="bg-background rounded-xl shadow-sm border p-5 flex flex-col min-w-[300px] max-w-[500px] max-h-full min-h-0">
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
                     <div className="flex items-center gap-2">
                         <FileVideo className="w-5 h-5 text-primary" />
@@ -178,7 +178,7 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
                     </div>
                 ) : (
                     <>
-                        <div className="overflow-x-auto">
+                        <div className="overflow-auto min-h-0 no-scrollbar">
                             <table className="w-full table-fixed">
                                 <thead>
                                     <tr className="border-b">

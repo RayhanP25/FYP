@@ -22,13 +22,14 @@ const timeAgo = (iso: string) => {
 
 const formatDuration = (s: number | null) => (s == null ? '-' : s < 60 ? `${s.toFixed(1)} s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')} min`);
 
-const Panel = ({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) => (
-    <section className="rounded-xl bg-background-main border border-border p-5 min-w-0">
+// The page fits the window: a panel takes the height it's given and its list scrolls inside it.
+const Panel = ({ title, aside, children, className = '' }: { title: string; aside?: ReactNode; children: ReactNode; className?: string }) => (
+    <section className={`rounded-xl bg-background-main border border-border p-5 min-w-0 min-h-0 flex flex-col ${className}`}>
         <div className="mb-4 flex items-center justify-between">
             <h2 className="text-[11px] font-medium uppercase tracking-[0.16em] text-text-muted">{title}</h2>
             {aside}
         </div>
-        {children}
+        <div className="min-h-0 overflow-y-auto no-scrollbar">{children}</div>
     </section>
 );
 
@@ -90,7 +91,7 @@ function HomePage() {
 
     return (
         <AppLayout>
-            <div className="flex flex-col gap-8 max-w-[1500px] mx-auto">
+            <div className="h-full min-h-0 flex flex-col gap-8 max-w-[1500px] mx-auto">
                 <div>
 
                 </div>
@@ -118,9 +119,10 @@ function HomePage() {
                             />
                         </div>
 
-                        <div className={`grid grid-cols-1 gap-6 items-start ${data.scope !== 'mine' ? '2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : ''}`}>
-                            <div className="flex flex-col gap-6 min-w-0">
+                        <div className={`flex-1 min-h-0 grid grid-cols-1 gap-6 ${data.scope !== 'mine' ? 'xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] grid-rows-[minmax(0,1fr)_minmax(0,1fr)] xl:grid-rows-[minmax(0,1fr)]' : 'grid-rows-[minmax(0,1fr)]'}`}>
+                            <div className="flex flex-col gap-6 min-w-0 min-h-0">
                                 <Panel
+                                    className="shrink-0 max-h-[50%]"
                                     title="New since your last login"
                                     aside={data.new_since_login.count > data.new_since_login.videos.length && (
                                         <span className="text-xs text-text-muted">latest {data.new_since_login.videos.length} of {data.new_since_login.count}</span>
@@ -128,7 +130,7 @@ function HomePage() {
                                 >
                                     <VideoList videos={data.new_since_login.videos} empty="Nothing new since your last login." />
                                 </Panel>
-                                <Panel title="Recent videos">
+                                <Panel title="Recent videos" className="flex-1">
                                     <VideoList videos={data.recent} empty="No videos yet. Record one on the Camera page or upload one on Videos." />
                                 </Panel>
                             </div>

@@ -60,7 +60,7 @@ const AnalysisLibraryPage = () => {
 
     return (
         <AppLayout>
-            <div className="flex flex-col gap-5 max-w-[1800px] mx-auto">
+            <div className="h-full min-h-0 flex flex-col gap-5 max-w-[1800px] mx-auto">
                 <div className="flex items-end justify-between gap-6 flex-wrap">
                     <div>
                         <p className="mt-1 text-sm text-text-muted tabular-nums">
@@ -88,8 +88,8 @@ const AnalysisLibraryPage = () => {
                     </div>
                 </div>
 
-                <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-5 items-start">
-                    <aside className="sticky top-4 flex flex-col gap-2">
+                <div className="flex-1 min-h-0 grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] gap-5 items-start">
+                    <aside className="max-h-full overflow-y-auto no-scrollbar flex flex-col gap-2">
                         <div className="h-10 flex items-center">
                             <input
                                 type="text" placeholder="Search by name" value={uploaderSearch}
@@ -115,14 +115,16 @@ const AnalysisLibraryPage = () => {
                         </div>
                     </aside>
 
-                    <div className="border border-border rounded-md overflow-hidden bg-background-main min-w-0">
-                        <div className={`${ROW_GRID} h-10 text-xs font-medium text-text-muted bg-background border-b border-border`}>
+                    <div className="max-h-full flex flex-col border border-border rounded-md overflow-hidden bg-background-main min-w-0">
+                        <div className={`${ROW_GRID} h-10 shrink-0 text-xs font-medium text-text-muted bg-background border-b border-border`}>
                             <span>Name</span>
                             <span>Type</span>
                             <span>Uploaded by</span>
                             <span>Date uploaded</span>
                         </div>
 
+                        {/* Rows scroll inside the table; the header above and the page bar below stay put. */}
+                        <div className="min-h-0 overflow-y-auto no-scrollbar">
                         {isLoading && Array.from({ length: 8 }).map((_, i) => (
                             <div key={i} className={`${ROW_GRID} h-[72px] border-t border-border`}>
                                 <div className="flex items-center gap-3">
@@ -164,9 +166,10 @@ const AnalysisLibraryPage = () => {
                                 {!all.length && <Button onClick={() => navigate('/video-test')} className="mt-2 px-6">Upload a video</Button>}
                             </div>
                         )}
+                        </div>
 
                         {!isLoading && !error && filtered.length > 0 && (
-                            <div className="flex items-center justify-between gap-4 h-12 px-4 border-t border-border text-sm text-text-muted">
+                            <div className="flex items-center justify-between gap-4 h-12 shrink-0 px-4 border-t border-border text-sm text-text-muted">
                                 <span className="tabular-nums">
                                     {((current - 1) * PAGE_SIZE + 1).toLocaleString()}–{Math.min(current * PAGE_SIZE, filtered.length).toLocaleString()} of {filtered.length.toLocaleString()}
                                 </span>

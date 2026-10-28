@@ -115,7 +115,7 @@ const CalibrationPage = () => {
     return (
         <AppLayout>
             {/* Fits the window (header and padding taken off): the table or the preview scrolls/shrinks inside. */}
-            <div className="h-[calc(100dvh-6.5rem)] min-h-[560px] flex flex-col gap-5 max-w-[1800px] mx-auto overflow-hidden">
+            <div className="h-full min-h-[560px] flex flex-col gap-5 max-w-[1800px] mx-auto overflow-hidden">
                 <div className="flex items-end justify-between gap-6">
                     <div className="min-w-0">
                     </div>

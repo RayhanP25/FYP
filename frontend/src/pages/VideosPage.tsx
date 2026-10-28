@@ -15,7 +15,7 @@ const VideosPage = () => {
 
     return (
         <AppLayout>
-            <div className="flex flex-row gap-6">
+            <div className="h-full min-h-0 flex flex-row gap-6">
                 <div className="flex-1 h-fit">
                     <VideoUpload onUploadSuccess={handleVideoSelect} />
                 </div>

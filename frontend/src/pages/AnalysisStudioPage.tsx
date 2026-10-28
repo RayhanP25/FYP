@@ -89,6 +89,7 @@ const AnalysisStudioPage = () => {
     const [lockBones, setLockBones] = useState(false);
     const [saving, setSaving] = useState(false);
     const beforeDrag = useRef<Record<string, PendingEdit> | null>(null);
+    const panelsRef = useRef<HTMLDivElement>(null);
 
     const { data: meta } = useQuery({ queryKey: ['studio-video', videoId, 'left'], queryFn: () => getVideoUrl(videoId, 'left'), staleTime: 30 * 60 * 1000 });
     const { data: analysis, isLoading, isError } = useQuery({
@@ -238,7 +239,7 @@ const AnalysisStudioPage = () => {
         if (!layout.visible.skeleton) toggleVisible('skeleton');
         setViewerTime(leftRef.current?.currentTime ?? rightRef.current?.currentTime ?? 0);
         setEditing(true);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        panelsRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     };
     // One undo step per drag: the edits as they were before the joint first moved. A new step clears redo.
     const pushHistory = () => {
@@ -428,7 +429,7 @@ const AnalysisStudioPage = () => {
 
     return (
         <AppLayout>
-            <div className="flex flex-col gap-6 max-w-[1800px] mx-auto">
+            <div className="h-full min-h-0 flex flex-col gap-6 max-w-[1800px] mx-auto">
                 <div className="flex items-end justify-between gap-6 flex-wrap">
                     <div className="min-w-0">
                         <button onClick={() => navigate('/analysis')} className="inline-flex items-center gap-1.5 mb-3 text-xs uppercase tracking-[0.16em] text-text-muted hover:text-text transition-colors">
@@ -621,7 +622,8 @@ const AnalysisStudioPage = () => {
 
                 {analysis && (
                     visiblePanels.length ? (
-                        <div className="-mt-2">
+                        // Panels scroll here; the title, buttons and edit toolbar above stay put.
+                        <div ref={panelsRef} className="-mt-2 flex-1 min-h-0 overflow-y-auto no-scrollbar">
                             {(editing ? EDIT_ROWS : ROWS).map((row) => {
                                 const items = visiblePanels.filter((p) => row.panels.includes(p.id)).map((p) => ({
                                     id: p.id,

@@ -171,9 +171,9 @@ export default function CameraCapture() {
                     </div>
                 </div>
 
-                <div className={`rounded-xl border-2 flex flex-col relative overflow-hidden transition-colors duration-300 w-full ${status.boxClass}`}>
+                <div className={`rounded-xl border-2 flex flex-col relative overflow-hidden transition-colors duration-300 w-full min-h-0 ${status.boxClass}`}>
                     {isStreaming ? (
-                        <div className="relative bg-black w-full">
+                        <div className="relative bg-black w-full h-full min-h-0 flex justify-center">
                             <span className="absolute top-3 left-3 z-10 px-2 py-1 text-xs font-bold uppercase tracking-wider bg-background/90 backdrop-blur rounded border border-border text-text">
                                 Left | Right
                             </span>
@@ -181,12 +181,12 @@ export default function CameraCapture() {
                                 key={`stereo-${streamKey}`}
                                 src={streamSrc}
                                 alt="Stereo feed"
-                                className="w-full h-auto object-contain"
+                                className="w-full h-auto max-h-full object-contain"
                                 onError={() => toast.warn('Stereo stream failed — is the feed still running?')}
                             />
                         </div>
                     ) : (
-                        <div className="aspect-video flex flex-col items-center justify-center p-8">
+                        <div className="aspect-video max-h-full flex flex-col items-center justify-center p-8">
                             <VideoOff className="w-10 h-10 text-text-muted mb-2 opacity-40" />
                             <p className="font-bold text-lg text-text">Cameras Offline</p>
                             <p className="text-sm text-text-muted mt-2 text-center max-w-md">
