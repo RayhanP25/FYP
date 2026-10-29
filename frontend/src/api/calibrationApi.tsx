@@ -59,6 +59,9 @@ export interface CalibrationStatus {
     calibration: CalibrationResult | null;
     size_mismatch: boolean;
     job: 'loading' | 'calibrate' | 'floor' | null;
+    /** Which step of the job is running (calibrate), and how long the job has been running. */
+    job_step: string;
+    job_seconds: number | null;
     message: string;
 }
 

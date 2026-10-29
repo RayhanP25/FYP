@@ -60,6 +60,8 @@ const CalibrationPage = () => {
     const minPairs = session?.min_pairs ?? 15;
     const aimPairs = session?.aim_pairs ?? 25;
     const canCapture = !!session && live && !busy;
+    const jobLabel = { loading: 'Loading saved photos', calibrate: 'Calibrating', floor: 'Setting the floor' }[status?.job ?? 'calibrate'];
+    const jobTime = status?.job_seconds != null ? `${Math.floor(status.job_seconds / 60)}:${String(status.job_seconds % 60).padStart(2, '0')}` : '';
     // Default the setup box to the setup in use (until the user types something).
     const activeSetup = calibration?.setup && calibration.setup !== 'Unassigned' ? calibration.setup : '';
     const setup = setupName ?? activeSetup;
@@ -183,6 +185,11 @@ const CalibrationPage = () => {
                                         <StopCircle className="w-4 h-4" /> End session
                                     </Button>
                                 </div>
+                                {busy && (
+                                    <p className="text-xs text-primary tabular-nums">
+                                        {jobLabel}{status?.job_step ? `: ${status.job_step}` : '...'} · {jobTime}
+                                    </p>
+                                )}
                                 <p className="text-xs text-text-muted">
                                     Hold the board fully inside both views and keep it still, then capture. Calibrate needs at least {minPairs} pairs; {aimPairs} or more is best.
                                     Set the floor by lying the board flat where the athlete stands.
