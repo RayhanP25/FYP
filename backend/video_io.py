@@ -6,7 +6,10 @@ Encoding  : h264_nvenc (NVIDIA GPU) -> libx264 (fast CPU) -> libopenh264 -> Open
             always uses libx264; every other video (split halves, overlays) goes to the GPU.
             Output is H.264 / yuv420p / faststart, so browsers play it.
 Decoding  : ffmpeg -hwaccel cuda (NVDEC); FFmpeg silently falls back to CPU decoding when the
-            GPU can't take the stream. Falls back to cv2.VideoCapture if FFmpeg is missing.
+            GPU can't take the stream. Falls back to cv2.VideoCapture if FFmpeg is missing, or if
+            FFmpeg gives no frames at all for a file OpenCV can open.
+            Frame timing option: -fps_mode (FFmpeg 5.1+); -vsync only for older builds, because newer
+            FFmpeg (e.g. 9.x from WinGet, found on the PATH before the bundled copy) rejects -vsync.
 
 FFmpeg comes from FFMPEG_PATH, the PATH, or the imageio-ffmpeg package (pip install imageio-ffmpeg).
 VIDEO_GPU=0 in .env turns the GPU paths off.
@@ -29,6 +32,7 @@ _ENCODERS = {   # name -> extra args (quality settings)
     "libopenh264": ["-b:v", "20M"],
 }
 _probe = {}
+_sync = {}
 _lock = threading.Lock()
 
 
@@ -41,6 +45,21 @@ def ffmpeg_exe():
         return imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
         return None
+
+
+def _passthrough_args(exe):
+    """Keep every decoded frame as is: '-fps_mode passthrough' (FFmpeg 5.1+), else the old '-vsync passthrough'.
+    Checked once per ffmpeg binary."""
+    with _lock:
+        if exe not in _sync:
+            cmd = [exe, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=16x16:r=1",
+                   "-frames:v", "1", "-fps_mode", "passthrough", "-f", "null", "-"]
+            try:
+                ok = subprocess.run(cmd, capture_output=True, timeout=30, creationflags=_NO_WINDOW).returncode == 0
+            except Exception:
+                ok = False
+            _sync[exe] = ["-fps_mode", "passthrough"] if ok else ["-vsync", "passthrough"]
+        return _sync[exe]
 
 
 def _encoder_works(name):
@@ -161,7 +180,7 @@ class VideoReader:
     def _start(self):
         hw = ["-hwaccel", "cuda"] if self._hw else []
         cmd = [self._exe, "-hide_banner", "-loglevel", "error", *hw, "-i", self._path,
-               "-f", "rawvideo", "-pix_fmt", "bgr24", "-vsync", "passthrough", "-"]
+               "-f", "rawvideo", "-pix_fmt", "bgr24", *_passthrough_args(self._exe), "-"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                      creationflags=_NO_WINDOW, bufsize=self._n * 2)
 
@@ -182,6 +201,15 @@ class VideoReader:
             self._hw = False
             self._start()
             buf = self.proc.stdout.read(self._n)
+        if len(buf) < self._n and self._first:
+            # FFmpeg gave nothing at all although OpenCV opened the file (an FFmpeg build that rejects
+            # our options, a codec it lacks...): read with OpenCV instead of returning an empty video.
+            self.proc.kill(); self.proc.wait()
+            self.proc = None
+            self._first = False
+            print(f"video: ffmpeg ({self._exe}) gave no frames for {os.path.basename(self._path)}; using OpenCV")
+            self.cap = cv2.VideoCapture(self._path)
+            return self.cap.read()
         self._first = False
         if len(buf) < self._n:
             return False, None
