@@ -58,7 +58,7 @@ export interface CalibrationStatus {
     session: CalibrationSessionInfo | null;
     calibration: CalibrationResult | null;
     size_mismatch: boolean;
-    job: 'calibrate' | 'floor' | null;
+    job: 'loading' | 'calibrate' | 'floor' | null;
     message: string;
 }
 
@@ -79,6 +79,30 @@ export const getCalibrationStatus = async (): Promise<CalibrationStatus> => {
 
 export const startCalibrationSession = async (setup: string): Promise<void> => {
     await api.post('/api/calibration/session/start', { setup }, { timeout: 60000 });
+};
+
+/** An earlier session whose photos are still in backend/calib_sessions/ (GET /api/calibration/sessions). */
+export interface CalibrationSavedSession {
+    name: string;
+    date: string;
+    pairs: number;
+    floor_photos: boolean;
+    camera_size: [number, number] | null;
+    /** Setups this session was already calibrated as, if any. */
+    calibrated_as: string[];
+    active: boolean;
+}
+
+export const getCalibrationSessions = async (): Promise<CalibrationSavedSession[]> => {
+    const response = await api.get('/api/calibration/sessions');
+    return response.data.sessions;
+};
+
+/** Open an earlier session again; its photos are reloaded in the background (status job "loading"). */
+export const resumeCalibrationSession = async (name: string, setup: string): Promise<{ status: string; pairs: number }> => {
+    // Generous timeout: the cameras are started too, and 2K cameras can take a while to open.
+    const response = await api.post(`/api/calibration/sessions/${encodeURIComponent(name)}/resume`, { setup }, { timeout: 150000 });
+    return response.data;
 };
 
 export const endCalibrationSession = async (): Promise<void> => {
