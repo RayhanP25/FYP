@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
-import { Calculator, Camera, Layers, Play, StopCircle, Undo2 } from 'lucide-react';
+import { Calculator, Camera, FolderOpen, Layers, Play, StopCircle, Undo2 } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
@@ -20,6 +20,7 @@ import CalibrationPreview from '@/components/calibration/CalibrationPreview';
 import CoverageChecks from '@/components/calibration/CoverageChecks';
 import CalibrationReport from '@/components/calibration/CalibrationReport';
 import CalibrationLibrary from '@/components/calibration/CalibrationLibrary';
+import PreviousSessionsDialog from '@/components/calibration/PreviousSessionsDialog';
 import { useShortcut } from '@/shortcuts/useShortcut';
 
 
@@ -40,6 +41,7 @@ const CalibrationPage = () => {
     const backendUrl = api.defaults.baseURL || 'http://localhost:8000';
     const [streamKey, setStreamKey] = useState(0);
     const [setupName, setSetupName] = useState<string | null>(null);
+    const [previousOpen, setPreviousOpen] = useState(false);
     const lastJob = useRef<string | null>(null);
 
     const { data: status } = useQuery({
@@ -147,6 +149,10 @@ const CalibrationPage = () => {
                                         <Button onClick={startSession} disabled={isPending || !setup.trim()} className="gap-2 !py-2 text-sm">
                                             <Play className="w-4 h-4" /> New calibration
                                         </Button>
+                                        <Button variant="secondary" onClick={() => setPreviousOpen(true)} disabled={isPending || busy} className="gap-2 !py-2 text-sm"
+                                            title="Open an earlier session again from its saved photos">
+                                            <FolderOpen className="w-4 h-4" /> Previous sessions
+                                        </Button>
                                     </div>
                                 }
                             />
@@ -199,6 +205,9 @@ const CalibrationPage = () => {
                                     <div className="h-1.5 rounded-full bg-border overflow-hidden">
                                         <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.min(100, (pairs / aimPairs) * 100)}%` }} />
                                     </div>
+                                    {status?.job === 'loading' && (
+                                        <p className="text-xs text-primary">Finding the board in the saved photos... {pairs} pairs so far</p>
+                                    )}
                                     <p className="text-xs text-text-muted">Saves to setup <span className="text-text">{session.setup ?? 'Unassigned'}</span></p>
                                     <CoverageChecks checks={session.checks} />
                                 </div>
@@ -228,6 +237,7 @@ const CalibrationPage = () => {
                     </aside>
                 </div>
             </div>
+            <PreviousSessionsDialog open={previousOpen} onOpenChange={setPreviousOpen} setups={library?.setups ?? []} />
         </AppLayout>
     );
 };

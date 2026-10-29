@@ -409,16 +409,26 @@ class CalibrationSession:
         with open(os.path.join(self.folder, "report.txt"), mode, encoding="utf-8") as f:
             f.write("\n".join(rep) + "\n")
 
-    def load_pairs(self):
-        """Resume: reload earlier captured pairs from this folder. Returns how many were usable."""
-        for pL in sorted(glob.glob(os.path.join(self.folder, "pair_*_L.png"))):
+    def load_pairs(self, workers=4):
+        """Resume: reload earlier captured pairs from this folder. Returns how many were usable.
+        The board is found again in every photo (full resolution, as when it was captured), several photos at
+        once (OpenCV releases the GIL). Pairs are added in order as they are found, so the count climbs."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(pL):
             a_, b_ = cv2.imread(pL, 0), cv2.imread(pL[:-6] + "_R.png", 0)
             if a_ is None or b_ is None or (a_.shape[1], a_.shape[0]) != self.sizeL:
-                continue
+                return None
             okL_, cL_ = find_corners(a_); okR_, cR_ = find_corners(b_)
-            if okL_ and okR_:
-                self.objpoints.append(OBJP.copy()); self.imgL.append(cL_); self.imgR.append(cR_)
-                self.cov.add(cL_, cR_, self.sizeL, self.sizeR)
+            return (cL_, cR_) if okL_ and okR_ else None
+
+        paths = sorted(glob.glob(os.path.join(self.folder, "pair_*_L.png")))
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            for res in pool.map(one, paths):
+                if res is not None:
+                    cL_, cR_ = res
+                    self.objpoints.append(OBJP.copy()); self.imgL.append(cL_); self.imgR.append(cR_)
+                    self.cov.add(cL_, cR_, self.sizeL, self.sizeR)
         return len(self.objpoints)
 
     def add(self, fL, fR, cL, cR):
@@ -828,4 +838,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()
