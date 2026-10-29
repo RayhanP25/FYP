@@ -115,6 +115,11 @@ def capture_still(grab):
     fL1, fR1 = grab()
     if fL1 is None:
         return None, "could not grab a pair"
+    # Quick look on a half-size copy first (like the live preview): with no board in view the full-resolution
+    # search below can take many seconds per 2K image, and the page would wait that long for an answer.
+    for f in (fL1, fR1):
+        if not find_corners(gray(f), fast_scale=0.5)[0]:
+            return None, "board not found in both views -- hold it fully inside both pictures"
     time.sleep(0.15)
     fL2, fR2 = grab()
     if fL2 is None:
@@ -227,9 +232,11 @@ def tilt_angles(rvecs):
     return np.array(out)
 
 
-def calibrate(objpoints, imgL, imgR, sizeL, sizeR):
-    """Mono calibration, removal of bad pairs, joint stereo refinement. Returns (calib, report lines)."""
+def calibrate(objpoints, imgL, imgR, sizeL, sizeR, progress=None):
+    """Mono calibration, removal of bad pairs, joint stereo refinement. Returns (calib, report lines).
+    progress(text): optional, told which step is running (the web page shows it)."""
     rep = []
+    say = progress or (lambda text: None)
     mono_flags = cv2.CALIB_FIX_K3 if FIX_K3 else 0
 
     def mono(o, l, r):
@@ -247,7 +254,9 @@ def calibrate(objpoints, imgL, imgR, sizeL, sizeR):
     cp = lambda a, b: (a[1].copy(), a[2].copy(), b[1].copy(), b[2].copy())
     joint_flags = cv2.CALIB_USE_INTRINSIC_GUESS | (cv2.CALIB_FIX_K3 if FIX_K3 else 0)
     o, l, r = list(objpoints), list(imgL), list(imgR)
+    say(f"step 1 of 4: single-camera calibration ({len(o)} pairs)")
     a, b = mono(o, l, r)
+    say("step 2 of 4: stereo fit to find bad pairs")
     # judge bad pairs after joint refinement; with fixed mono intrinsics the errors are inflated
     s0 = stereo(o, l, r, *cp(a, b), joint_flags)
     med = float(np.median(s0["per"])); thr = max(1.0, 2.0 * med)
@@ -258,11 +267,13 @@ def calibrate(objpoints, imgL, imgR, sizeL, sizeR):
     if dropped and len(keep) >= MIN_PAIRS:
         o = [o[i] for i in keep]; l = [l[i] for i in keep]; r = [r[i] for i in keep]
         rep.append(f"dropped {len(dropped)} pair(s) with error > {thr:.2f} px: {dropped}")
+        say(f"step 3 of 4: single-camera calibration without {len(dropped)} bad pair(s)")
         a, b = mono(o, l, r)
     elif dropped:
         rep.append(f"{len(dropped)} pair(s) above {thr:.2f} px kept (dropping would leave < {MIN_PAIRS})")
         keep = list(range(len(o)))
     rep.append(f"mono RMS: left {a[0]:.3f} px, right {b[0]:.3f} px  ({len(o)} pairs; k3 {'fixed' if FIX_K3 else 'free'})")
+    say(f"step 4 of 4: final stereo fit ({len(o)} pairs)")
     s_fix = stereo(o, l, r, *cp(a, b), cv2.CALIB_FIX_INTRINSIC)
     s = stereo(o, l, r, *cp(a, b), joint_flags)
     for name, K0, K1 in (("left", a[1], s["K1"]), ("right", b[1], s["K2"])):
@@ -453,11 +464,11 @@ class CalibrationSession:
         self.cov.pop(list(zip(self.imgL, self.imgR)), self.sizeL, self.sizeR)
         return len(self.objpoints)
 
-    def calibrate(self):
+    def calibrate(self, progress=None):
         """Stereo calibration over all pairs; saves calibration.npz. Returns the report lines."""
         if len(self.objpoints) < MIN_PAIRS:
             raise ValueError(f"need at least {MIN_PAIRS} pairs (have {len(self.objpoints)})")
-        calib, rep = calibrate(self.objpoints, self.imgL, self.imgR, self.sizeL, self.sizeR)
+        calib, rep = calibrate(self.objpoints, self.imgL, self.imgR, self.sizeL, self.sizeR, progress=progress)
         rep = ["coverage: " + "; ".join(self.cov.summary()[0])] + rep
         self.meta["report"] = rep
         save(calib, self.meta, self.out)

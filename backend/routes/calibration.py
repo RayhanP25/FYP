@@ -23,6 +23,7 @@ import struct
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime
 
 import cv2
@@ -51,12 +52,32 @@ class _State:
         self.session = None      # sc.CalibrationSession while a session is open
         self.grab = None         # frame source for the open session
         self.job = None          # "loading" | "calibrate" | "floor" while running in the background
+        self.job_started = 0.0   # when the job started (time.time())
+        self.job_step = ""       # which step of the job is running, for the page
         self.setup = None        # setup name the session's calibration is saved under
         self.entry_id = None     # library entry made by this session's calibrate
         self.message, self.message_t = "", 0.0
 
 
 state = _State()
+_capture_lock = threading.Lock()   # one Capture at a time; a second press is answered "busy" instead of queueing
+
+
+@contextmanager
+def _locked(timeout=3.0):
+    """The shared lock, or a quick 409 if something holds it. Without the timeout a request waits silently
+    (the page's buttons stay grey with no answer)."""
+    if not state.lock.acquire(timeout=timeout):
+        raise HTTPException(status_code=409, detail="The calibration is busy with another step. Try again in a moment.")
+    try:
+        yield
+    finally:
+        state.lock.release()
+
+
+def _no_capture_running():
+    if _capture_lock.locked():
+        raise HTTPException(status_code=409, detail="A capture is still being checked. Try again in a second.")
 
 
 def _say(text):
@@ -111,7 +132,7 @@ def _check_camera_size(s):
 
 
 def _start_job(kind, fn):
-    state.job = kind
+    state.job, state.job_started, state.job_step = kind, time.time(), ""
 
     def work():
         try:
@@ -120,7 +141,7 @@ def _start_job(kind, fn):
         except Exception as ex:
             _say(f"{kind} failed: {ex}")
         finally:
-            state.job = None
+            state.job, state.job_step = None, ""
     threading.Thread(target=work, daemon=True).start()
 
 
@@ -166,7 +187,9 @@ def status(current_user: dict = Depends(require_admin)):
     size_mismatch = bool(calib and camera_size and calib["camera_size"] != camera_size)
     return dict(live=manager.running, recording=recorder.active, camera_size=camera_size,
                 session=_session_info(s) if s else None, calibration=calib, size_mismatch=size_mismatch,
-                job=state.job, message=state.message if time.time() - state.message_t < 6 else "")
+                job=state.job, job_step=state.job_step if state.job else "",
+                job_seconds=round(time.time() - state.job_started) if state.job else None,
+                message=state.message if time.time() - state.message_t < 6 else "")
 
 
 class _BoardDetector:
@@ -228,7 +251,7 @@ class SessionStart(BaseModel):
 
 @router.post("/session/start")
 def start_session(body: SessionStart = SessionStart(), current_user: dict = Depends(require_admin)):
-    with state.lock:
+    with _locked():
         if recorder.active:
             raise HTTPException(status_code=409, detail="Stop the camera recording first.")
         if state.session is not None:
@@ -256,7 +279,7 @@ def start_session(body: SessionStart = SessionStart(), current_user: dict = Depe
 
 @router.post("/session/stop")
 def stop_session(current_user: dict = Depends(require_admin)):
-    with state.lock:
+    with _locked():
         if state.job:
             raise HTTPException(status_code=409, detail=f"Wait for '{state.job}' to finish.")
         state.session, state.grab = None, None
@@ -267,22 +290,36 @@ def stop_session(current_user: dict = Depends(require_admin)):
 
 @router.post("/capture")
 def capture(current_user: dict = Depends(require_admin)):
-    with state.lock:
-        s = _active_session()
-        _check_camera_size(s)
-        res, why = sc.capture_still(state.grab)
+    if not _capture_lock.acquire(blocking=False):
+        return {"ok": False, "message": "Still checking the previous capture..."}
+    try:
+        with _locked():
+            s = _active_session()
+            _check_camera_size(s)
+            grab = state.grab
+        # Finding the board can take a moment at full resolution: done without the shared lock, so
+        # Calibrate / Undo / End session still answer straight away.
+        res, why = sc.capture_still(grab)
         if res is None:
             _say(why)
             return {"ok": False, "message": why}
-        k = s.add(*res)
-        msg = f"captured pair #{k} ({len(s.objpoints)} in total)"
-        _say(msg)
-    return {"ok": True, "message": msg}
+        with _locked():
+            if state.session is not s:
+                return {"ok": False, "message": "The session was ended."}
+            if state.job:
+                return {"ok": False, "message": f"Not saved: '{state.job}' started meanwhile."}
+            k = s.add(*res)
+            msg = f"captured pair #{k} ({len(s.objpoints)} in total)"
+            _say(msg)
+        return {"ok": True, "message": msg}
+    finally:
+        _capture_lock.release()
 
 
 @router.post("/undo")
 def undo(current_user: dict = Depends(require_admin)):
-    with state.lock:
+    _no_capture_running()
+    with _locked():
         s = _active_session()
         if not s.saved:
             raise HTTPException(status_code=409, detail="Nothing to undo in this session.")
@@ -292,14 +329,16 @@ def undo(current_user: dict = Depends(require_admin)):
 
 @router.post("/calibrate")
 def calibrate(current_user: dict = Depends(require_admin)):
-    with state.lock:
+    _no_capture_running()
+    with _locked():
         s = _active_session()
         if len(s.objpoints) < sc.MIN_PAIRS:
             raise HTTPException(status_code=409, detail=f"Need at least {sc.MIN_PAIRS} pairs (have {len(s.objpoints)}).")
         setup, user = state.setup, current_user.get("email")
 
         def run():
-            s.calibrate()
+            s.calibrate(progress=lambda text: setattr(state, "job_step", text))
+            state.job_step = "saving to the calibration library"
             state.entry_id = store.record_current(setup, created_by=user)
         _start_job("calibrate", run)
     return {"status": "running"}
@@ -307,7 +346,8 @@ def calibrate(current_user: dict = Depends(require_admin)):
 
 @router.post("/floor")
 def floor(current_user: dict = Depends(require_admin)):
-    with state.lock:
+    _no_capture_running()
+    with _locked():
         s = _active_session()
         _check_camera_size(s)
         grab = state.grab
@@ -398,7 +438,7 @@ def list_sessions(current_user: dict = Depends(require_admin)):
 @router.post("/sessions/{name}/resume")
 def resume_session(name: str, body: SessionStart = SessionStart(), current_user: dict = Depends(require_admin)):
     """Open an earlier session again: its photos are reloaded (the board is found in each one) in the background."""
-    with state.lock:
+    with _locked():
         if recorder.active:
             raise HTTPException(status_code=409, detail="Stop the camera recording first.")
         if state.job:
@@ -466,7 +506,7 @@ def options(current_user: dict = Depends(get_current_user)):
 
 @router.post("/library/{entry_id}/activate")
 def activate_entry(entry_id: str, current_user: dict = Depends(require_admin)):
-    with state.lock:
+    with _locked():
         _no_job()
         if recorder.active:
             raise HTTPException(status_code=409, detail="Stop the camera recording first.")
