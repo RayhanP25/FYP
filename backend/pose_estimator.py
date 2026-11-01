@@ -492,7 +492,7 @@ def _overlay_confidences(frames):
 
 
 def _render_overlay(video_path: str, frames: list, output_path: str, fps: float = None,
-                    stabilize_confidence: bool = False):
+                    stabilize_confidence: bool = False, start: int = 0, stop: int = None):
     cap = video_io.VideoReader(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
@@ -506,16 +506,17 @@ def _render_overlay(video_path: str, frames: list, output_path: str, fps: float 
 
     display_scores = _overlay_confidences(frames) if stabilize_confidence else None
     idx = 0
-    while True:
+    while stop is None or idx < stop:
         success, frame = cap.read()
         if not success:
             break
-        kp = frames[idx]["keypoints"] if idx < len(frames) else None
-        if kp is not None and display_scores is not None and idx < len(display_scores):
-            kp = [[p[0], p[1], display_scores[idx, j] if p[2] > 0 else 0.0]
-                  for j, p in enumerate(kp)]
-        frame = draw_keypoints_on_frame(frame, kp)
-        out.write(frame)
+        if idx >= start:
+            kp = frames[idx]["keypoints"] if idx < len(frames) else None
+            if kp is not None and display_scores is not None and idx < len(display_scores):
+                kp = [[p[0], p[1], display_scores[idx, j] if p[2] > 0 else 0.0]
+                      for j, p in enumerate(kp)]
+            frame = draw_keypoints_on_frame(frame, kp)
+            out.write(frame)
         idx += 1
 
     cap.release()

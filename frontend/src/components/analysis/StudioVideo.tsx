@@ -1,4 +1,4 @@
-import { useState, type RefObject } from 'react';
+import { useRef, useState, type RefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { getVideoUrl } from '@/api/videoApi';
@@ -37,6 +37,7 @@ const StudioVideo = ({ videoId, view, innerRef, overlay, fixedNote, edit }: Stud
         staleTime: 30 * 60 * 1000,
     });
     const drawing = !!overlay && data?.variant === 'plain';
+    const at = useRef(0);
 
     return (
         <div className="absolute inset-0 bg-black">
@@ -49,6 +50,9 @@ const StudioVideo = ({ videoId, view, innerRef, overlay, fixedNote, edit }: Stud
                 className="w-full h-full object-contain"
                 // A clean video the browser can't play (e.g. an HEVC upload): use the overlay video instead.
                 onError={() => { if (variant === 'plain') setPlainFailed(true); }}
+                onPause={(e) => { at.current = e.currentTarget.currentTime; }}
+                onSeeked={(e) => { at.current = e.currentTarget.currentTime; }}
+                onLoadedMetadata={(e) => { e.currentTarget.currentTime = at.current; }}
             />
             {drawing && overlay && (
                 <SkeletonOverlay videoRef={innerRef} {...overlay} editable={!!edit} selectedJoint={edit?.selectedJoint} onDragJoint={edit?.onDragJoint} />

@@ -86,6 +86,21 @@ def apply_to(analysis_doc, result):
                                       ANGLE_TRIPLETS, angle_3d, calculate_frame_angles)
 
 
+def _sync_videos(video_id, write):
+    """Run `write` (saves or reverts edits), then re-draw the frames of the stored skeleton videos it changed."""
+    full = db["pose_analysis"].find_one({"video_id": video_id})
+    before = apply_to(full, full.get("result")) if full.get("overlay_synced") else full.get("result")
+    count = write()
+    after = apply_to(full, full.get("result"))
+    try:
+        from overlay_sync import sync
+        if sync(video_id, before, after):
+            db["pose_analysis"].update_one({"video_id": video_id}, {"$set": {"overlay_synced": True}})
+    except Exception as ex:                     # the edits are saved; the videos keep their last drawing
+        print(f"skeleton video not updated for {video_id}: {ex!r}")
+    return count
+
+
 def _public(e):
     return dict(frame=e["frame"], joint=e["joint"], target=e["target"], value=e["value"],
                 author=e.get("author_name"), created_at=e["created_at"].isoformat(timespec="seconds")
@@ -114,19 +129,23 @@ def save_edits(video_id: str, body: EditBatch, current_user: dict = Depends(get_
         raise HTTPException(status_code=409, detail="Keypoint editing needs a stereo 3D analysis.")
     n = (doc.get("result") or {}).get("total_frames") or 0
     now = datetime.now()
-    saved = 0
-    for e in body.edits:
-        want = 3 if e.target == "3d" else 2
-        if e.target not in keypoint_edits.TARGETS or len(e.value) < want or (n and e.frame >= n):
-            raise HTTPException(status_code=422, detail=f"Bad edit for frame {e.frame}, joint {e.joint}.")
-        edits_col.replace_one(
-            {"video_id": video_id, "frame": e.frame, "joint": e.joint},
-            {"video_id": video_id, "frame": e.frame, "joint": e.joint, "target": e.target,
-             "value": [float(v) for v in e.value[:want]], "author_id": str(current_user["_id"]),
-             "author_name": current_user.get("full_name"), "created_at": now},
-            upsert=True)
-        saved += 1
-    return {"saved": saved}
+
+    def write():
+        saved = 0
+        for e in body.edits:
+            want = 3 if e.target == "3d" else 2
+            if e.target not in keypoint_edits.TARGETS or len(e.value) < want or (n and e.frame >= n):
+                raise HTTPException(status_code=422, detail=f"Bad edit for frame {e.frame}, joint {e.joint}.")
+            edits_col.replace_one(
+                {"video_id": video_id, "frame": e.frame, "joint": e.joint},
+                {"video_id": video_id, "frame": e.frame, "joint": e.joint, "target": e.target,
+                 "value": [float(v) for v in e.value[:want]], "author_id": str(current_user["_id"]),
+                 "author_name": current_user.get("full_name"), "created_at": now},
+                upsert=True)
+            saved += 1
+        return saved
+
+    return {"saved": _sync_videos(video_id, write)}
 
 
 @router.delete("/{video_id}/edits")
@@ -139,4 +158,8 @@ def revert_edits(video_id: str, frame: Optional[int] = None, joint: Optional[int
         q["frame"] = frame
     if joint is not None:
         q["joint"] = joint
-    return {"reverted": edits_col.delete_many(q).deleted_count}
+
+    def write():
+        return edits_col.delete_many(q).deleted_count
+
+    return {"reverted": _sync_videos(video_id, write)}

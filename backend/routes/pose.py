@@ -153,8 +153,7 @@ async def process_video(
         finally:
             os.unlink(temp_output_right_path)
 
-    # 7c. Stereo: also upload both views WITHOUT a skeleton, so the analysis page can draw the raw or the
-    #     processed keypoints over them itself (2D videos use the original upload for this).
+    # 7c. Stereo: also upload both views without a skeleton, so the analysis page can draw the raw or the processed keypoints over them itself (2D videos use the original upload for this).
     plain_names = {}
     for key, path in zip(("plain_object_name", "plain_object_name_right"), plain_paths):
         if not os.path.exists(path):
@@ -191,6 +190,10 @@ async def process_video(
         "result": result,
         "created_at": datetime.now()
     }
+    
+    # Delete any edited keypoints cause re-analysing vids would remove them
+    client[database_name]["keypoint_edits"].delete_many({"video_id": video_id})
+
     if is_stereo and "frames_3d" in result:
         if calib_doc is None:
             try:

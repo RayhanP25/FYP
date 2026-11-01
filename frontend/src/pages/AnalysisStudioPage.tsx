@@ -223,7 +223,7 @@ const AnalysisStudioPage = () => {
                 params: { ...(analysis ? { force: true } : {}), ...(calibrationId ? { calibration_id: calibrationId } : {}) },
             });
             toast.success('Pose analysis completed!');
-            await Promise.all(['analysis', 'studio-video', 'my-videos'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
+            await Promise.all(['analysis', 'studio-video', 'my-videos', 'edits'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
         } catch {
             toast.error('Analysis failed');
         } finally {
@@ -324,6 +324,7 @@ const AnalysisStudioPage = () => {
     const refreshEdits = () => Promise.all([
         queryClient.invalidateQueries({ queryKey: ['analysis', videoId] }),
         queryClient.invalidateQueries({ queryKey: ['edits', videoId] }),
+        queryClient.invalidateQueries({ queryKey: ['studio-video', videoId] }),
     ]);
     const save = async () => {
         setSaving(true);
@@ -400,9 +401,8 @@ const AnalysisStudioPage = () => {
                     videoId={videoId}
                     view={id}
                     innerRef={id === 'left' ? leftRef : rightRef}
-                    overlay={overlays[id]}
-                    fixedNote={showRaw ? 'Processed skeleton (re-analyze to show raw on video)'
-                        : savedCount > 0 ? 'Older video: edits not shown here (re-analyze)' : undefined}
+                    overlay={editing || showRaw ? overlays[id] : null}
+                    fixedNote={showRaw ? 'Processed skeleton (re-analyze to show raw on video)' : undefined}
                     edit={editing ? { selectedJoint: selected?.joint ?? null, onDragJoint: onDragJoint2D(id) } : null}
                 />
             );
