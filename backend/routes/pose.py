@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from database import client, database_name
-from minio_client import minio_client
+from minio_client import BUCKET, minio_client
 from access import can_access_analysis, can_access_video
 from routes.users import get_current_user
 from routes.edits import apply_to as apply_keypoint_edits
@@ -120,7 +120,7 @@ async def process_video(
         processed_object_name = f"processed_{uuid.uuid4()}.mp4"
         with open(temp_output_path, 'rb') as f:
             minio_client.put_object(
-                bucket_name="sport-pose-videos",
+                bucket_name=BUCKET,
                 object_name=processed_object_name,
                 data=f,
                 length=-1,
@@ -141,7 +141,7 @@ async def process_video(
             processed_object_name_right = f"processed_right_{uuid.uuid4()}.mp4"
             with open(temp_output_right_path, 'rb') as f:
                 minio_client.put_object(
-                    bucket_name="sport-pose-videos",
+                    bucket_name=BUCKET,
                     object_name=processed_object_name_right,
                     data=f,
                     length=-1,
@@ -161,7 +161,7 @@ async def process_video(
         try:
             name = f"{key.replace('_object_name', '')}_{uuid.uuid4()}.mp4"
             with open(path, 'rb') as f:
-                minio_client.put_object(bucket_name="sport-pose-videos", object_name=name, data=f, length=-1,
+                minio_client.put_object(bucket_name=BUCKET, object_name=name, data=f, length=-1,
                                         part_size=10*1024*1024, content_type="video/mp4")
             plain_names[key] = name
         except Exception:

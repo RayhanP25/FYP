@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request, Cookie
-from minio_client import minio_client
+from minio_client import BUCKET, minio_client
 from datetime import timedelta, datetime
 from database import client, database_name
 from bson import ObjectId
@@ -44,7 +44,7 @@ async def upload_video(video: UploadFile = File(...), current_user: dict = Depen
     # Upload to MinIO
     try:
         minio_client.put_object(
-            bucket_name="sport-pose-videos",
+            bucket_name=BUCKET,
             object_name=object_name,
             data=video.file,
             length=-1,
@@ -60,7 +60,7 @@ async def upload_video(video: UploadFile = File(...), current_user: dict = Depen
     video_doc = {
         "user_id": str(current_user["_id"]),
         "object_name": object_name,
-        "bucket_name": "sport-pose-videos",
+        "bucket_name": BUCKET,
         "original_filename": video.filename,
         "content_type": video.content_type,
         "file_size": video.size,

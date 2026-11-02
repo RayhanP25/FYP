@@ -19,9 +19,8 @@ from bson import ObjectId
 
 import video_io
 from database import client, database_name
-from minio_client import minio_client
+from minio_client import BUCKET, minio_client
 
-BUCKET = "sport-pose-videos"
 _locks = defaultdict(threading.Lock)
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

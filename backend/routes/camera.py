@@ -30,7 +30,7 @@ from fastapi.responses import StreamingResponse
 import calibration_store
 import video_io
 from database import client, database_name
-from minio_client import minio_client
+from minio_client import BUCKET, minio_client
 from routes.users import get_current_user
 
 router = APIRouter(prefix="/camera", tags=["camera"])
@@ -41,7 +41,6 @@ CAP_WIDTH = int(os.getenv("CAMERA_WIDTH", "640"))
 CAP_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "480"))
 CAP_FPS = int(os.getenv("CAMERA_FPS", "30"))
 OPEN_TIMEOUT = float(os.getenv("CAMERA_OPEN_TIMEOUT_SEC", "10"))
-BUCKET = os.getenv("MINIO_BUCKET", "sport-pose-videos")
 # Windows capture API for USB cameras: "msmf" (default, gets MJPG -> 30 fps) or "dshow"
 CAMERA_API = os.getenv("CAMERA_API", "msmf").lower()
 # Live preview: lower rate + size than the recording, so it doesn't steal CPU from capture
