@@ -205,12 +205,16 @@ const CalibrationPage = () => {
                                     <div className="flex items-baseline justify-between">
                                         <span className="text-2xl font-semibold tabular-nums text-text">
                                             {pairs}
-                                            <span className="text-sm font-normal text-text-muted"> / {aimPairs} pairs</span>
+                                            <span className="text-sm font-normal text-text-muted"> pairs</span>
                                         </span>
-                                        <span className="text-xs text-text-muted">min {minPairs}</span>
+                                        <span className="text-xs text-text-muted">min {minPairs} · {aimPairs}+ recommended</span>
                                     </div>
+                                    {/* A guide, not a limit: fills up to the recommended count, more pairs are fine. */}
                                     <div className="h-1.5 rounded-full bg-border overflow-hidden">
-                                        <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.min(100, (pairs / aimPairs) * 100)}%` }} />
+                                        <div
+                                            className={`h-full transition-all duration-300 ${pairs >= aimPairs ? 'bg-green-500' : pairs >= minPairs ? 'bg-primary' : 'bg-amber-500'}`}
+                                            style={{ width: `${Math.min(100, (pairs / aimPairs) * 100)}%` }}
+                                        />
                                     </div>
                                     {status?.job === 'loading' && (
                                         <p className="text-xs text-primary">Finding the board in the saved photos... {pairs} pairs so far</p>
