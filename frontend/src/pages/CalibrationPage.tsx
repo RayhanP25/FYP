@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
-import { Calculator, Camera, FolderOpen, Layers, Play, StopCircle, Undo2 } from 'lucide-react';
+import { Calculator, Camera, FolderOpen, Layers, Play, Settings2, StopCircle, Undo2 } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
@@ -21,6 +21,7 @@ import CoverageChecks from '@/components/calibration/CoverageChecks';
 import CalibrationReport from '@/components/calibration/CalibrationReport';
 import CalibrationLibrary from '@/components/calibration/CalibrationLibrary';
 import PreviousSessionsDialog from '@/components/calibration/PreviousSessionsDialog';
+import CameraSetupDialog from '@/components/camera/CameraSetupDialog';
 import { useShortcut } from '@/shortcuts/useShortcut';
 
 
@@ -42,6 +43,7 @@ const CalibrationPage = () => {
     const [streamKey, setStreamKey] = useState(0);
     const [setupName, setSetupName] = useState<string | null>(null);
     const [previousOpen, setPreviousOpen] = useState(false);
+    const [camerasOpen, setCamerasOpen] = useState(false);
     const lastJob = useRef<string | null>(null);
 
     const { data: status } = useQuery({
@@ -155,6 +157,10 @@ const CalibrationPage = () => {
                                             title="Open an earlier session again from its saved photos">
                                             <FolderOpen className="w-4 h-4" /> Previous sessions
                                         </Button>
+                                        <Button variant="secondary" onClick={() => setCamerasOpen(true)} disabled={isPending} className="gap-2 !py-2 text-sm"
+                                            title="Choose which camera is left and which is right">
+                                            <Settings2 className="w-4 h-4" /> Cameras
+                                        </Button>
                                     </div>
                                 }
                             />
@@ -249,6 +255,7 @@ const CalibrationPage = () => {
                 </div>
             </div>
             <PreviousSessionsDialog open={previousOpen} onOpenChange={setPreviousOpen} setups={library?.setups ?? []} />
+            <CameraSetupDialog open={camerasOpen} onOpenChange={setCamerasOpen} busy={!!session || busy || !!status?.recording || live} />
         </AppLayout>
     );
 };
