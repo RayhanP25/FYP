@@ -18,6 +18,7 @@ import Skeleton3DViewer from '@/components/Skeleton3DViewer';
 import KinematicChart, { type ChartMode } from '@/components/Video/kinematicChart';
 import PanelCard from '@/components/analysis/PanelCard';
 import ViewMenu from '@/components/analysis/ViewMenu';
+import DownloadMenu, { type DownloadView, type DownloadVariant } from '@/components/analysis/DownloadMenu';
 import StudioVideo, { type StudioOverlay } from '@/components/analysis/StudioVideo';
 import type { Keypoints2D } from '@/components/analysis/SkeletonOverlay';
 import TransportBar from '@/components/analysis/TransportBar';
@@ -113,6 +114,13 @@ const AnalysisStudioPage = () => {
         setRenaming(false);
         const name = value.trim();
         if (name && name !== meta?.original_filename) rename.mutate(name);
+    };
+    const downloadVideo = async (view: DownloadView, variant: DownloadVariant) => {
+        try {
+            window.location.href = (await getVideoUrl(videoId, view, variant, true)).presigned_url;
+        } catch {
+            toast.error('Could not download the video');
+        }
     };
 
     const is3D = !!analysis?.frames_3d?.length;
@@ -537,6 +545,7 @@ const AnalysisStudioPage = () => {
                                     </Dialog.Portal>
                                 </Dialog.Root>
                             )}
+                            <DownloadMenu hasRight={hasRight} onDownload={downloadVideo} />
                             <ViewMenu
                                 panels={PANELS.map((p) => ({ id: p.id, label: p.label, icon: p.icon, available: isAvailable(p.needs) }))}
                                 visible={layout.visible}

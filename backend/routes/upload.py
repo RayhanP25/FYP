@@ -5,6 +5,7 @@ from database import client, database_name
 from bson import ObjectId
 from pydantic import BaseModel
 import uuid
+from urllib.parse import quote
 from routes.users import get_current_user
 from access import can_access_owner, can_access_video, names, visible_owner_ids
 
@@ -73,7 +74,7 @@ async def upload_video(video: UploadFile = File(...), current_user: dict = Depen
     return {"object_name": object_name, "video_id": str(video_doc["_id"])}
 
 @router.get("/get-video/{video_id}")
-async def get_video(video_id: str, view: str = "left", variant: str = "overlay",
+async def get_video(video_id: str, view: str = "left", variant: str = "overlay", download: bool = False,
                     current_user: dict = Depends(get_current_user)):
     """variant="plain": the camera view without a skeleton drawn (the analysis page draws raw or processed
     keypoints over it). Falls back to the overlay video when there is no plain one (older analyses)."""
@@ -109,11 +110,21 @@ async def get_video(video_id: str, view: str = "left", variant: str = "overlay",
         object_name = plain or object_name
     
     # Generate presigned URL from MinIO
+    headers = None
+    if download:
+        base = video_doc.get("original_filename") or video_doc.get("object_name", "video")
+        stem, dot, ext = base.rpartition(".")
+        if not dot or not ext.isalnum() or len(ext) > 4:
+            stem, ext = base, video_doc["object_name"].rpartition(".")[2] or "mp4"
+        camera = "right" if view == "right" and right_object_name else "left"
+        name = f"{stem}-{camera}{'-no-skeleton' if plain else ''}.{ext}"
+        headers = {"response-content-disposition": f"attachment; filename*=UTF-8''{quote(name)}"}
     try:
         presigned_url = minio_client.presigned_get_object(
             bucket_name=video_doc["bucket_name"],
             object_name=object_name,
-            expires=timedelta(hours=1) 
+            expires=timedelta(hours=1),
+            response_headers=headers,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate video URL: {str(e)}")

@@ -53,9 +53,10 @@ export const getVideoUrl = async (
     videoId: string,
     view: 'left' | 'right' = 'left',
     variant: 'plain' | 'overlay' = 'overlay',
+    download = false,
 ): Promise<VideoUrlResponse> => {
     try {
-        const response = await api.get(`/api/get-video/${videoId}`, { params: { view, variant } });
+        const response = await api.get(`/api/get-video/${videoId}`, { params: { view, variant, download } });
         return response.data;
     } catch (error) {
         throw new Error('Failed to get video URL');
