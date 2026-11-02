@@ -14,6 +14,8 @@ export interface CalibrationSessionInfo {
     saved: number;
     camera_size: [number, number];
     setup: string | null;
+    /** This session has been calibrated (its result is the calibration in use). */
+    calibrated: boolean;
 }
 
 export interface CalibrationResult {

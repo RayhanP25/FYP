@@ -231,7 +231,9 @@ const CalibrationPage = () => {
                             </Panel>
                         )}
 
-                        <Panel title="In use">
+                        {/* During a session the calibration in use is not shown; once this session is calibrated its result is. */}
+                        {(!session || session.calibrated) && (
+                        <Panel title={session ? 'Result' : 'In use'}>
                             {calibration ? (
                                 <div className="flex flex-col gap-3">
                                     {status?.size_mismatch && (
@@ -251,6 +253,7 @@ const CalibrationPage = () => {
                                 <p className="text-sm text-text-muted">No calibration yet. Start a new calibration, capture pairs, then calibrate.</p>
                             )}
                         </Panel>
+                        )}
                     </aside>
                 </div>
             </div>

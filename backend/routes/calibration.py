@@ -175,7 +175,8 @@ def _session_info(s):
     lines, ok = s.cov.summary()
     return dict(folder=s.folder, pairs=len(s.objpoints), min_pairs=sc.MIN_PAIRS, aim_pairs=AIM_PAIRS,
                 checks=[dict(text=t, ok=bool(g)) for t, g in zip(lines, ok.values())],
-                saved=len(s.saved), camera_size=list(s.sizeL), setup=state.setup)
+                saved=len(s.saved), camera_size=list(s.sizeL), setup=state.setup,
+                calibrated=state.entry_id is not None)
 
 
 @router.get("/status")
@@ -227,8 +228,8 @@ def _preview_frames(s):
             if pair is None:
                 time.sleep(0.03)
                 continue
-            msg = state.message if time.time() - state.message_t < 3 else ""
-            img = sc.render_preview(pair[0], pair[1], s.cov, msg, det=detector.det)
+            # The page lists the checks beside the picture, so none are written on it.
+            img = sc.render_preview(pair[0], pair[1], s.cov, det=detector.det, text=False)
             ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if ok:
                 yield boundary + jpg.tobytes() + b"\r\n"

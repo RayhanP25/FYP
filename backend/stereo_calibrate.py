@@ -404,8 +404,9 @@ def load(path=OUT):
     return {k: d[k] for k in d.files}
 
 
-def render_preview(fL, fR, cov, msg="", det=None):
+def render_preview(fL, fR, cov, msg="", det=None, text=True):
     """Side-by-side preview: board corners per view, coverage grid and status lines. Shared by the terminal and the web page.
+    text=False: no status lines on the picture (the web page shows them beside it).
     det: optional ((foundL, cornersL), (foundR, cornersR)) already computed elsewhere (the web page detects in a
     background thread so the stream is not held back by the ~150 ms per view that findChessboardCorners takes)."""
     sc, disp_w = 0.33, 800
@@ -426,6 +427,8 @@ def render_preview(fL, fR, cov, msg="", det=None):
     if fdR:
         cv2.drawChessboardCorners(dR, CHECKERBOARD, (cR * dsR).astype(np.float32), True)
     disp = cv2.hconcat([dL, dR])
+    if not text:
+        return disp
     lines, ok = cov.summary()
     col = (0, 200, 0) if (fdL and fdR) else (0, 0, 255)
     cv2.putText(disp, f"board in both: {'YES' if (fdL and fdR) else 'no'}", (10, 25),
