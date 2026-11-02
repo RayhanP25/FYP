@@ -212,9 +212,13 @@ async def rename_video(video_id: str, body: NameUpdate, current_user: dict = Dep
         raise HTTPException(status_code=404, detail="Video not found")
     if not can_access_video(current_user, video_doc):
         raise HTTPException(status_code=403, detail="Access denied: You don't own this video")
-    name = body.original_filename.strip()
-    if not name:
+    ext = video_doc["object_name"].rpartition(".")[2]
+    stem = body.original_filename.strip()
+    if stem.lower().endswith(f".{ext.lower()}"):
+        stem = stem[:-len(ext) - 1].strip()
+    if not stem:
         raise HTTPException(status_code=400, detail="Video name cannot be empty")
+    name = f"{stem}.{ext}"
     client[database_name]["videos"].update_one({"_id": video_doc["_id"]}, {"$set": {"original_filename": name}})
     return {"video_id": video_id, "original_filename": name}
 

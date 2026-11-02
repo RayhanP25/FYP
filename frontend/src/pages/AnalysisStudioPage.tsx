@@ -52,6 +52,7 @@ type KeypointMode = 'processed' | 'raw';
 type EditTarget = '3d' | 'left' | 'right';
 type PendingEdit = { frame: number; joint: number; target: EditTarget; value: number[]; X: number[] | null };
 const editKey = (frame: number, joint: number) => `${frame}:${joint}`;
+const baseName = (filename: string) => filename.replace(/\.[^.]+$/, '');
 const errorText = (e: unknown, fallback: string) =>
     ((e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail as string) || fallback;
 
@@ -113,7 +114,7 @@ const AnalysisStudioPage = () => {
     const saveName = (value: string) => {
         setRenaming(false);
         const name = value.trim();
-        if (name && name !== meta?.original_filename) rename.mutate(name);
+        if (name && name !== baseName(meta?.original_filename || '')) rename.mutate(name);
     };
     const downloadVideo = async (view: DownloadView, variant: DownloadVariant) => {
         try {
@@ -450,7 +451,7 @@ const AnalysisStudioPage = () => {
                                     onBlur={(e) => saveName(e.currentTarget.value)}
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter') e.currentTarget.blur();
-                                        if (e.key === 'Escape') { e.currentTarget.value = meta?.original_filename || ''; e.currentTarget.blur(); }
+                                        if (e.key === 'Escape') { e.currentTarget.value = baseName(meta?.original_filename || ''); e.currentTarget.blur(); }
                                     }}
                                     className="text-3xl font-semibold tracking-tight text-text bg-background border border-primary rounded px-2 py-0.5 min-w-0 w-full focus:outline-none"
                                 />
@@ -459,7 +460,7 @@ const AnalysisStudioPage = () => {
                                     <h1 className="text-3xl font-semibold tracking-tight text-text truncate">{meta?.original_filename || 'Analysis'}</h1>
                                     {meta && (
                                         <button
-                                            onClick={() => { setNameDraft(meta.original_filename); setRenaming(true); }}
+                                            onClick={() => { setNameDraft(baseName(meta.original_filename)); setRenaming(true); }}
                                             className="shrink-0 p-1.5 rounded text-text-muted hover:text-primary transition-colors"
                                             aria-label="Edit video name"
                                         >
