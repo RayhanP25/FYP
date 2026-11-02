@@ -9,13 +9,21 @@ under the setup name chosen when the session started, so setups can be switched 
 
 Calibrate and floor take a while, so they run in a background thread; the page polls /status until
 `job` clears.
+
+Every session keeps its photos in backend/calib_sessions/<date_time>/. /sessions lists them and
+/sessions/{name}/resume opens one again (after a backend restart, or to recalibrate from old photos):
+the board is found again in each photo ("loading" job), then Calibrate / Capture / Set floor work as usual.
 """
 
+import glob
 import json
 import os
+import re
+import struct
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime
 
 import cv2
@@ -43,13 +51,33 @@ class _State:
         self.lock = threading.Lock()
         self.session = None      # sc.CalibrationSession while a session is open
         self.grab = None         # frame source for the open session
-        self.job = None          # "calibrate" | "floor" while running in the background
+        self.job = None          # "loading" | "calibrate" | "floor" while running in the background
+        self.job_started = 0.0   # when the job started (time.time())
+        self.job_step = ""       # which step of the job is running, for the page
         self.setup = None        # setup name the session's calibration is saved under
         self.entry_id = None     # library entry made by this session's calibrate
         self.message, self.message_t = "", 0.0
 
 
 state = _State()
+_capture_lock = threading.Lock()   # one Capture at a time; a second press is answered "busy" instead of queueing
+
+
+@contextmanager
+def _locked(timeout=3.0):
+    """The shared lock, or a quick 409 if something holds it. Without the timeout a request waits silently
+    (the page's buttons stay grey with no answer)."""
+    if not state.lock.acquire(timeout=timeout):
+        raise HTTPException(status_code=409, detail="The calibration is busy with another step. Try again in a moment.")
+    try:
+        yield
+    finally:
+        state.lock.release()
+
+
+def _no_capture_running():
+    if _capture_lock.locked():
+        raise HTTPException(status_code=409, detail="A capture is still being checked. Try again in a second.")
 
 
 def _say(text):
@@ -91,17 +119,29 @@ def _active_session():
     return state.session
 
 
+def _check_camera_size(s):
+    """A resumed session's photos fix its size: new captures / the floor must come from cameras at that size."""
+    pair = manager.get_latest() if manager.running else None
+    if pair is None:
+        raise HTTPException(status_code=503, detail="The cameras are not delivering frames. Is the camera connected?")
+    w, h = pair[0].shape[1], pair[0].shape[0]
+    if (w, h) != tuple(s.sizeL):
+        raise HTTPException(status_code=409, detail=(
+            f"This session's photos are {s.sizeL[0]}x{s.sizeL[1]} but the cameras now deliver {w}x{h}. "
+            f"Calibrate from the saved photos only, or start a new calibration."))
+
+
 def _start_job(kind, fn):
-    state.job = kind
+    state.job, state.job_started, state.job_step = kind, time.time(), ""
 
     def work():
         try:
-            fn()
-            _say(f"{kind} finished -- see the report")
+            done = fn()
+            _say(done if isinstance(done, str) else f"{kind} finished -- see the report")
         except Exception as ex:
             _say(f"{kind} failed: {ex}")
         finally:
-            state.job = None
+            state.job, state.job_step = None, ""
     threading.Thread(target=work, daemon=True).start()
 
 
@@ -147,7 +187,9 @@ def status(current_user: dict = Depends(require_admin)):
     size_mismatch = bool(calib and camera_size and calib["camera_size"] != camera_size)
     return dict(live=manager.running, recording=recorder.active, camera_size=camera_size,
                 session=_session_info(s) if s else None, calibration=calib, size_mismatch=size_mismatch,
-                job=state.job, message=state.message if time.time() - state.message_t < 6 else "")
+                job=state.job, job_step=state.job_step if state.job else "",
+                job_seconds=round(time.time() - state.job_started) if state.job else None,
+                message=state.message if time.time() - state.message_t < 6 else "")
 
 
 class _BoardDetector:
@@ -209,7 +251,7 @@ class SessionStart(BaseModel):
 
 @router.post("/session/start")
 def start_session(body: SessionStart = SessionStart(), current_user: dict = Depends(require_admin)):
-    with state.lock:
+    with _locked():
         if recorder.active:
             raise HTTPException(status_code=409, detail="Stop the camera recording first.")
         if state.session is not None:
@@ -237,7 +279,7 @@ def start_session(body: SessionStart = SessionStart(), current_user: dict = Depe
 
 @router.post("/session/stop")
 def stop_session(current_user: dict = Depends(require_admin)):
-    with state.lock:
+    with _locked():
         if state.job:
             raise HTTPException(status_code=409, detail=f"Wait for '{state.job}' to finish.")
         state.session, state.grab = None, None
@@ -248,21 +290,36 @@ def stop_session(current_user: dict = Depends(require_admin)):
 
 @router.post("/capture")
 def capture(current_user: dict = Depends(require_admin)):
-    with state.lock:
-        s = _active_session()
-        res, why = sc.capture_still(state.grab)
+    if not _capture_lock.acquire(blocking=False):
+        return {"ok": False, "message": "Still checking the previous capture..."}
+    try:
+        with _locked():
+            s = _active_session()
+            _check_camera_size(s)
+            grab = state.grab
+        # Finding the board can take a moment at full resolution: done without the shared lock, so
+        # Calibrate / Undo / End session still answer straight away.
+        res, why = sc.capture_still(grab)
         if res is None:
             _say(why)
             return {"ok": False, "message": why}
-        k = s.add(*res)
-        msg = f"captured pair #{k} ({len(s.objpoints)} in total)"
-        _say(msg)
-    return {"ok": True, "message": msg}
+        with _locked():
+            if state.session is not s:
+                return {"ok": False, "message": "The session was ended."}
+            if state.job:
+                return {"ok": False, "message": f"Not saved: '{state.job}' started meanwhile."}
+            k = s.add(*res)
+            msg = f"captured pair #{k} ({len(s.objpoints)} in total)"
+            _say(msg)
+        return {"ok": True, "message": msg}
+    finally:
+        _capture_lock.release()
 
 
 @router.post("/undo")
 def undo(current_user: dict = Depends(require_admin)):
-    with state.lock:
+    _no_capture_running()
+    with _locked():
         s = _active_session()
         if not s.saved:
             raise HTTPException(status_code=409, detail="Nothing to undo in this session.")
@@ -272,14 +329,16 @@ def undo(current_user: dict = Depends(require_admin)):
 
 @router.post("/calibrate")
 def calibrate(current_user: dict = Depends(require_admin)):
-    with state.lock:
+    _no_capture_running()
+    with _locked():
         s = _active_session()
         if len(s.objpoints) < sc.MIN_PAIRS:
             raise HTTPException(status_code=409, detail=f"Need at least {sc.MIN_PAIRS} pairs (have {len(s.objpoints)}).")
         setup, user = state.setup, current_user.get("email")
 
         def run():
-            s.calibrate()
+            s.calibrate(progress=lambda text: setattr(state, "job_step", text))
+            state.job_step = "saving to the calibration library"
             state.entry_id = store.record_current(setup, created_by=user)
         _start_job("calibrate", run)
     return {"status": "running"}
@@ -287,8 +346,10 @@ def calibrate(current_user: dict = Depends(require_admin)):
 
 @router.post("/floor")
 def floor(current_user: dict = Depends(require_admin)):
-    with state.lock:
+    _no_capture_running()
+    with _locked():
         s = _active_session()
+        _check_camera_size(s)
         grab = state.grab
         # The floor is added to the active calibration: this session's, or the one in use before it.
         target = state.entry_id
@@ -302,6 +363,120 @@ def floor(current_user: dict = Depends(require_admin)):
                 store.update_current(target)
         _start_job("floor", run)
     return {"status": "running"}
+
+
+# ---- earlier sessions (photos in calib_sessions/) ----
+
+_SESSION_NAME = re.compile(r"^[\w\-]+$")
+
+
+def _png_size(path):
+    """(width, height) from a PNG header without decoding the image, or None."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(24)
+        if head[:8] != b"\x89PNG\r\n\x1a\n":
+            return None
+        return struct.unpack(">II", head[16:24])
+    except OSError:
+        return None
+
+
+def _session_pairs(folder):
+    return [p for p in sorted(glob.glob(os.path.join(folder, "pair_*_L.png"))) if os.path.exists(p[:-6] + "_R.png")]
+
+
+def _session_folder(name):
+    if not _SESSION_NAME.match(name or ""):
+        raise HTTPException(status_code=400, detail="Bad session name.")
+    folder = os.path.join(SESSIONS_DIR, name)
+    if not os.path.isdir(folder):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return folder
+
+
+def _session_date(name):
+    for fmt in ("%Y-%m-%d_%H%M%S", "%Y-%m-%d_%H%M"):
+        try:
+            return datetime.strptime(name[:len(datetime.now().strftime(fmt))], fmt).isoformat(timespec="seconds")
+        except ValueError:
+            continue
+    return None
+
+
+@router.get("/sessions")
+def list_sessions(current_user: dict = Depends(require_admin)):
+    """Earlier sessions that still have photos, newest first, with the setups they were calibrated as."""
+    calibrated = {}
+    try:
+        for e in store.list_entries():
+            if e.get("session"):
+                calibrated.setdefault(e["session"], [])
+                if e.get("setup") not in calibrated[e["session"]]:
+                    calibrated[e["session"]].append(e.get("setup"))
+    except Exception as ex:                      # the library is optional here
+        print(f"calibration library unavailable: {ex!r}")
+    out = []
+    if os.path.isdir(SESSIONS_DIR):
+        for name in sorted(os.listdir(SESSIONS_DIR), reverse=True):
+            folder = os.path.join(SESSIONS_DIR, name)
+            if not os.path.isdir(folder) or not _SESSION_NAME.match(name):
+                continue
+            pairs = _session_pairs(folder)
+            if not pairs:
+                continue
+            size = _png_size(pairs[0])
+            out.append(dict(name=name, date=_session_date(name) or datetime.fromtimestamp(
+                os.path.getmtime(folder)).isoformat(timespec="seconds"), pairs=len(pairs),
+                floor_photos=os.path.exists(os.path.join(folder, "floor_L.png")),
+                camera_size=list(size) if size else None,
+                calibrated_as=calibrated.get(name, []),
+                active=bool(state.session and os.path.normpath(state.session.folder) == os.path.normpath(folder))))
+    return dict(sessions=out)
+
+
+@router.post("/sessions/{name}/resume")
+def resume_session(name: str, body: SessionStart = SessionStart(), current_user: dict = Depends(require_admin)):
+    """Open an earlier session again: its photos are reloaded (the board is found in each one) in the background."""
+    with _locked():
+        if recorder.active:
+            raise HTTPException(status_code=409, detail="Stop the camera recording first.")
+        if state.job:
+            raise HTTPException(status_code=409, detail=f"Wait for '{state.job}' to finish.")
+        if state.session is not None:
+            raise HTTPException(status_code=409, detail="End the current session first.")
+        folder = _session_folder(name)
+        pairs = _session_pairs(folder)
+        size = _png_size(pairs[0]) if pairs else None
+        if not size:
+            raise HTTPException(status_code=409, detail="This session has no photo pairs.")
+        try:                                     # cameras are only needed to add pairs or set the floor
+            manager.start()
+            _next_pair(timeout=5)
+        except Exception as ex:
+            print(f"calibration resume: cameras not started ({ex!r}); calibrating from the photos still works")
+        s = sc.CalibrationSession(folder, tuple(size), tuple(size), out=CALIB_PATH, meta=dict(
+            date=datetime.now().isoformat(timespec="seconds"), session=folder,
+            board=list(sc.CHECKERBOARD), square_mm=sc.SQUARE_MM, source="web-resume", resumed=name))
+        setup = body.setup.strip()
+        if not setup:
+            try:
+                earlier = [e.get("setup") for e in store.list_entries() if e.get("session") == name]
+                setup = next((x for x in earlier if x and x != store.UNASSIGNED), "")
+            except Exception:
+                setup = ""
+        state.session, state.grab = s, _frame_source()
+        state.setup = setup or store.UNASSIGNED
+        state.entry_id = None
+
+        def run():
+            n = s.load_pairs()
+            skipped = len(pairs) - n
+            return (f"Loaded {n} pairs from {name}" + (f" ({skipped} without the board in both views skipped)" if skipped else "")
+                    + ". Calibrate, or capture more pairs.")
+        _start_job("loading", run)
+        _say(f"Loading {len(pairs)} pairs from {name}...")
+    return {"status": "loading", "pairs": len(pairs)}
 
 
 # ---- calibration library: one entry per calibration, grouped by setup ----
@@ -331,7 +506,7 @@ def options(current_user: dict = Depends(get_current_user)):
 
 @router.post("/library/{entry_id}/activate")
 def activate_entry(entry_id: str, current_user: dict = Depends(require_admin)):
-    with state.lock:
+    with _locked():
         _no_job()
         if recorder.active:
             raise HTTPException(status_code=409, detail="Stop the camera recording first.")
