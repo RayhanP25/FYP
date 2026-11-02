@@ -196,26 +196,31 @@ export default function Skeleton3DViewer({
       const a = project(p1), b = project(p2);
       if (a && b) { ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke(); }
     };
+    // The walls sit on whichever two sides of the floor are farthest from the viewer for this rotation,
+    // so the body always stands in front of them, whatever way the view is turned.
+    const depthAt = (x: number, z: number) => project([x + center[0], floorY, z + center[2]])!.depth;
+    const zBack = depthAt(0, extent) > depthAt(0, -extent) ? extent : -extent;
+    const xBack = depthAt(extent, 0) > depthAt(-extent, 0) ? extent : -extent;
     ctx.lineWidth = 1;
     for (let g = -DIV; g <= DIV; g++) {
       const off = g * step;
       ctx.globalAlpha = 0.1;
-      // back wall (far -Z): verticals
-      line([off + center[0], floorY, -extent + center[2]],
-           [off + center[0], floorY - wallH, -extent + center[2]]);
-      // side wall (far -X): verticals
-      line([-extent + center[0], floorY, off + center[2]],
-           [-extent + center[0], floorY - wallH, off + center[2]]);
+      // back wall: verticals
+      line([off + center[0], floorY, zBack + center[2]],
+           [off + center[0], floorY - wallH, zBack + center[2]]);
+      // side wall: verticals
+      line([xBack + center[0], floorY, off + center[2]],
+           [xBack + center[0], floorY - wallH, off + center[2]]);
     }
     for (let k = 1; k <= WALL_DIV; k++) {
       const y = floorY - k * step;
       ctx.globalAlpha = 0.1 * (1 - (k / WALL_DIV) * 0.6);
       // back wall horizontals
-      line([-extent + center[0], y, -extent + center[2]],
-           [extent + center[0], y, -extent + center[2]]);
+      line([-extent + center[0], y, zBack + center[2]],
+           [extent + center[0], y, zBack + center[2]]);
       // side wall horizontals
-      line([-extent + center[0], y, -extent + center[2]],
-           [-extent + center[0], y, extent + center[2]]);
+      line([xBack + center[0], y, -extent + center[2]],
+           [xBack + center[0], y, extent + center[2]]);
     }
     ctx.globalAlpha = 1;
 
@@ -388,4 +393,4 @@ export default function Skeleton3DViewer({
       </div>
     </div>
   );
-}
+}
