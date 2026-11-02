@@ -121,7 +121,8 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
                 )}
             </AnimatePresence>
 
-            <video ref={videoRef} src={currentVideoUrl} className="w-full h-full object-contain" controls />
+            {/* No browser right-click menu on the player (Edge adds "Enhance video" there, which does nothing for us). */}
+            <video ref={videoRef} src={currentVideoUrl} className="w-full h-full object-contain" controls onContextMenu={(e) => e.preventDefault()} />
 
             {hasRightView && (
                 <div className="absolute top-4 left-4 z-10 flex items-center rounded-lg border border-border bg-background/90 backdrop-blur-sm p-0.5 text-xs">
@@ -154,4 +155,4 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
     );
 };
 
-export default VideoPlayer;
+export default VideoPlayer;

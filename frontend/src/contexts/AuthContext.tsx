@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type { User } from '@/api/authApi';
 import { getCurrentUser, logout as logoutApi } from '@/api/authApi';
@@ -14,6 +15,18 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     // Starts true so route guards don't redirect to /login before the
     // session cookie has been checked against /api/me.
     const [loading, setLoading] = useState(true);
+    const queryClient = useQueryClient();
+
+    // Empty the cached server data (video lists, video links, analyses, users...) whenever the signed-in user
+    // changes - logout, login as someone else, or an expired session - so nobody sees what the previous user
+    // could see, with their permissions.
+    const lastUserId = useRef<string | null | undefined>(undefined);
+    useEffect(() => {
+        if (loading) return;
+        const id = user?._id ?? null;
+        if (lastUserId.current !== undefined && lastUserId.current !== id) queryClient.clear();
+        lastUserId.current = id;
+    }, [user?._id, loading, queryClient]);
 
     useEffect(() => {
         // Check authentication status on mount

@@ -48,6 +48,10 @@ const StudioVideo = ({ videoId, view, innerRef, overlay, fixedNote, edit }: Stud
                 playsInline
                 preload="auto"
                 className="w-full h-full object-contain"
+                // No browser right-click menu (Edge's "Enhance video", save-as, ...). Picture-in-picture only when the
+                // skeleton is part of the video: when it is drawn on top, the pop-out would show the bare video.
+                onContextMenu={(e) => e.preventDefault()}
+                disablePictureInPicture={drawing}
                 // A clean video the browser can't play (e.g. an HEVC upload): use the overlay video instead.
                 onError={() => { if (variant === 'plain') setPlainFailed(true); }}
                 onPause={(e) => { at.current = e.currentTarget.currentTime; }}

@@ -62,6 +62,9 @@ const pathFrom = (sm: Sample[], fromFrame: number): (number | null)[] => {
     });
 };
 
+// The frame the videos show at playback time t: frame k is on screen from k/fps until (k+1)/fps.
+const frameAt = (t: number, fps: number) => Math.max(0, Math.floor(t * fps + 1e-6));
+
 export interface DistanceReadout { kp: number; straight: number | null; path: number | null; delta: number[] | null; }
 
 const measure = (frames: any[], kp: number, a: number, b: number): DistanceReadout => {
@@ -96,6 +99,7 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
     const [markA, setMarkA] = useState(0);
     const [markB, setMarkB] = useState(lastFrame);
     const playheadFrame = useRef(0);
+    const cursorTime = useRef<number | null>(null);   // last playback time, so a rebuilt chart keeps its cursor
     const chartRef = useRef<HTMLDivElement>(null);
     const chartInstance = useRef<echarts.ECharts | null>(null);
 
@@ -205,6 +209,17 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
             });
         } else series = selectedAngles.map((a) => buildSeries(a));
 
+        const legendNames = series.map((s) => s.name);
+        const cursorFrame = cursorTime.current === null ? null : frameAt(cursorTime.current, fps);
+        series.push({
+            id: 'cursor', name: '__cursor', type: 'line', data: [], silent: true, tooltip: { show: false },
+            markLine: {
+                animation: false, silent: true, symbol: ['none', 'none'], label: { show: false },
+                lineStyle: { color: '#FFFFFF', width: 2, type: 'solid' },
+                data: cursorFrame === null ? [] : [{ xAxis: toX(cursorFrame) }],
+            },
+        });
+
         chart.setOption({
             backgroundColor: 'transparent',
             tooltip: {
@@ -217,7 +232,7 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
                 borderRadius: 8,
                 valueFormatter: (value: any) => Number(value).toFixed(1),
             },
-            legend: { show: activeTab === 'position' || activeTab === 'distance', top: 0, type: 'scroll', textStyle: { color: THEME.textSecondary } },
+            legend: { show: activeTab === 'position' || activeTab === 'distance', data: legendNames, top: 0, type: 'scroll', textStyle: { color: THEME.textSecondary } },
             dataZoom: [{ type: 'inside', xAxisIndex: 0 }],
             grid: { left: '3%', right: '3%', bottom: '12%', top: activeTab === 'position' || activeTab === 'distance' ? '20%' : '14%', containLabel: true },
             xAxis: { type: 'value', name: xAxisMode === 'time' ? 'Time (s)' : 'Frame', nameLocation: 'middle', nameGap: 25, nameTextStyle: { color: THEME.textSecondary }, splitLine: { show: true, lineStyle: { color: THEME.border, type: 'dashed' } }, axisLine: { lineStyle: { color: THEME.border } }, axisLabel: { color: THEME.textMuted } },
@@ -226,23 +241,33 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
         }, true);
     }, [analysisData, selectedAngles, xAxisMode, THEME, activeTab, selectedKps, unit, posMode, is3D, markA, markB]);
 
-    // EVENT-DRIVEN CURSOR SYNC (Throttled to 20fps)
+    // Playback cursor. Drawn at the frame the videos show (not between frames), at most 20 times a second - but the
+    // latest position is always drawn: a pause or a one-frame step right after an update is no longer dropped.
     const lastUpdate = useRef<number>(0);
+    const pendingDraw = useRef<number | null>(null);
     useEffect(() => {
+        const fps = analysisData.fps || 30;
+        const draw = () => {
+            pendingDraw.current = null;
+            lastUpdate.current = performance.now();
+            const chart = chartInstance.current;
+            if (!chart || cursorTime.current === null) return;
+            const f = frameAt(cursorTime.current, fps);
+            chart.setOption({ series: [{ id: 'cursor', markLine: { data: [{ xAxis: xAxisMode === 'time' ? f / fps : f }] } }] });
+        };
         const handleSync = (e: Event) => {
             const time = (e as CustomEvent).detail as number;
-            playheadFrame.current = Math.round(time * (analysisData.fps || 30));
-            const now = performance.now();
-            if (now - lastUpdate.current < 50 || !chartInstance.current) return;
-            lastUpdate.current = now;
-
-            const xVal = xAxisMode === 'time' ? time : time * (analysisData.fps || 30);
-            chartInstance.current.setOption({
-                series: [{ markLine: { animation: false, silent: true, symbol: ['none', 'none'], label: { show: false }, data: [{ xAxis: xVal }], lineStyle: { color: '#FFFFFF', width: 2, type: 'solid' } } }]
-            });
+            cursorTime.current = time;
+            playheadFrame.current = frameAt(time, fps);
+            const wait = 50 - (performance.now() - lastUpdate.current);
+            if (wait <= 0) draw();
+            else if (pendingDraw.current === null) pendingDraw.current = window.setTimeout(draw, wait);
         };
         window.addEventListener('sync-time', handleSync);
-        return () => window.removeEventListener('sync-time', handleSync);
+        return () => {
+            window.removeEventListener('sync-time', handleSync);
+            if (pendingDraw.current !== null) { clearTimeout(pendingDraw.current); pendingDraw.current = null; }
+        };
     }, [xAxisMode, analysisData]);
 
     // Click on the chart -> ask the video player (if any) to seek there
@@ -252,8 +277,13 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
         const zr = chart.getZr();
         const onClick = (p: any) => {
             const x = chart.convertFromPixel({ xAxisIndex: 0 }, [p.offsetX, p.offsetY])[0];
-            if (typeof x === 'number' && x >= 0) playheadFrame.current = Math.round(xAxisMode === 'time' ? x * (analysisData.fps || 30) : x);
-            if (typeof x === 'number' && x >= 0) window.dispatchEvent(new CustomEvent('seek-time', { detail: xAxisMode === 'time' ? x : x / (analysisData.fps || 30) }));
+            if (typeof x !== 'number' || x < 0) return;
+            // Jump to the nearest frame, a quarter into it (like the frame-step buttons), so the videos, the 3D view
+            // and this cursor all show that same frame.
+            const fps = analysisData.fps || 30;
+            const f = Math.round(xAxisMode === 'time' ? x * fps : x);
+            playheadFrame.current = f;
+            window.dispatchEvent(new CustomEvent('seek-time', { detail: (f + 0.25) / fps }));
         };
         zr.on('click', onClick);
         return () => { zr.off('click', onClick); };
