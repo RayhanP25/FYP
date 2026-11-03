@@ -233,7 +233,9 @@ const KinematicChart = ({ analysisData, mode, leading, padded = true }: Kinemati
                 valueFormatter: (value: any) => Number(value).toFixed(1),
             },
             legend: { show: activeTab === 'position' || activeTab === 'distance', data: legendNames, top: 0, type: 'scroll', textStyle: { color: THEME.textSecondary } },
-            dataZoom: [{ type: 'inside', xAxisIndex: 0 }],
+            // Zoom down to 3 frames wide. filterMode 'none' keeps the points just outside the window, so a line
+            // running off the edge is still drawn to the edge instead of vanishing.
+            dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none', minValueSpan: xAxisMode === 'time' ? 3 / fps : 3 }],
             grid: { left: '3%', right: '3%', bottom: '12%', top: activeTab === 'position' || activeTab === 'distance' ? '20%' : '14%', containLabel: true },
             xAxis: { type: 'value', name: xAxisMode === 'time' ? 'Time (s)' : 'Frame', nameLocation: 'middle', nameGap: 25, nameTextStyle: { color: THEME.textSecondary }, splitLine: { show: true, lineStyle: { color: THEME.border, type: 'dashed' } }, axisLine: { lineStyle: { color: THEME.border } }, axisLabel: { color: THEME.textMuted } },
             yAxis: { type: 'value', name: yName, nameLocation: 'end', nameGap: 14, nameTextStyle: { color: THEME.textSecondary, align: 'left' }, splitLine: { show: true, lineStyle: { color: THEME.border, type: 'dashed' } }, axisLine: { lineStyle: { color: THEME.border } }, axisLabel: { color: THEME.textMuted } },

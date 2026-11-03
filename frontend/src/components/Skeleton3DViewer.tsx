@@ -341,7 +341,8 @@ export default function Skeleton3DViewer({
     if (!cv) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      setZoom((z) => Math.max(0.3, Math.min(4, z - e.deltaY * 0.001)));
+      // Each wheel step zooms by the same factor, so it doesn't slow down when zoomed in; up to 15x.
+      setZoom((z) => Math.max(0.3, Math.min(15, z * Math.exp(-e.deltaY * 0.0015))));
     };
     cv.addEventListener("wheel", onWheel, { passive: false });
     return () => cv.removeEventListener("wheel", onWheel);
