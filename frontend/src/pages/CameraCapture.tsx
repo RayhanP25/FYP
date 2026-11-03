@@ -7,6 +7,7 @@ import AppLayout from '../layout/AppLayout';
 import { useShortcut } from '@/shortcuts/useShortcut';
 import { useAuth } from '@/hooks/useAuth';
 import CameraSetupDialog from '@/components/camera/CameraSetupDialog';
+import { JobProgressOverlay, newJobKey, useJobProgress } from '@/components/ui/JobProgress';
 
 export default function CameraCapture() {
     const navigate = useNavigate();
@@ -17,6 +18,8 @@ export default function CameraCapture() {
     const [mode, setMode] = useState<string>('IDLE');
     const [lastVideoId, setLastVideoId] = useState<string | null>(null);
     const [camerasOpen, setCamerasOpen] = useState(false);
+    const [saveJob, setSaveJob] = useState<string | null>(null);   // set while a recording is being saved
+    const saveProgress = useJobProgress(saveJob);
     const { user } = useAuth();
 
     const backendUrl = api.defaults.baseURL || 'http://localhost:8000';
@@ -55,14 +58,14 @@ export default function CameraCapture() {
             setStreamKey((k) => k + 1);
             setIsStreaming(true);
             setMode(data.mode || 'LIVE');
-            toast.success(`Live feed started (${data.mode} mode).`);
+            toast.success('Cameras are on.');
         } catch (error: unknown) {
             const axiosErr = error as {
                 code?: string;
                 response?: { data?: { detail?: unknown } };
             };
             if (axiosErr.code === 'ECONNABORTED') {
-                toast.error('Connecting to the cameras timed out. Check that both camera apps are running and reachable.');
+                toast.error('The cameras took too long to start. Check both USB cables, close Zoom, Teams or OBS, and try again.');
                 return;
             }
             const detail = axiosErr.response?.data?.detail;
@@ -77,7 +80,7 @@ export default function CameraCapture() {
             await api.post('/api/camera/start-recording');
             setIsRecording(true);
             setLastVideoId(null);
-            toast.info('Recording started — perform your movement!');
+            toast.info('Recording. The athlete can start the movement.');
         } catch (error: unknown) {
             const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
             toast.error(detail || 'Failed to start recording.');
@@ -85,28 +88,21 @@ export default function CameraCapture() {
     };
 
     const handleStopRecording = async () => {
-        const id = toast.loading('Saving recording to MinIO...');
+        if (saveJob) return;
+        const job = newJobKey('rec');
+        setSaveJob(job);
         try {
-            const { data } = await api.post('/api/camera/stop-recording');
+            const { data } = await api.post('/api/camera/stop-recording', null, { params: { job }, timeout: 0 });
             setIsRecording(false);
             setLastVideoId(data.video_id);
-            toast.update(id, {
-                render: `Saved ${data.frames} frames. Redirecting to analysis...`,
-                type: 'success',
-                isLoading: false,
-                autoClose: 2000,
-            });
-            
+            toast.success('Recording saved. Opening it now...', { autoClose: 2000 });
             // Automatically navigate to analysis page
             navigate(`/analysis/${data.video_id}`);
         } catch (error: unknown) {
             const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-            toast.update(id, {
-                render: detail || 'Failed to stop recording.',
-                type: 'error',
-                isLoading: false,
-                autoClose: 4000,
-            });
+            toast.error(detail || 'The recording could not be saved.', { autoClose: 5000 });
+        } finally {
+            setSaveJob(null);
         }
     };
 
@@ -193,21 +189,21 @@ export default function CameraCapture() {
                             <img
                                 key={`stereo-${streamKey}`}
                                 src={streamSrc}
-                                alt="Stereo feed"
+                                alt="Live picture from both cameras"
                                 className="w-full h-auto max-h-full object-contain"
-                                onError={() => toast.warn('Stereo stream failed — is the feed still running?')}
+                                onError={() => toast.warn('The live picture stopped. Click Stop Live Feed, then Start Live Feed again.')}
                             />
                         </div>
                     ) : (
                         <div className="aspect-video max-h-full flex flex-col items-center justify-center p-8">
                             <VideoOff className="w-10 h-10 text-text-muted mb-2 opacity-40" />
-                            <p className="font-bold text-lg text-text">Cameras Offline</p>
+                            <p className="font-bold text-lg text-text">Cameras are off</p>
                             <p className="text-sm text-text-muted mt-2 text-center max-w-md">
-                                Make sure both camera sources are available, then click &quot;Start Live Feed&quot;.
+                                Check both cameras are plugged in, then click &quot;Start Live Feed&quot;.
                             </p>
                             {lastVideoId && (
                                 <p className="text-xs text-text-muted mt-3 font-mono">
-                                    Last recording saved (id {lastVideoId.slice(-6)}). Open Videos to analyze it.
+                                    Last recording saved. Open Analysis to see it.
                                 </p>
                             )}
                         </div>
@@ -220,6 +216,13 @@ export default function CameraCapture() {
                 </div>
             </div>
             <CameraSetupDialog open={camerasOpen} onOpenChange={setCamerasOpen} busy={isStreaming || isRecording} />
+            <JobProgressOverlay
+                open={!!saveJob}
+                title="Saving the recording"
+                job={saveProgress}
+                fallbackStage="Finishing the recording"
+                note="Keep this page open. The video is copied to cloud storage in the background afterwards."
+            />
         </AppLayout>
     );
 }

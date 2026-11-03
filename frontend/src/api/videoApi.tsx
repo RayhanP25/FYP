@@ -11,6 +11,13 @@ export interface Video {
     has_right_view?: boolean;
     owner_id?: string;
     owner_name?: string | null;
+    /** Who recorded or uploaded it (owner_* is who it belongs to now, which Assign can change). */
+    recorded_by_id?: string;
+    recorded_by_name?: string | null;
+    recorded_by_role?: 'admin' | 'coach' | 'athlete' | null;
+    /** False for videos added before this was stored: recorded_by_* is then the owner. */
+    recorded_by_known?: boolean;
+    source?: string;
 }
 
 export interface VideoUploadResponse {
@@ -30,18 +37,39 @@ export interface VideoUrlResponse {
     /** "plain": the camera view without a skeleton drawn; "overlay": with the skeleton drawn in. */
     variant?: 'plain' | 'overlay';
     has_right_view?: boolean;
+    /** Who recorded or uploaded it (owner_* is who it belongs to now, which Assign can change). */
+    recorded_by_id?: string;
+    recorded_by_name?: string | null;
+    recorded_by_role?: 'admin' | 'coach' | 'athlete' | null;
+    /** False for videos added before this was stored: recorded_by_* is then the owner. */
+    recorded_by_known?: boolean;
+    source?: string;
+    /** Still being copied to cloud storage (just recorded on this PC). */
+    uploading?: boolean;
 }
 
 export interface MyVideosResponse {
     videos: Video[];
 }
 
-export const uploadVideo = async (formData: FormData): Promise<VideoUploadResponse> => {
+/** Largest video the server accepts (backend/routes/upload.py MAX_UPLOAD_MB). */
+export const MAX_UPLOAD_MB = 100;
+
+export const ROLE_LABEL: Record<string, string> = { admin: 'Admin', coach: 'Coach', athlete: 'Athlete' };
+
+/** "Coach Carl (Coach)": who recorded or uploaded a video. */
+export const recordedByText = (v: { recorded_by_name?: string | null; recorded_by_role?: string | null }) =>
+    v.recorded_by_name ? `${v.recorded_by_name}${v.recorded_by_role ? ` (${ROLE_LABEL[v.recorded_by_role] ?? v.recorded_by_role})` : ''}` : 'Unknown';
+
+/** onProgress: 0-1 while the file is being sent. job: progress key for what the server does after that. */
+export const uploadVideo = async (formData: FormData, onProgress?: (fraction: number) => void, job?: string): Promise<VideoUploadResponse> => {
     try {
         const response = await api.post('/api/upload-video', formData, {
             headers: {
                 'Content-Type': 'multipart/form-data',
             },
+            params: job ? { job } : undefined,
+            onUploadProgress: (e) => { if (onProgress && e.total) onProgress(e.loaded / e.total); },
         });
         return response.data;
     } catch (error: any) {
@@ -62,6 +90,29 @@ export const getVideoUrl = async (
     } catch (error) {
         throw new Error('Failed to get video URL');
     }
+};
+
+/** A camera's video at the size it was recorded, with or without the skeleton, as a file to save. */
+export const downloadFullSize = async (
+    videoId: string, view: 'left' | 'right', skeleton: boolean, job?: string,
+    onProgress?: (fraction: number) => void,
+): Promise<void> => {
+    const response = await api.get(`/api/download-video/${videoId}`, {
+        params: { view, skeleton, ...(job ? { job } : {}) },
+        responseType: 'blob',
+        onDownloadProgress: (e) => { if (onProgress && e.total) onProgress(e.loaded / e.total); },
+    });
+    const disposition: string = response.headers['content-disposition'] || '';
+    const match = /filename\*=utf-8''([^;]+)/i.exec(disposition) || /filename="?([^";]+)"?/i.exec(disposition);
+    const name = match ? decodeURIComponent(match[1]) : 'video.mp4';
+    const url = URL.createObjectURL(response.data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
 };
 
 export const getMyVideos = async (): Promise<MyVideosResponse> => {

@@ -103,12 +103,12 @@ const VideoPlayer = ({ videoId, videoUrl }: VideoPlayerProps) => {
             const secs = response.data?.timing?.total_seconds;
             toast.success(secs != null
                 ? `Pose analysis completed in ${secs}s`
-                : 'Pose analysis completed!');
+                : 'Analysis finished.');
             setIsAnalyzed(true);
             if (response.data.status === 'completed' || response.data.status === 'already_processed') await refreshVideoUrl();
             await checkRightView();
             window.dispatchEvent(new CustomEvent('analysis-complete', { detail: { videoId } }));
-        } catch (err) { toast.error('Analysis failed'); } finally { setIsAnalyzing(false); }
+        } catch (err) { toast.error('The analysis did not finish. Try again.'); } finally { setIsAnalyzing(false); }
     };
 
     return (

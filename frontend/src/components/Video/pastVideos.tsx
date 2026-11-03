@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { Search, FileVideo, Trash2, AlertTriangle, X } from 'lucide-react';
-import { getMyVideos, getVideoUrl, deleteVideo, type Video } from '@/api/videoApi';
+import { getMyVideos, getVideoUrl, deleteVideo, recordedByText, type Video } from '@/api/videoApi';
 import { athletesInGroups, getGroups } from '@/api/groupApi';
 import { toast } from 'react-toastify';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -58,7 +58,10 @@ const PastVideos = ({ onVideoSelect }: PastVideosProps) => {
         );
     }, [searchTerm, videos, ownerFilter, user?._id]);
 
-    const subtitle = (v: Video) => (v.owner_id !== user?._id ? v.owner_name : null);
+    // Who recorded / uploaded it (with their role) when that is someone else; else who it belongs to.
+    const subtitle = (v: Video) => (v.recorded_by_name && v.recorded_by_id !== user?._id
+        ? `By ${recordedByText(v)}${v.owner_id !== v.recorded_by_id && v.owner_name ? ` · for ${v.owner_name}` : ''}`
+        : v.owner_id !== user?._id ? v.owner_name : null);
 
     const totalPages = Math.ceil(filteredVideos.length / videosPerPage);
     const startIndex = (currentPage - 1) * videosPerPage;

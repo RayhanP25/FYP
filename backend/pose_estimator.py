@@ -9,6 +9,7 @@ mmcv_ext_shim.install()   # before mmpose/mmdet: lets a venv with mmcv-lite run 
 from mmpose.apis import init_model, inference_topdown
 from mmdet.apis import DetInferencer
 
+import progress
 import video_io
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -359,6 +360,8 @@ def _run_inference(video_path: str) -> dict:
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_data = []
+    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    progress.step(0, n_frames)
     last_box = None
     det_time = 0.0
     det_runs = 0
@@ -443,6 +446,7 @@ def _run_inference(video_path: str) -> dict:
                 "keypoints": custom_18,
                 "angles": calculate_frame_angles(custom_18) if custom_18 else {}
             })
+        progress.step(len(frame_data))
         if len(chunk) < batch:
             break
     frame_idx = len(frame_data)
@@ -518,6 +522,8 @@ def _render_overlay(video_path: str, frames: list, output_path: str, fps: float 
             frame = draw_keypoints_on_frame(frame, kp)
             out.write(frame)
         idx += 1
+        if idx % 10 == 0:
+            progress.step(idx)
 
     cap.release()
     out.release()

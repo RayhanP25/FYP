@@ -7,7 +7,8 @@ import { Activity, ArrowLeft, Box, Gauge, Loader2, Move3d, Pencil, Redo2, Refres
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
-import { getVideoUrl, moveVideo, renameVideo } from '@/api/videoApi';
+import { downloadFullSize, getVideoUrl, moveVideo, recordedByText, renameVideo } from '@/api/videoApi';
+import { JobProgress, JobProgressOverlay, newJobKey, useJobProgress } from '@/components/ui/JobProgress';
 import { athletesInGroups, getGroups } from '@/api/groupApi';
 import { useAuth } from '@/hooks/useAuth';
 import { getEdits, revertEdits, saveEdits } from '@/api/editsApi';
@@ -75,6 +76,10 @@ const AnalysisStudioPage = () => {
     const leftRef = useRef<HTMLVideoElement>(null);
     const rightRef = useRef<HTMLVideoElement>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const analysisProgress = useJobProgress(isAnalyzing ? `analysis-${videoId}` : null);   // key set by the server
+    const [downloadJob, setDownloadJob] = useState<{ key: string; title: string } | null>(null);
+    const downloadProgress = useJobProgress(downloadJob?.key ?? null);
+    const [downloadSent, setDownloadSent] = useState<number | null>(null);
     const [mode, setMode] = useState<KeypointMode>('processed');
     // Keypoint editing (admins and coaches, stereo analyses): unsaved edits, undo history, selected joint.
     const [editing, setEditing] = useState(false);
@@ -117,6 +122,21 @@ const AnalysisStudioPage = () => {
         if (name && name !== baseName(meta?.original_filename || '')) rename.mutate(name);
     };
     const downloadVideo = async (view: DownloadView, variant: DownloadVariant) => {
+        // Camera recordings: at the size they were recorded (the page's own videos are smaller so they play
+        // smoothly). Uploads are already stored at their own size.
+        if (meta?.source === 'stereo_camera' || hasRight) {
+            const key = newJobKey('download');
+            setDownloadSent(null);
+            setDownloadJob({ key, title: variant === 'overlay' ? 'Preparing the video with the skeleton' : 'Preparing the video' });
+            try {
+                await downloadFullSize(videoId, view, variant === 'overlay', key, setDownloadSent);
+            } catch {
+                toast.error('The video could not be downloaded. Try again.');
+            } finally {
+                setDownloadJob(null);
+            }
+            return;
+        }
         try {
             window.location.href = (await getVideoUrl(videoId, view, variant, true)).presigned_url;
         } catch {
@@ -231,10 +251,10 @@ const AnalysisStudioPage = () => {
             await api.post(`/api/process-video/${videoId}`, null, {
                 params: { ...(analysis ? { force: true } : {}), ...(calibrationId ? { calibration_id: calibrationId } : {}) },
             });
-            toast.success('Pose analysis completed!');
+            toast.success('Analysis finished.');
             await Promise.all(['analysis', 'studio-video', 'my-videos', 'edits'].map((k) => queryClient.invalidateQueries({ queryKey: [k] })));
         } catch {
-            toast.error('Analysis failed');
+            toast.error('The analysis did not finish. Try again; if it keeps failing, restart SportPose.');
         } finally {
             setIsAnalyzing(false);
         }
@@ -470,10 +490,20 @@ const AnalysisStudioPage = () => {
                                 </>
                             )}
                         </div>
+                        {meta && (
+                            <p className="mt-1 text-sm text-text-muted">
+                                {meta.recorded_by_known ? (meta.source === 'stereo_camera' ? 'Recorded by ' : 'Uploaded by ') : 'Added by '}
+                                <span className="text-text-secondary">{recordedByText(meta)}</span>
+                                {meta.owner_id && meta.recorded_by_id && meta.owner_id !== meta.recorded_by_id && meta.owner_name && (
+                                    <> · Belongs to <span className="text-text-secondary">{meta.owner_name}</span></>
+                                )}
+                                {meta.uploading && <> · Copying to cloud storage</>}
+                            </p>
+                        )}
                         {analysis && (
                             <div className="mt-2 flex items-center gap-4 text-sm text-text-muted tabular-nums">
-                                <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium">{is3D ? 'Stereo 3D' : '2D'}</span>
-                                {showRaw && <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-500 text-xs font-medium">Raw detections</span>}
+                                <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium">{is3D ? '3D, two cameras' : 'One camera'}</span>
+                                {showRaw && <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-500 text-xs font-medium">Showing the AI's points as detected</span>}
                                 {!showRaw && savedCount > 0 && (
                                     <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium" title="Joints corrected by hand (rings in the views)">
                                         {savedCount} edited {savedCount === 1 ? 'joint' : 'joints'}
@@ -487,7 +517,7 @@ const AnalysisStudioPage = () => {
                         <div className="flex items-center gap-2">
                             <div
                                 className="inline-flex h-9 p-1 rounded-lg border border-border"
-                                title={hasRaw ? 'Raw: the keypoints exactly as the model detected them. Processed: after left/right fixes, filling hidden joints, bone lengths and smoothing.' : 'Re-analyze this video to compare with the raw detections.'}
+                                title={hasRaw ? 'As detected: the body points exactly as the AI found them. Cleaned up: left/right mix-ups fixed, hidden joints filled in and the movement smoothed.' : 'Analyse this video again to compare with the points as detected.'}
                             >
                                 {(['processed', 'raw'] as KeypointMode[]).map((m) => (
                                     <button
@@ -496,13 +526,13 @@ const AnalysisStudioPage = () => {
                                         disabled={(m === 'raw' && !hasRaw) || editing}
                                         className={`px-3 text-sm rounded-md capitalize transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${(m === 'raw' ? showRaw : !showRaw) ? 'bg-primary text-white' : 'text-text-secondary hover:text-text'}`}
                                     >
-                                        {m}
+                                        {m === 'raw' ? 'As detected' : 'Cleaned up'}
                                     </button>
                                 ))}
                             </div>
                             {canEdit && !editing && (
-                                <button onClick={startEditing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors" title="Correct keypoints by dragging them on the videos or in the 3D view">
-                                    <Pencil className="w-4 h-4" /> Edit keypoints
+                                <button onClick={startEditing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors" title="Move a body point that is in the wrong place, on the videos or in the 3D view">
+                                    <Pencil className="w-4 h-4" /> Correct the skeleton
                                 </button>
                             )}
                             {canAssign && (
@@ -557,7 +587,7 @@ const AnalysisStudioPage = () => {
                                 <RotateCcw className="w-4 h-4" /> Reset sizes
                             </button>
                             <button onClick={requestAnalyze} disabled={isAnalyzing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors disabled:opacity-50">
-                                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Re-analyze
+                                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Analyse again
                             </button>
                         </div>
                     )}
@@ -565,7 +595,7 @@ const AnalysisStudioPage = () => {
 
                 {editing && (
                     <div className="sticky top-2 z-20 -mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-primary/50 bg-background-main/95 backdrop-blur px-4 py-2.5">
-                        <span className="inline-flex items-center gap-2 text-sm font-medium text-text"><Pencil className="w-4 h-4 text-primary" /> Editing keypoints</span>
+                        <span className="inline-flex items-center gap-2 text-sm font-medium text-text"><Pencil className="w-4 h-4 text-primary" /> Correcting the skeleton</span>
                         <span className="text-xs text-text-muted">
                             Drag a joint on either video or in the 3D view; the other views follow. Ctrl+Z undoes the last change. Saved edits ease into the {editInfo?.fade_frames ?? 5} frames on each side,
                             and edits of a joint up to {editInfo?.keyframe_gap ?? 30} frames apart are joined.
@@ -618,14 +648,28 @@ const AnalysisStudioPage = () => {
 
                 {isLoading && <div className="py-32 text-center text-sm text-text-muted">Loading analysis...</div>}
 
+                {analysis && isAnalyzing && (
+                    <div className="mb-4 rounded-xl border border-border bg-background-main p-4">
+                        <JobProgress title="Analysing the video again" job={analysisProgress} fallbackStage="Starting"
+                            note="The results below are replaced when it finishes. You can leave this page; it keeps going." />
+                    </div>
+                )}
+
                 {isError && !isLoading && (
                     <div className="flex flex-col items-center gap-4 py-24 border border-dashed border-border rounded-xl">
                         <Wand2 className="w-8 h-8 text-primary" strokeWidth={1.5} />
                         <h3 className="text-lg font-medium text-text">This video has not been analyzed yet</h3>
-                        <p className="text-sm text-text-muted -mt-2">Extract kinematics to unlock both camera views, the 3D skeleton and the graphs.</p>
-                        <Button onClick={requestAnalyze} disabled={isAnalyzing} className="px-6 gap-2">
-                            {isAnalyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing AI...</> : <><Wand2 className="w-4 h-4" /> Extract Kinematics</>}
-                        </Button>
+                        <p className="text-sm text-text-muted -mt-2">Analyse it to see the skeleton on the video{hasRight ? ', the 3D skeleton' : ''} and the graphs.</p>
+                        {isAnalyzing ? (
+                            <div className="w-full max-w-md px-4">
+                                <JobProgress title="Analysing the video" job={analysisProgress} fallbackStage="Starting"
+                                    note="This takes about 1 minute for every 10 seconds of video. You can leave this page; it keeps going." />
+                            </div>
+                        ) : (
+                            <Button onClick={requestAnalyze} className="px-6 gap-2">
+                                <Wand2 className="w-4 h-4" /> Analyse video
+                            </Button>
+                        )}
                     </div>
                 )}
 
@@ -660,7 +704,7 @@ const AnalysisStudioPage = () => {
                     <Dialog.Overlay className="fixed inset-0 z-40 bg-black/70" />
                     <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[75vh] w-[92vw] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background shadow-xl focus:outline-none">
                         <div className="border-b border-border px-5 py-4">
-                            <Dialog.Title className="font-semibold text-text">{analysis ? 'Re-analyze recording' : 'Analyze recording'}</Dialog.Title>
+                            <Dialog.Title className="font-semibold text-text">{analysis ? 'Analyse the recording again' : 'Analyse the recording'}</Dialog.Title>
                             <Dialog.Description className="mt-1 text-xs text-text-muted">
                                 Pick the calibration of the camera setup this was filmed with. A wrong one swaps joints and puts the 3D in the wrong place.
                             </Dialog.Description>
@@ -693,12 +737,20 @@ const AnalysisStudioPage = () => {
                                 <button className="h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text">Cancel</button>
                             </Dialog.Close>
                             <Button size="sm" className="h-9 gap-2" disabled={!chosenCalibration} onClick={() => analyze(chosenCalibration)}>
-                                <RefreshCw className="w-4 h-4" /> {analysis ? 'Re-analyze' : 'Analyze'}
+                                <RefreshCw className="w-4 h-4" /> {analysis ? 'Analyse again' : 'Analyse'}
                             </Button>
                         </div>
                     </Dialog.Content>
                 </Dialog.Portal>
             </Dialog.Root>
+            <JobProgressOverlay
+                open={!!downloadJob}
+                title={downloadJob?.title ?? ''}
+                job={downloadProgress}
+                fallbackStage="Getting the video"
+                fraction={downloadProgress?.finished ? downloadSent ?? null : undefined}
+                note="Full size, as recorded. The download starts by itself when it is ready."
+            />
         </AppLayout>
     );
 };

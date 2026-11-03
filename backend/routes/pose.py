@@ -9,6 +9,9 @@ from routes.edits import apply_to as apply_keypoint_edits
 from pose_estimator import process_video_with_overlays, POSE_MIN_CONF, POSE_SURE_CONF
 from bson import ObjectId
 import calibration_store
+import media_cache
+import progress
+from concurrent.futures import ThreadPoolExecutor
 import os
 import tempfile
 import uuid
@@ -20,8 +23,49 @@ router = APIRouter()
 CALIB_PATH = os.path.join(os.path.dirname(__file__), "..", "calibration.npz")
 
 
+STAGES = ["Getting the video", "Preparing the camera views", "Finding body points", "Building the 3D skeleton",
+          "Drawing the skeleton", "Saving the results"]
+
+
+def _local_copy(bucket, object_name):
+    """(path, is_temp): the local copy of a stored video, downloaded from cloud storage if this PC has none."""
+    cached = media_cache.get(object_name)
+    if cached:
+        return cached, False
+    response = minio_client.get_object(bucket, object_name)
+    total = int(response.headers.get("Content-Length") or 0)
+    progress.stage("Getting the video", total=total)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+        for chunk in response.stream(amt=1024 * 1024):
+            tmp_file.write(chunk)
+            progress.add(len(chunk))
+    return tmp_file.name, True
+
+
+def _upload_results(files):
+    """Upload the result videos [(object name, path)] to storage in parallel, with progress in bytes."""
+    files = [(n, p) for n, p in files if p and os.path.exists(p)]
+    progress.stage("Saving the results", total=sum(os.path.getsize(p) for _, p in files))
+    key = progress.current()
+
+    def send(item):
+        name, path = item
+        with open(path, "rb") as f:
+            minio_client.put_object(bucket_name=BUCKET, object_name=name, data=progress.CountingReader(f, key),
+                                    length=os.path.getsize(path), part_size=10 * 1024 * 1024, content_type="video/mp4")
+        return name
+    done = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for (name, path), fut in [(f, pool.submit(send, f)) for f in files]:
+            try:
+                done[name] = fut.result()
+            except Exception as ex:
+                print(f"upload of {name} failed: {ex!r}")
+    return done
+
+
 @router.post("/process-video/{video_id}")
-async def process_video(
+def process_video(
     video_id: str,
     force: bool = False,                      # set ?force=true to re-process
     calibration_id: Optional[str] = None,     # stereo: analyse with this saved calibration (kept for next time)
@@ -58,15 +102,24 @@ async def process_video(
         if not picked_calibration:
             raise HTTPException(status_code=404, detail="Calibration not found")
 
-    # 3. Download video from MinIO to a temporary file
+    # 3. The video file(s): the copy on this PC when there is one, else downloaded from cloud storage.
+    #    Progress for the page: GET /api/progress/analysis-<video_id>.
+    progress.start(f"analysis-{video_id}", STAGES)
+    temp_inputs = []                           # downloaded copies, deleted at the end (cached ones are kept)
+    temp_input_right_path = None
     try:
-        response = minio_client.get_object(video_doc["bucket_name"], video_doc["object_name"])
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
-            for chunk in response.stream(amt=1024*1024):
-                tmp_file.write(chunk)
-            temp_input_path = tmp_file.name
+        temp_input_path, is_temp = _local_copy(video_doc["bucket_name"], video_doc["object_name"])
+        if is_temp:
+            temp_inputs.append(temp_input_path)
+        if video_doc.get("object_name_right"):
+            temp_input_right_path, is_temp = _local_copy(video_doc["bucket_name"], video_doc["object_name_right"])
+            if is_temp:
+                temp_inputs.append(temp_input_right_path)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to download video: {str(e)}")
+        for q in temp_inputs:
+            os.unlink(q)
+        progress.finish(error=str(e))
+        raise HTTPException(status_code=500, detail=f"Could not get the video: {str(e)}")
 
     # 4. Process. Stereo recordings -> triangulation (3D); everything else -> normal 2D.
     is_stereo = (video_doc.get("layout") == "side_by_side"
@@ -90,16 +143,20 @@ async def process_video(
             result = process_stereo_video(temp_input_path, temp_output_path,
                                           calib_path=calib_path,
                                           output_path_right=temp_output_right_path,
-                                          plain_paths=plain_paths)
+                                          plain_paths=plain_paths,
+                                          input_path_right=temp_input_right_path)
         else:
             # If it's stereo but calibration is missing, fall back to 2D so it
             # still works (analyses the left half is not split here -- whole frame).
             # Healing is required with ViTPose: unlike MediaPipe's VIDEO running
             # mode it has no frame-to-frame tracker, so occluded joints must be
             # gated and interpolated temporally here instead.
+            progress.stage("Finding body points")
             result = process_video_with_overlays(temp_input_path, temp_output_path, apply_healing=True)
     except Exception as e:
-        os.unlink(temp_input_path)
+        progress.finish(error=str(e))
+        for q in temp_inputs:
+            os.unlink(q)
         if os.path.exists(temp_output_path):
             os.unlink(temp_output_path)
         if temp_output_right_path and os.path.exists(temp_output_right_path):
@@ -112,62 +169,36 @@ async def process_video(
         if calib_is_temp and os.path.exists(calib_path):
             os.unlink(calib_path)
 
-    # 5. Delete input temp file
-    os.unlink(temp_input_path)
+    # 5. Delete downloaded input copies (local cached copies stay for next time)
+    for q in temp_inputs:
+        os.unlink(q)
 
-    # 6. Upload processed video to MinIO (new name each run so the browser can't cache an old one)
-    try:
-        processed_object_name = f"processed_{uuid.uuid4()}.mp4"
-        with open(temp_output_path, 'rb') as f:
-            minio_client.put_object(
-                bucket_name=BUCKET,
-                object_name=processed_object_name,
-                data=f,
-                length=-1,
-                part_size=10*1024*1024,
-                content_type="video/mp4"
-            )
-    except Exception as e:
-        os.unlink(temp_output_path)
-        raise HTTPException(status_code=500, detail=f"Failed to upload processed video: {str(e)}")
-
-    # 7. Delete output temp file
-    os.unlink(temp_output_path)
-
-    # 7b. Upload the RIGHT view too (stereo only) so the UI can switch views
+    # 6-7. Upload the result videos to storage, all at once (new names each run so the browser can't cache
+    #      an old one): the overlay of each view, and both views without a skeleton (stereo) so the analysis
+    #      page can draw the raw or the processed keypoints over them itself.
+    processed_object_name = f"processed_{uuid.uuid4()}.mp4"
+    uploads = [(processed_object_name, temp_output_path)]
     processed_object_name_right = None
     if temp_output_right_path and os.path.exists(temp_output_right_path):
-        try:
-            processed_object_name_right = f"processed_right_{uuid.uuid4()}.mp4"
-            with open(temp_output_right_path, 'rb') as f:
-                minio_client.put_object(
-                    bucket_name=BUCKET,
-                    object_name=processed_object_name_right,
-                    data=f,
-                    length=-1,
-                    part_size=10*1024*1024,
-                    content_type="video/mp4"
-                )
-        except Exception:
-            processed_object_name_right = None
-        finally:
-            os.unlink(temp_output_right_path)
-
-    # 7c. Stereo: also upload both views without a skeleton, so the analysis page can draw the raw or the processed keypoints over them itself (2D videos use the original upload for this).
-    plain_names = {}
+        processed_object_name_right = f"processed_right_{uuid.uuid4()}.mp4"
+        uploads.append((processed_object_name_right, temp_output_right_path))
+    plain_keys = {}
     for key, path in zip(("plain_object_name", "plain_object_name_right"), plain_paths):
-        if not os.path.exists(path):
-            continue
-        try:
-            name = f"{key.replace('_object_name', '')}_{uuid.uuid4()}.mp4"
-            with open(path, 'rb') as f:
-                minio_client.put_object(bucket_name=BUCKET, object_name=name, data=f, length=-1,
-                                        part_size=10*1024*1024, content_type="video/mp4")
-            plain_names[key] = name
-        except Exception:
-            pass                               # the page falls back to the overlay videos
-        finally:
-            os.unlink(path)
+        name = f"{key.replace('_object_name', '')}_{uuid.uuid4()}.mp4"
+        plain_keys[name] = key
+        uploads.append((name, path))
+    try:
+        sent = _upload_results(uploads)
+    finally:
+        for _, path in uploads:
+            if path and os.path.exists(path):
+                os.unlink(path)
+    if processed_object_name not in sent:
+        progress.finish(error="upload failed")
+        raise HTTPException(status_code=500, detail="Failed to upload processed video")
+    if processed_object_name_right not in sent:
+        processed_object_name_right = None
+    plain_names = {plain_keys[n]: n for n in plain_keys if n in sent}   # missing: the page uses the overlays
 
     # 8. Update video metadata with processed video info
     update_fields = {"processed_object_name": processed_object_name, **plain_names}
@@ -209,6 +240,7 @@ async def process_video(
     else:
         analysis_collection.insert_one(analysis_doc)
 
+    progress.finish()
     return {
         "status": "completed",
         "mode": result.get("mode", "2d"),

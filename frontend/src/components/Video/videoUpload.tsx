@@ -2,7 +2,8 @@ import { Upload, X } from "lucide-react";
 import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Button from '../ui/button';
-import { uploadVideo, getVideoUrl } from '@/api/videoApi';
+import { uploadVideo, getVideoUrl, MAX_UPLOAD_MB } from '@/api/videoApi';
+import { JobProgress, newJobKey, useJobProgress } from '../ui/JobProgress';
 import { toast } from 'react-toastify';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -13,16 +14,29 @@ interface VideoUploadProps {
 const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [isUploading, setIsUploading] = useState(false);
+    const [sent, setSent] = useState(0);                          // 0-1: how much of the file has been sent
+    const [job, setJob] = useState<string | null>(null);
+    const serverProgress = useJobProgress(job);
+    const [dragging, setDragging] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
 
-    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (file && file.type.startsWith('video/')) {
-            setSelectedFile(file);
+    // Some PCs report no type for AVI / MOV files, so the extension counts too.
+    const pick = (file: File | undefined) => {
+        if (!file) return;
+        if (!file.type.startsWith('video/') && !/\.(mp4|mov|avi)$/i.test(file.name)) {
+            toast.error('Please choose a video file (MP4, MOV or AVI).');
+            return;
         }
+        if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+            toast.error(`This video is ${(file.size / 1024 / 1024).toFixed(0)} MB. The limit is ${MAX_UPLOAD_MB} MB: trim it or record a shorter clip.`);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+        }
+        setSelectedFile(file);
     };
+    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => pick(event.target.files?.[0]);
 
     const handleUnselectFile = () => {
         setSelectedFile(null);
@@ -38,13 +52,15 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
         }
 
         setIsUploading(true);
+        setSent(0);
+        const key = newJobKey('upload');
+        setJob(key);
         const formData = new FormData();
         formData.append('video', selectedFile);
 
         try {
-            const response = await uploadVideo(formData);
-            toast.success('Video uploaded successfully!');
-            console.log('Upload response:', response);
+            const response = await uploadVideo(formData, setSent, key);
+            toast.success('Video uploaded.');
             setSelectedFile(null);
             if (fileInputRef.current) {
                 fileInputRef.current.value = '';
@@ -59,12 +75,18 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
             console.error('Upload error:', error);
         } finally {
             setIsUploading(false);
+            setJob(null);
         }
     };
 
     return (
         <div className="flex flex-col items-center justify-between gap-4 bg-background rounded-xl shadow-sm border p-5 h-full">
-            <div className="flex-1 flex flex-col items-center justify-center gap-6 rounded-lg border-2 border-dashed border-border bg-background-main p-8 text-center transition-colors hover:border-primary/50 w-full min-h-96">
+            <div
+                onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => { e.preventDefault(); setDragging(false); if (!isUploading) pick(e.dataTransfer.files?.[0]); }}
+                className={`flex-1 flex flex-col items-center justify-center gap-6 rounded-lg border-2 border-dashed bg-background-main p-8 text-center transition-colors hover:border-primary/50 w-full min-h-96 ${dragging ? 'border-primary' : 'border-border'}`}
+            >
                 <Upload className="w-16 h-16 text-text-muted" />
                 <p className="text-text-secondary">
                     Drag & Drop or <label htmlFor="file-upload" className="cursor-pointer text-primary hover:underline font-medium">Choose file</label> to upload
@@ -73,11 +95,11 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
                         id="file-upload"
                         type="file"
                         className="hidden"
-                        accept="video/*"
+                        accept="video/*,.mp4,.mov,.avi"
                         onChange={handleFileSelect}
                     />
                 </p>
-                <p className="text-sm text-text-muted">MP4, MOV, or AVI</p>
+                <p className="text-sm text-text-muted">MP4, MOV or AVI, up to {MAX_UPLOAD_MB} MB</p>
                 {selectedFile && (
                     <div className="mt-2 p-3 bg-primary/10 rounded-md border border-primary/20 relative">
                         <X
@@ -93,16 +115,20 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
                     </div>
                 )}
             </div>
-            <Button
-                onClick={handleUpload}
-                disabled={isUploading || !selectedFile}
-            >
-                {isUploading ? 'Uploading...' : 'Upload Video'}
-            </Button>
+            {isUploading ? (
+                <div className="w-full">
+                    {sent < 1
+                        ? <JobProgress title="Uploading the video" job={null} fallbackStage="Sending the file" fraction={sent} />
+                        : <JobProgress title="Uploading the video" job={serverProgress} fallbackStage="Converting the video"
+                            note="MOV and AVI videos are converted to MP4 so every browser can play them." />}
+                </div>
+            ) : (
+                <Button onClick={handleUpload} disabled={!selectedFile}>Upload Video</Button>
+            )}
             <span className="text-text-secondary text-xs">OR</span>
             <Button className="w-4/5" onClick={() => navigate('/camera-capture')}>Camera Capture</Button>
         </div>
     )
 }
 
-export default VideoUpload
+export default VideoUpload

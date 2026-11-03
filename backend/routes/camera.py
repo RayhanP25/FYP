@@ -11,7 +11,8 @@ left the cameras in uncompressed YUY2 and capped them at ~10 fps (measured
 2026-10-08 with cam_fps_test.py: DSHOW 10.2 fps, MSMF 30.0 fps per camera).
 The recorder writes one frame per NEW left-camera frame (no wall-clock filler),
 and the live preview is sent at a lower rate/size so it does not starve capture. Live preview = MJPEG in an
-<img>. Recording writes a side-by-side MP4, uploads to MinIO, makes a videos doc.
+<img>. A recording is saved as two full-size MP4s (left and right camera, encoded on the GPU), kept on this PC
+for the analysis and sent to cloud storage in the background, with a videos doc (layout "stereo_pair").
 """
 
 import base64
@@ -30,7 +31,10 @@ import cv2
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+import background_upload
 import calibration_store
+import media_cache
+import progress
 import video_io
 from database import client, database_name
 from minio_client import BUCKET, minio_client
@@ -289,30 +293,53 @@ class Recorder:
         self.stills = [(ts, *j.result()) for ts, j in jobs]
 
     def _encode(self):
+        """Write the stills into two MP4s, one per camera, at full size. Each is at most 2560 wide, so the GPU
+        encoder (NVENC, max 4096) takes them; the two run at the same time. Real camera gaps are filled by
+        repeating the previous still so the duration stays right."""
         if not self.stills:
             raise HTTPException(status_code=500, detail="No frames were recorded.")
         period = 1.0 / CAP_FPS
-        writer = None
-        start_ts, real = self.stills[0][0], 0
-        try:
-            for ts, pL, pR in self.stills:
-                combo = _compose(cv2.imread(pL), cv2.imread(pR))
-                if writer is None:
-                    h, w = combo.shape[:2]
-                    writer = video_io.open_writer(self.path, w, h, CAP_FPS)
-                    self.encoder = writer.encoder
-                target = int(round((ts - start_ts) / period)) + 1
-                n = max(1, target - self.frames) if target - self.frames > 1.5 else 1
-                for _ in range(n):
-                    writer.write(combo)
-                self.frames += n
-                self.dup_frames += n - 1
-                real += 1
-        finally:
-            if writer is not None:
-                writer.release()
-            shutil.rmtree(self.dir, ignore_errors=True)
-        self.real_fps = real / max(1e-6, self.frames / CAP_FPS)
+        start_ts = self.stills[0][0]
+        repeats, written = [], 0                 # how many times each still is written
+        for ts, _, _ in self.stills:
+            target = int(round((ts - start_ts) / period)) + 1
+            n = max(1, target - written) if target - written > 1.5 else 1
+            repeats.append(n)
+            written += n
+        self.frames, self.dup_frames = written, written - len(self.stills)
+        self.path = tempfile.mktemp(suffix="_L.mp4")
+        self.path_right = tempfile.mktemp(suffix="_R.mp4")
+        progress.stage("Preparing the video", total=2 * written)
+        errors = []
+
+        def write_side(col, path):
+            writer = None
+            try:
+                for (still, n) in zip(self.stills, repeats):
+                    img = cv2.imread(still[col])
+                    if writer is None:
+                        h, w = img.shape[:2]
+                        writer = video_io.open_writer(path, w, h, CAP_FPS)
+                        self.encoder = writer.encoder
+                    for _ in range(n):
+                        writer.write(img)
+                    progress.add(n)
+            except Exception as ex:
+                errors.append(ex)
+            finally:
+                if writer is not None:
+                    writer.release()
+
+        threads = [threading.Thread(target=progress.wrap(write_side), args=(1, self.path)),
+                   threading.Thread(target=progress.wrap(write_side), args=(2, self.path_right))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        shutil.rmtree(self.dir, ignore_errors=True)
+        if errors:
+            raise HTTPException(status_code=500, detail=f"Could not save the recording: {errors[0]}")
+        self.real_fps = len(self.stills) / max(1e-6, self.frames / CAP_FPS)
 
     def stop(self):
         if not self.active:
@@ -321,7 +348,7 @@ class Recorder:
         if self.thread:
             self.thread.join()
         self._encode()
-        return self.path, self.frames
+        return self.path, self.path_right, self.frames
 
 
 recorder = Recorder()
@@ -464,22 +491,25 @@ def start_recording(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/stop-recording")
-def stop_recording(current_user: dict = Depends(get_current_user)):
-    path, frames = recorder.stop()
-    dup_frames, real_fps = recorder.dup_frames, round(recorder.real_fps, 1)
-    object_name = f"stereo_{uuid.uuid4()}.mp4"
-    file_size = os.path.getsize(path) if os.path.exists(path) else 0
+def stop_recording(job: str = None, current_user: dict = Depends(get_current_user)):
+    if job:
+        progress.start(job, ["Preparing the video"])
     try:
-        with open(path, "rb") as f:
-            minio_client.put_object(bucket_name=BUCKET, object_name=object_name,
-                                    data=f, length=-1, part_size=10 * 1024 * 1024,
-                                    content_type="video/mp4")
-    finally:
-        if os.path.exists(path):
-            os.unlink(path)
+        path, path_right, frames = recorder.stop()
+    except Exception as ex:
+        progress.finish(job, error=str(getattr(ex, "detail", ex)))
+        raise
+    dup_frames, real_fps = recorder.dup_frames, round(recorder.real_fps, 1)
+    base = uuid.uuid4()
+    object_name, object_name_right = f"stereo_{base}_L.mp4", f"stereo_{base}_R.mp4"
+    cached = [media_cache.put(object_name, path, move=True), media_cache.put(object_name_right, path_right, move=True)]
+    sizes = []
+    for c, tmp in zip(cached, (path, path_right)):
+        sizes.append(os.path.getsize(c or tmp) if os.path.exists(c or tmp) else 0)
+    file_size = sum(sizes)
 
     now = datetime.now()
-    friendly = f"Stereo recording {now:%Y-%m-%d %H-%M-%S}.mp4"
+    friendly = f"Recording {now:%Y-%m-%d %H-%M-%S}.mp4"
     # NOTE: field names match routes/upload.py so this lists/plays like an upload
     doc = {
         "user_id": str(current_user["_id"]),
@@ -490,7 +520,10 @@ def stop_recording(current_user: dict = Depends(get_current_user)):
         "file_size": file_size,
         "uploaded_at": now,
         "source": "stereo_camera",
-        "layout": "side_by_side",
+        "layout": "stereo_pair",            # object_name = left camera, object_name_right = right camera
+        "object_name_right": object_name_right,
+        "recorded_by": str(current_user["_id"]),
+        "uploading": True,                  # set False once both files are in cloud storage
         "fps": CAP_FPS,
         "frames": frames,
         "dup_frames": dup_frames,      # frames repeated to fill real camera gaps
@@ -504,6 +537,9 @@ def stop_recording(current_user: dict = Depends(get_current_user)):
     except Exception as ex:                # never lose a recording over this
         print(f"calibration library unavailable: {ex!r}")
     result = client[database_name]["videos"].insert_one(doc)
+    files = [(object_name, cached[0] or path), (object_name_right, cached[1] or path_right)]
+    background_upload.send(result.inserted_id, files)
+    progress.finish(job)
     return {"status": "saved", "video_id": str(result.inserted_id),
             "object_name": object_name, "frames": frames,
             "dup_frames": dup_frames, "real_fps": real_fps,

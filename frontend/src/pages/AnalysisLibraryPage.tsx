@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, FileVideo, Search } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import VideoThumbnail from '@/components/Video/videoThumbnail';
-import { getMyVideos, type Video } from '@/api/videoApi';
+import { getMyVideos, ROLE_LABEL, type Video } from '@/api/videoApi';
 import { useListNav } from '@/shortcuts/useListNav';
 import { useShortcut } from '@/shortcuts/useShortcut';
 
@@ -15,7 +15,9 @@ const MATCH_LIMIT = 8;
 const ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_100px_180px_140px] items-center gap-4 px-4';
 
 const formatDate = (d: string) => new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-const uploaderOf = (v: Video) => v.owner_name || 'Unknown';
+// Who recorded or uploaded the video (older videos: who it belongs to), shown with their role.
+const uploaderOf = (v: Video) => v.recorded_by_name || v.owner_name || 'Unknown';
+const roleOf = (v: Video) => (v.recorded_by_role ? ROLE_LABEL[v.recorded_by_role] ?? v.recorded_by_role : null);
 
 const AnalysisLibraryPage = () => {
     const navigate = useNavigate();
@@ -75,7 +77,7 @@ const AnalysisLibraryPage = () => {
                             <span className={`relative w-8 h-4 rounded-full transition-colors ${showPending ? 'bg-primary' : 'bg-border'}`}>
                                 <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${showPending ? 'translate-x-4' : ''}`} />
                             </span>
-                            Show not analyzed
+                            Show not analysed
                         </button>
                         <div className="relative w-72">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
@@ -99,7 +101,7 @@ const AnalysisLibraryPage = () => {
                         </div>
                         <div className="flex flex-col gap-0.5">
                             <button onClick={() => selectUploader(null)} className={filterClass(!uploader)}>
-                                <span>All uploaders</span>
+                                <span>Everyone</span>
                                 <span className="text-xs tabular-nums text-text-muted">{all.length.toLocaleString()}</span>
                             </button>
                             {shownUploaders.map(([name, count]) => (
@@ -119,8 +121,8 @@ const AnalysisLibraryPage = () => {
                         <div className={`${ROW_GRID} h-10 shrink-0 text-xs font-medium text-text-muted bg-background border-b border-border`}>
                             <span>Name</span>
                             <span>Type</span>
-                            <span>Uploaded by</span>
-                            <span>Date uploaded</span>
+                            <span>Recorded by</span>
+                            <span>Date added</span>
                         </div>
 
                         {/* Rows scroll inside the table; the header above and the page bar below stay put. */}
@@ -150,11 +152,13 @@ const AnalysisLibraryPage = () => {
                                     <VideoThumbnail videoId={v.video_id} className="w-24 aspect-video rounded-sm" iconClassName="w-4 h-4" />
                                     <span className="min-w-0">
                                         <span className="block truncate font-medium text-text" title={v.original_filename}>{v.original_filename}</span>
-                                        {!v.has_analysis && <span className="block text-xs text-text-muted">Not analyzed</span>}
+                                        {!v.has_analysis && <span className="block text-xs text-text-muted">Not analysed yet</span>}
                                     </span>
                                 </span>
-                                <span className="text-text-secondary">{v.is_stereo ? 'Stereo' : '2D'}</span>
-                                <span className="truncate text-text-secondary">{uploaderOf(v)}</span>
+                                <span className="text-text-secondary">{v.source === 'stereo_camera' || v.is_stereo ? 'Camera recording' : 'Upload'}</span>
+                                <span className="truncate text-text-secondary" title={v.owner_name && v.owner_name !== uploaderOf(v) ? `Belongs to ${v.owner_name}` : undefined}>
+                                    {uploaderOf(v)}{roleOf(v) && <span className="text-text-muted"> · {roleOf(v)}</span>}
+                                </span>
                                 <span className="text-text-muted tabular-nums">{formatDate(v.uploaded_at)}</span>
                             </button>
                         ))}

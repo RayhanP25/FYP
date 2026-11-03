@@ -147,7 +147,7 @@ function HomePage() {
                 {data && (
                     <>
                         <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-                            <Stat index={0} label="Recordings" value={data.totals.recordings} detail="from the stereo cameras" icon={Video} />
+                            <Stat index={0} label="Recordings" value={data.totals.recordings} detail="from the two cameras" icon={Video} />
                             <Stat index={1} label="Videos" value={data.totals.videos} detail={`${data.totals.videos - data.totals.recordings} uploaded, ${data.totals.recordings} recorded`} icon={FileVideo} />
                             <Stat
                                 index={2}

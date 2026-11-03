@@ -19,6 +19,7 @@ import time
 import numpy as np
 import cv2
 
+import progress
 import video_io
 import copy
 
@@ -95,6 +96,42 @@ def _split_ffmpeg(input_path, target_w):
     return lp, rp, fps
 
 
+def _scale_pair(left_path, right_path, target_w):
+    """Two camera files (a "stereo_pair" recording) -> two temp videos at the analysis width, both at once."""
+    import subprocess
+    exe = video_io.ffmpeg_exe()
+    cap = cv2.VideoCapture(left_path)
+    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    cap.release()
+    if W <= 0 or H <= 0:
+        raise RuntimeError("Could not read the left camera video.")
+    w, h = (v - v % 2 for v in _out_size(W, H, target_w))
+    outs = [tempfile.mktemp(suffix="_L.mp4"), tempfile.mktemp(suffix="_R.mp4")]
+    enc = video_io.pick_encoder(w, h) if exe else None
+    if enc:
+        procs = [subprocess.Popen([exe, "-y", "-hide_banner", "-loglevel", "error", "-i", src,
+                                   "-vf", f"scale={w}:{h}", "-c:v", enc, *video_io._ENCODERS[enc],
+                                   "-pix_fmt", "yuv420p", "-r", f"{fps}", dst],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                 for src, dst in zip((left_path, right_path), outs)]
+        if all(p.wait() == 0 for p in procs) and all(os.path.exists(o) for o in outs):
+            return outs[0], outs[1], fps
+        print("scale: ffmpeg failed; using the slower Python path")
+    for src, dst in zip((left_path, right_path), outs):    # fallback: OpenCV, one frame at a time
+        cap = video_io.VideoReader(src)
+        out = video_io.open_writer(dst, w, h, fps)
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            out.write(cv2.resize(frame, (w, h)) if frame.shape[1] != w else frame)
+        cap.release()
+        out.release()
+    return outs[0], outs[1], fps
+
+
 def _split_to_temp(input_path, target_w):
     """Split a side-by-side video into two temp half-videos (downscaled)."""
     fast = _split_ffmpeg(input_path, target_w)
@@ -134,9 +171,10 @@ def _split_to_temp(input_path, target_w):
 
 
 def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
-                         target_w=1280, output_path_right=None, plain_paths=None):
+                         target_w=1280, output_path_right=None, plain_paths=None, input_path_right=None):
     """
-    input_path        : the side-by-side recording
+    input_path        : the side-by-side recording, or the LEFT camera's video when input_path_right is given
+    input_path_right  : the RIGHT camera's video (recordings saved as two files, layout "stereo_pair")
     output_path       : where to write the 2D overlay of the LEFT view
     output_path_right : optional, where to write the 2D overlay of the RIGHT
                         view. When given it is kept (not deleted) so the caller
@@ -151,14 +189,19 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
             f"calibration.npz not found at {calib_path}. Run stereo_calibrate.py first.")
     calib = load_calibration(calib_path)
 
-    lp, rp, fps = _split_to_temp(input_path, target_w)
+    progress.stage("Preparing the camera views")
+    lp, rp, fps = (_scale_pair(input_path, input_path_right, target_w) if input_path_right
+                   else _split_to_temp(input_path, target_w))
     t_split = time.perf_counter() - t_start
     keep_right = output_path_right is not None
     roTmp = output_path_right or tempfile.mktemp(suffix="_Ro.mp4")
     try:
         # 1. Raw 2D detections in each view (no healing yet).
+        progress.stage("Finding body points: left camera")
         rawL = _run_inference(lp)
+        progress.stage("Finding body points: right camera")
         rawR = _run_inference(rp)
+        progress.stage("Building the 3D skeleton")
         origL = [copy.deepcopy(f.get("keypoints")) for f in rawL["frames"]]
         origR = [copy.deepcopy(f.get("keypoints")) for f in rawR["frames"]]
         t_pose_done = time.perf_counter()
@@ -224,13 +267,14 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         import threading
         errors = []
 
-        def draw(src, frames_v, dst, fps_v):
+        def draw(src, frames_v, dst, fps_v, name):
+            progress.stage(f"Drawing the skeleton: {name} camera", total=len(frames_v))
             try:
                 _render_overlay(src, frames_v, dst, fps=fps_v, stabilize_confidence=True)
             except Exception as e:
                 errors.append(e)
-        threads = [threading.Thread(target=draw, args=(lp, framesL, output_path, rawL["fps"])),
-                   threading.Thread(target=draw, args=(rp, framesR, roTmp, rawR["fps"]))]
+        threads = [threading.Thread(target=progress.wrap(draw), args=(lp, framesL, output_path, rawL["fps"], "left")),
+                   threading.Thread(target=progress.wrap(draw), args=(rp, framesR, roTmp, rawR["fps"], "right"))]
         if os.environ.get("POSE_PARALLEL_OVERLAY", "0") == "1":
             for th in threads:
                 th.start()

@@ -279,24 +279,24 @@ Record with both cameras to get the full 3D analysis. Make sure the room has bee
 
 1. Click **Camera** in the left menu.
 2. Click **Start Live Feed**. The 2K cameras can take up to 1 minute to open.
-3. **Check:** both pictures appear, labelled **Left** and **Right**. If you see **Cameras Offline**, see Troubleshooting.
+3. **Check:** both pictures appear, labelled **Left** and **Right**. If you see **Cameras are off**, see Troubleshooting.
 4. Ask the athlete to stand in the recording area. Check they are fully visible, head to toe, in **both** pictures, and that nobody else is in view.
 5. Click **Record Video** or press `Space`. The message "Recording started" appears.
 6. The athlete performs the movement. Keep clips short: 5–20 seconds is ideal.
 7. Click **Stop & Save** or press `Space` again.
-8. Wait while the recording is saved. **Check:** "Saved ... frames. Redirecting to analysis..." appears, and the Analysis page for this recording opens.
+8. Wait while the recording is saved. A box shows **Saving the recording** with a progress bar; this takes a few seconds for a short clip. **Check:** "Recording saved" appears and the Analysis page for this recording opens. The video is copied to cloud storage in the background afterwards; you can carry on straight away.
 9. To record again, go back to **Camera**. When finished, click **Stop Live Feed**.
 
 **Analyse the recording**
 
 The recording is saved but not analysed yet.
 
-1. On the Analysis page that opened, click **Analyze recording** (or **Extract Kinematics**).
+1. On the Analysis page that opened, click **Analyse video**.
 2. A box asks you to pick the calibration. Choose the one for the room it was filmed in (normally marked **In use** or **Used last time**).
-3. Wait while it shows **Processing AI...**. A 10-second clip takes about 1 minute.
-4. **Check:** "Pose analysis completed!" appears and the results are shown (see Analysis studio).
+3. Wait while the progress bar shows **Analysing the video** and each step (for example "Step 3 of 6: Finding body points"). A 10-second clip takes about 1 minute. You can leave the page; it keeps going.
+4. **Check:** "Analysis finished." appears and the results are shown (see Analysis studio).
 
-Picking the wrong calibration gives a twisted or swapped 3D skeleton. If that happens, click **Re-analyze** and pick the right one.
+Picking the wrong calibration gives a twisted or swapped 3D skeleton. If that happens, click **Analyse again** and pick the right one.
 
 **Good recordings**
 
@@ -311,14 +311,14 @@ You can also analyse a video filmed with one camera or a phone. It gives the 2D 
 
 1. Click **Videos** in the left menu.
 2. In the upload area, drag the video file onto it, or click **Choose file** and pick the file.
-3. Click **Upload Video**.
-4. **Check:** "Video uploaded successfully!" appears and the video is in **Past Videos**.
-5. To analyse it, click **Analysis** in the left menu, click the video, then click **Extract Kinematics** and wait.
+3. Click **Upload Video**. A progress bar shows the file being sent, then converted.
+4. **Check:** "Video uploaded." appears and the video is in **Past Videos**.
+5. To analyse it, click **Analysis** in the left menu, click the video, then click **Analyse video** and wait.
 
 Limits:
 
 - **MP4**, **MOV** and **AVI** files can be uploaded. MOV and AVI files (and phone videos) are converted to MP4 automatically while uploading, so a large file takes a little longer.
-- Maximum file size: 100 MB.
+- Maximum file size: 100 MB (shown under the upload area). A larger file is refused with a message before it is sent.
 - One person in view, filmed from head to toe, as for recordings.
 
 ## Analysis studio
@@ -328,9 +328,11 @@ The Analysis studio shows a video with the AI's skeleton on it, the 3D skeleton 
 **Open a video**
 
 1. Click **Analysis** in the left menu. The list shows every video you are allowed to see.
-2. To find one, type in **Search by video name**, choose a person in **All uploaders**, or tick **Show not analyzed**.
+2. To find one, type in **Search by video name**, choose a person under **Everyone** (who recorded or uploaded it), or tick **Show not analysed**. The **Recorded by** column shows who recorded or uploaded each video and their role (Admin, Coach or Athlete).
 3. Click the video's row.
-4. If it says "This video has not been analyzed yet", click **Extract Kinematics** (or **Analyze recording**) and wait about 1 minute per 10 seconds of video.
+4. If it says "This video has not been analyzed yet", click **Analyse video** and wait about 1 minute per 10 seconds of video.
+
+Under the video's name, the page shows who recorded or uploaded it and their role (for example "Recorded by Ali (Coach)"), and who it belongs to if it was assigned to someone else.
 
 **The panels**
 
@@ -363,13 +365,13 @@ Recordings made with both cameras show all panels. Single-camera uploads show th
 2. Move to the end and click **Set B**.
 3. The panel shows the straight-line distance from A to B and the length of the path travelled. **Whole clip** sets A and B to the first and last frame.
 
-**Raw or processed skeleton.** **Raw detections** shows the points exactly as the AI found them. Processed (the default) has left/right mix-ups fixed, hidden joints filled in and the movement smoothed.
+**Cleaned up or as detected.** **As detected** shows the points exactly as the AI found them. **Cleaned up** (the default) has left/right mix-ups fixed, hidden joints filled in and the movement smoothed.
 
 **Correct the skeleton by hand**
 
 If a joint is clearly in the wrong place:
 
-1. Click **Edit keypoints**.
+1. Click **Correct the skeleton**.
 2. Pause on the frame, then drag the joint to the right spot in a camera view or in the 3D view. Tick **Keep bone length** to keep the limbs the same length.
 3. **Undo** / **Redo** step through your changes. **Revert this joint** or **Revert all** removes corrections.
 4. Click **Done** to save, or **Discard** to throw the changes away.
@@ -378,10 +380,10 @@ Corrected joints show a ring in the views. Re-analysing a video removes the hand
 
 **Other actions**
 
-- **Download**: save the video **Without skeleton** or **With skeleton**.
+- **Download**: save a camera's video with the skeleton, or without it (no skeleton). Camera recordings download at the full size they were recorded (2560 x 1440); a box shows the progress while the video is prepared.
 - **Assign video**: choose which athlete the video belongs to.
 - Pencil next to the title (**Edit video name**): rename the video.
-- **Re-analyze**: run the AI again, for example with a different calibration.
+- **Analyse again**: run the AI again, for example with a different calibration.
 
 ## Managing videos
 
@@ -389,11 +391,12 @@ All videos are listed under **Videos** (Past Videos) and **Analysis**.
 
 | To | Do this |
 | --- | --- |
+| See who recorded a video | On **Videos** the name and role appear under the video's name when someone else recorded it; on **Analysis** see the **Recorded by** column |
 | See only your own videos | On **Videos**, click **My videos** (or **All videos** for everything you may see) |
 | Find a video | Type part of its name in **Search videos...** |
 | Rename a video | Open it in Analysis and click the pencil next to its name. Only the name changes; the file type (.mp4) stays |
 | Give a video to another athlete | Open it in Analysis and click **Assign video**, then pick the person |
-| Download a video | Open it in Analysis, click **Download**, choose **Without skeleton** or **With skeleton** |
+| Download a video | Open it in Analysis, click **Download** and choose the camera, with or without the skeleton. Recordings come at full size |
 | Delete a video | On **Videos**, click the bin icon (**Delete video**) on its row, then confirm. This cannot be undone |
 
 Coaches can only assign videos to themselves or to their own athletes. Athletes see only their own videos.
@@ -421,7 +424,7 @@ Shortcuts do not work while you are typing in a box or while a pop-up window is 
 | Analysis | `Shift` + `←` / `→` | Back / forward 1 second |
 | Analysis | `R` / `End` | Back to the start / last frame |
 | Analysis | `1` to `7` | Show or hide each panel |
-| Analysis | `E` | Start / stop correcting keypoints |
+| Analysis | `E` | Start / stop correcting the skeleton |
 | Analysis | `Ctrl` + `Z` / `Ctrl` + `Enter` | Undo a correction / save corrections |
 
 ## Troubleshooting
@@ -433,15 +436,15 @@ Try the fix in the right-hand column. If it still fails, take a screenshot of th
 | `localhost:5173` does not open ("This site can't be reached") | The app window is not running. Start it (Starting the system, window 2) |
 | Login says "Invalid email or password" for a correct account | The PC has no internet, or the online database does not accept this network yet. Check the internet; if it is fine, contact the SportPose team (the PC's network address must be allowed) |
 | Pages show errors or nothing loads | The server window is not running or has an error. Restart both windows |
-| **Cameras Offline**, or the live feed does not start | Check both USB cables. Close Zoom, Teams, OBS and the Windows Camera app. Wait up to 1 minute, then try **Start Live Feed** again. Still failing: restart the server window |
+| **Cameras are off**, or the live feed does not start | Check both USB cables. Close Zoom, Teams, OBS and the Windows Camera app. Wait up to 1 minute, then try **Start Live Feed** again. Still failing: restart the server window |
 | Left and right pictures are the wrong way round | Use **Cameras** → **Swap left / right** → **Save**, then calibrate again |
 | One camera's size shows in orange in **Cameras** | Wrong camera picked (for example the PC's own webcam), or the cable is in a slow USB port. Pick the other camera or move the cable to another USB port on the back of the PC |
 | Calibration: the board has no coloured dots | Board not fully in both pictures, too far away, too much glare, or moving. Move it closer, avoid reflections, hold it still |
 | Calibration: **Calibrate** stays grey | Fewer than 15 pairs. Capture more |
 | Calibration: the tilt counts do not go up | The board is not tilted enough (15° or more). Turn or tip it 25–40°; rotating it flat in the picture does not count |
-| The 3D skeleton is twisted, upside down, or arms and legs are crossed | Wrong calibration for this room, or a camera was moved. Pick the right one with **Re-analyze**; if the camera moved, calibrate again and re-analyse |
-| Analysis says "Analysis failed" | Restart both windows and try again. If it fails again, send the screenshots to the team |
-| A joint jumps around or is in the wrong place | The joint was hidden in a camera. Correct it by hand (Analysis studio → Edit keypoints), or record again with a clearer view |
+| The 3D skeleton is twisted, upside down, or arms and legs are crossed | Wrong calibration for this room, or a camera was moved. Pick the right one with **Analyse again**; if the camera moved, calibrate again and re-analyse |
+| Analysis says "The analysis did not finish" | Restart both windows and try again. If it fails again, send the screenshots to the team |
+| A joint jumps around or is in the wrong place | The joint was hidden in a camera. Correct it by hand (Analysis studio → Correct the skeleton), or record again with a clearer view |
 | An uploaded MOV or AVI video does not play | Upload it again: uploads are now converted to MP4 automatically. Videos uploaded before this change must be uploaded again |
 
 ## Acceptance test checklist
@@ -468,17 +471,20 @@ Work down the list in order and tick each test that passes. For a test that fail
 **C. Recording and analysis**
 
 - [ ] Camera: **Start Live Feed**, **Record Video** for about 10 seconds of movement, **Stop & Save**; the Analysis page opens
-- [ ] Analyse the recording: "Pose analysis completed!" and all panels show results
+- [ ] Saving the recording shows a progress bar and takes seconds, not minutes
+- [ ] Analyse the recording: a progress bar shows each step, then "Analysis finished." and all panels show results
+- [ ] The video shows "Recorded by" with your name and role
 - [ ] Play, pause and step with `←` `→`: the white line on the graphs stays on the frame shown in the videos
 - [ ] Make a graph panel bigger and repeat: the white line is still on the right frame
 - [ ] 3D: drag to turn, scroll to zoom, **Reset**
 - [ ] Right-click a video: no browser menu (no "Enhance video") appears
-- [ ] **Download** the video with and without the skeleton
+- [ ] **Download** the video with and without the skeleton: both are 2560 x 1440
 - [ ] Rename a video: only the name can be changed, not ".mp4"
 
 **D. Uploads**
 
-- [ ] Upload an MP4 on **Videos**; it plays and can be analysed
+- [ ] Upload an MP4 on **Videos**: a progress bar shows the upload; it plays and can be analysed
+- [ ] Try a file over 100 MB: it is refused with a message straight away
 
 **E. Permissions**
 
