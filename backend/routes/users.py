@@ -67,9 +67,6 @@ class GroupUpdate(BaseModel):
     coach_id: Optional[str] = None
     members_visible: Optional[bool] = None
 
-class AthleteGroup(BaseModel):
-    group_id: Optional[str] = None
-
 class AthleteIds(BaseModel):
     athlete_ids: List[str]
 
@@ -130,7 +127,7 @@ def login(user_credentials: UserLogin, response: Response):
             "email": user["email"],
             "role": user["role"],
             "profile_picture": picture_url(user),
-            **group_info(user)
+            "groups": groups_of(user)
         }
     }
 
@@ -172,7 +169,7 @@ def get_current_user(response: Response, auth_token: Optional[str] = Cookie(None
         "profile_picture": picture_url(user),
         "created_at": user.get("created_at"),
         "last_login": user.get("last_login"),
-        **group_info(user)
+        "groups": groups_of(user)
     }
 
 def require_admin(current_user: dict = Depends(get_current_user)):
@@ -195,11 +192,12 @@ def _coach_or_400(coach_id):
 def _group_doc(group_id):
     return db["groups"].find_one({"_id": ObjectId(group_id)}) if group_id and ObjectId.is_valid(group_id) else None
 
-def group_info(user):
-    group = _group_doc(user.get("group_id"))
-    return dict(group_id=str(group["_id"]) if group else None, group_name=group.get("name") if group else None,
-                coach_id=group.get("coach_id") if group else None,
-                coach_name=coach_name(group.get("coach_id")) if group else None)
+def groups_of(user):
+    gids = [g for g in user.get("group_ids") or [] if ObjectId.is_valid(g)]
+    groups = db["groups"].find({"_id": {"$in": [ObjectId(g) for g in gids]}}).sort("name", 1)
+    return [dict(id=str(g["_id"]), name=g["name"], coach_id=g["coach_id"], coach_name=coach_name(g["coach_id"])) for g in groups]
+
+UNASSIGNED = {"$or": [{"group_ids": {"$exists": False}}, {"group_ids": {"$size": 0}}]}
 
 def _require_coach_or_admin(user):
     if user.get("role") not in ("admin", "coach"):
@@ -218,8 +216,14 @@ def get_groups(current_user: dict = Depends(get_current_user)):
     coaches = list(db["users"].find(coach_query, {"full_name": 1, "email": 1}).sort("full_name", 1))
     groups = list(db["groups"].find({"coach_id": {"$in": [str(c["_id"]) for c in coaches]}}).sort("name", 1))
     members = {}
-    for a in db["users"].find({"role": "athlete", "group_id": {"$in": [str(g["_id"]) for g in groups]}}).sort("full_name", 1):
-        members.setdefault(a["group_id"], []).append(_athlete_row(a))
+    for a in db["users"].find({"role": "athlete", "group_ids": {"$in": [str(g["_id"]) for g in groups]}}).sort("full_name", 1):
+        for gid in a["group_ids"]:
+            members.setdefault(gid, []).append(_athlete_row(a))
+    unassigned = [_athlete_row(a) for a in db["users"].find({"role": "athlete", **UNASSIGNED}).sort("full_name", 1)]
+    if current_user.get("role") == "admin":
+        candidates = [_athlete_row(a) for a in db["users"].find({"role": "athlete"}).sort("full_name", 1)]
+    else:
+        candidates = list({a["id"]: a for a in unassigned + [m for ms in members.values() for m in ms]}.values())
     by_coach = {}
     for g in groups:
         by_coach.setdefault(g["coach_id"], []).append(
@@ -228,7 +232,7 @@ def get_groups(current_user: dict = Depends(get_current_user)):
     return dict(
         coaches=[dict(id=str(c["_id"]), full_name=c.get("full_name"), email=c.get("email"),
                       groups=by_coach.get(str(c["_id"]), [])) for c in coaches],
-        unassigned=[_athlete_row(a) for a in db["users"].find({"role": "athlete", "group_id": None}).sort("full_name", 1)])
+        unassigned=unassigned, candidates=candidates)
 
 @router.post("/groups")
 def create_group(body: GroupIn, current_user: dict = Depends(get_current_user)):
@@ -267,20 +271,21 @@ def update_group(group_id: str, body: GroupUpdate, current_user: dict = Depends(
     return dict(id=group_id, name=updates.get("name", group["name"]), coach_id=updates.get("coach_id", group["coach_id"]),
                 members_visible=updates.get("members_visible", bool(group.get("members_visible"))))
 
-@router.get("/my-group")
-def get_my_group(current_user: dict = Depends(get_current_user)):
-    me = db["users"].find_one({"_id": ObjectId(current_user["_id"])}, {"group_id": 1})
-    group = _group_doc(me.get("group_id"))
-    if not group:
-        return {"group": None}
+@router.get("/my-groups")
+def get_my_groups(current_user: dict = Depends(get_current_user)):
+    me = db["users"].find_one({"_id": ObjectId(current_user["_id"])}, {"group_ids": 1})
     fields = {"full_name": 1, "email": 1, "profile_picture": 1, "profile_picture_object": 1}
-    coach = db["users"].find_one({"_id": ObjectId(group["coach_id"])}, fields)
-    members = []
-    if group.get("members_visible"):
-        members = list(db["users"].find({"role": "athlete", "group_id": str(group["_id"])}, fields).sort("full_name", 1))
     person = lambda u: dict(id=str(u["_id"]), full_name=u.get("full_name"), email=u.get("email"), profile_picture=picture_url(u))
-    return {"group": dict(id=str(group["_id"]), name=group["name"], members_visible=bool(group.get("members_visible")),
-                          coach=person(coach), members=[person(m) for m in members])}
+    gids = [ObjectId(g) for g in me.get("group_ids") or [] if ObjectId.is_valid(g)]
+    groups = []
+    for group in db["groups"].find({"_id": {"$in": gids}}).sort("name", 1):
+        coach = db["users"].find_one({"_id": ObjectId(group["coach_id"])}, fields)
+        members = []
+        if group.get("members_visible"):
+            members = list(db["users"].find({"role": "athlete", "group_ids": str(group["_id"])}, fields).sort("full_name", 1))
+        groups.append(dict(id=str(group["_id"]), name=group["name"], members_visible=bool(group.get("members_visible")),
+                           coach=person(coach), members=[person(m) for m in members]))
+    return {"groups": groups}
 
 @router.delete("/groups/{group_id}")
 def delete_group(group_id: str, current_user: dict = Depends(get_current_user)):
@@ -290,7 +295,7 @@ def delete_group(group_id: str, current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Group not found")
     if not _manageable(current_user, group):
         raise HTTPException(status_code=403, detail="You can only delete your own groups.")
-    db["users"].update_many({"group_id": group_id}, {"$set": {"group_id": None}})
+    db["users"].update_many({"group_ids": group_id}, {"$pull": {"group_ids": group_id}})
     db["groups"].delete_one({"_id": group["_id"]})
     return {"message": "Group deleted"}
 
@@ -303,31 +308,22 @@ def add_athletes_to_group(group_id: str, body: AthleteIds, current_user: dict = 
     if not _manageable(current_user, group):
         raise HTTPException(status_code=403, detail="You can only add athletes to your own groups.")
     oids = [ObjectId(i) for i in body.athlete_ids if ObjectId.is_valid(i)]
-    athletes = list(db["users"].find({"_id": {"$in": oids}, "role": "athlete"}, {"group_id": 1}))
-    if current_user.get("role") == "coach":
-        for a in athletes:
-            current = _group_doc(a.get("group_id"))
-            if current and not _manageable(current_user, current):
-                raise HTTPException(status_code=403, detail="Some of these athletes are in another coach's group.")
-    db["users"].update_many({"_id": {"$in": [a["_id"] for a in athletes]}}, {"$set": {"group_id": group_id}})
+    athletes = list(db["users"].find({"_id": {"$in": oids}, "role": "athlete"}, {"_id": 1}))
+    db["users"].update_many({"_id": {"$in": [a["_id"] for a in athletes]}}, {"$addToSet": {"group_ids": group_id}})
     return {"added": len(athletes)}
 
-@router.put("/athletes/{athlete_id}/group")
-def set_athlete_group(athlete_id: str, body: AthleteGroup, current_user: dict = Depends(get_current_user)):
+@router.delete("/groups/{group_id}/athletes/{athlete_id}")
+def remove_athlete_from_group(group_id: str, athlete_id: str, current_user: dict = Depends(get_current_user)):
     _require_coach_or_admin(current_user)
-    athlete = db["users"].find_one({"_id": ObjectId(athlete_id), "role": "athlete"}) if ObjectId.is_valid(athlete_id) else None
-    if not athlete:
-        raise HTTPException(status_code=404, detail="Athlete not found")
-    target = _group_doc(body.group_id) if body.group_id else None
-    if body.group_id and not target:
+    group = _group_doc(group_id)
+    if not group:
         raise HTTPException(status_code=404, detail="Group not found")
-    if current_user.get("role") == "coach":
-        current = _group_doc(athlete.get("group_id"))
-        if any(g and not _manageable(current_user, g) for g in (current, target)):
-            raise HTTPException(status_code=403, detail="You can only move athletes within your own groups.")
-    new_group_id = str(target["_id"]) if target else None
-    db["users"].update_one({"_id": athlete["_id"]}, {"$set": {"group_id": new_group_id}})
-    return {"athlete_id": athlete_id, "group_id": new_group_id}
+    if not _manageable(current_user, group):
+        raise HTTPException(status_code=403, detail="You can only remove athletes from your own groups.")
+    if not ObjectId.is_valid(athlete_id):
+        raise HTTPException(status_code=404, detail="Athlete not found")
+    db["users"].update_one({"_id": ObjectId(athlete_id), "role": "athlete"}, {"$pull": {"group_ids": group_id}})
+    return {"athlete_id": athlete_id, "group_id": group_id}
 
 @router.get("/users")
 def get_users(current_user: dict = Depends(require_admin)):
@@ -339,9 +335,8 @@ def get_users(current_user: dict = Depends(require_admin)):
     result = []
     for user in users_list:
         user['_id'] = str(user['_id'])
-        group = groups.get(user.get("group_id"))
-        user['group_name'] = group["name"] if group else None
-        user['coach_name'] = coach_names.get(group["coach_id"]) if group else None
+        user['groups'] = [dict(id=gid, name=groups[gid]["name"], coach_name=coach_names.get(groups[gid]["coach_id"]))
+                          for gid in user.get('group_ids') or [] if gid in groups]
         result.append(user)
 
     return result
@@ -397,7 +392,7 @@ def delete_user(user_id: str, current_user: dict = Depends(require_admin)):
     users_collection.delete_one({"_id": ObjectId(user_id)})
     group_ids = [str(g["_id"]) for g in db["groups"].find({"coach_id": user_id}, {"_id": 1})]
     db["groups"].delete_many({"coach_id": user_id})
-    users_collection.update_many({"group_id": {"$in": group_ids}}, {"$set": {"group_id": None}})
+    users_collection.update_many({"group_ids": {"$in": group_ids}}, {"$pull": {"group_ids": {"$in": group_ids}}})
     
     return {"message": "User deleted successfully"}
 

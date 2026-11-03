@@ -5,7 +5,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { ArrowRightLeft, EyeOff, Pencil, Plus, Search, Trash2, UserPlus, Users, X, Check } from 'lucide-react';
 import AppLayout from '../layout/AppLayout';
 import { useAuth } from '../hooks/useAuth';
-import { addAthletesToGroup, createGroup, deleteGroup, getGroups, getMyGroup, setAthleteGroup, updateGroup, type CoachGroups, type Group, type GroupsResponse } from '@/api/groupApi';
+import { addAthletesToGroup, createGroup, deleteGroup, getGroups, getMyGroups, removeAthleteFromGroup, updateGroup, type CoachGroups, type Group, type GroupsResponse } from '@/api/groupApi';
 
 const field = 'h-9 px-3 rounded-lg bg-background-main border border-border text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50';
 const primaryBtn = 'h-9 inline-flex items-center justify-center gap-1.5 px-3 rounded-lg bg-primary text-white text-sm font-medium hover:brightness-90 disabled:opacity-50 disabled:cursor-not-allowed transition';
@@ -55,8 +55,8 @@ const Avatar = ({ name, src }: { name: string; src?: string | null }) =>
 
 const MyGroupView = () => {
     const { user } = useAuth();
-    const { data, isLoading, error } = useQuery({ queryKey: ['my-group'], queryFn: getMyGroup });
-    const group = data?.group;
+    const { data, isLoading, error } = useQuery({ queryKey: ['my-groups'], queryFn: getMyGroups });
+    const groups = data?.groups ?? [];
     const sectionLabel = 'mb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-text-muted';
 
     return (
@@ -70,7 +70,7 @@ const MyGroupView = () => {
                 {isLoading && <p className="text-text-secondary">Loading your group...</p>}
                 {error && <p className="text-red-500">Error: {(error as Error).message}</p>}
 
-                {data && !group && (
+                {data && groups.length === 0 && (
                     <section className="flex flex-col items-center gap-3 rounded-xl border border-border bg-background px-5 py-14 text-center">
                         <Users className="h-8 w-8 text-text-muted" />
                         <p className="font-medium text-text">You're not in a group yet</p>
@@ -78,8 +78,8 @@ const MyGroupView = () => {
                     </section>
                 )}
 
-                {group && (
-                    <section className="rounded-xl border border-border bg-background">
+                {groups.map((group) => (
+                    <section key={group.id} className="rounded-xl border border-border bg-background">
                         <div className="border-b border-border px-5 py-4">
                             <h2 className="font-semibold text-text">{group.name}</h2>
                             {group.members_visible && (
@@ -136,7 +136,7 @@ const MyGroupView = () => {
                             )}
                         </div>
                     </section>
-                )}
+                ))}
             </div>
         </AppLayout>
     );
@@ -183,6 +183,7 @@ const ManageGroups = () => {
 
     const coaches = data?.coaches ?? [];
     const unassigned = data?.unassigned ?? [];
+    const candidates = data?.candidates ?? [];
     const coach: CoachGroups | undefined = coaches.find((c) => c.id === selectedCoachId) ?? coaches[0];
     const visibleCoaches = coaches.filter((c) => matches(`${c.full_name} ${c.email}`, coachSearch));
     const athleteCount = coach?.groups.reduce((n, g) => n + g.athletes.length, 0) ?? 0;
@@ -202,7 +203,8 @@ const ManageGroups = () => {
     const toggleAdd = (id: string) =>
         setAddSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
-    const addFiltered = unassigned.filter((a) => matches(`${a.full_name} ${a.email}`, addSearch));
+    const addable = (adding ? candidates : []).filter((a) => !adding?.athletes.some((m) => m.id === a.id));
+    const addFiltered = addable.filter((a) => matches(`${a.full_name} ${a.email}`, addSearch));
 
     const create = () => {
         const name = newName.trim();
@@ -279,7 +281,7 @@ const ManageGroups = () => {
                         <button
                             title="Remove from group"
                             disabled={act.isPending}
-                            onClick={() => act.mutate(() => setAthleteGroup(a.id, null))}
+                            onClick={() => act.mutate(() => removeAthleteFromGroup(group.id, a.id))}
                             className="rounded-full p-0.5 text-text-muted hover:text-red-500 disabled:opacity-40"
                         >
                             <X className="h-3 w-3" />
@@ -421,11 +423,11 @@ const ManageGroups = () => {
                 open={!!adding}
                 onClose={() => setAdding(null)}
                 title={adding ? `Add athletes to "${adding.name}"` : ''}
-                description="Search the athletes who are not in a group and tick the ones to add."
+                description="Tick the athletes to add. An athlete can be in several groups."
                 footer={
                     <div className="flex items-center justify-between gap-3">
                         <span className="text-xs text-text-muted">
-                            {addSelected.length ? `${addSelected.length} selected` : `${unassigned.length} unassigned athlete${unassigned.length === 1 ? '' : 's'}`}
+                            {addSelected.length ? `${addSelected.length} selected` : `${addable.length} athlete${addable.length === 1 ? '' : 's'}`}
                         </span>
                         <div className="flex gap-2">
                             <button onClick={() => setAdding(null)} className={secondaryBtn}>Cancel</button>
@@ -460,7 +462,7 @@ const ManageGroups = () => {
                     })}
                     {addFiltered.length === 0 && (
                         <li className="px-5 py-8 text-center text-sm text-text-muted">
-                            {unassigned.length ? 'No athletes match your search.' : 'Every athlete is already in a group.'}
+                            {addable.length ? 'No athletes match your search.' : 'Every athlete is already in this group.'}
                         </li>
                     )}
                 </ul>

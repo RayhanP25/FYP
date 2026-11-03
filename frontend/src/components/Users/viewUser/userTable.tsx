@@ -162,7 +162,7 @@ const UserTable = () => {
                                     </span>
                                 </td>
                                 <td className="py-3 px-4 text-text-muted">
-                                    {user.role === 'athlete' ? (user.group_name ? `${user.group_name} (${user.coach_name ?? 'no coach'})` : 'Not in a group') : ''}
+                                    {user.role === 'athlete' ? (user.groups?.length ? user.groups.map((g) => `${g.name} (${g.coach_name ?? 'no coach'})`).join(', ') : 'Not in a group') : ''}
                                 </td>
                                 <td className="py-3 px-4">
                                     <button

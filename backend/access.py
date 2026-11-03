@@ -10,15 +10,14 @@ def _me(user):
     return str(user["_id"])
 
 
-def coach_of(user_doc):
-    gid = user_doc.get("group_id")
-    group = db["groups"].find_one({"_id": ObjectId(gid)}, {"coach_id": 1}) if gid and ObjectId.is_valid(gid) else None
-    return group.get("coach_id") if group else None
+def coaches_of(user_doc):
+    gids = [ObjectId(g) for g in user_doc.get("group_ids") or [] if ObjectId.is_valid(g)]
+    return {g["coach_id"] for g in db["groups"].find({"_id": {"$in": gids}}, {"coach_id": 1})}
 
 
 def roster_ids(coach_id):
     group_ids = [str(g["_id"]) for g in db["groups"].find({"coach_id": coach_id}, {"_id": 1})]
-    return [str(u["_id"]) for u in db["users"].find({"role": "athlete", "group_id": {"$in": group_ids}}, {"_id": 1})]
+    return [str(u["_id"]) for u in db["users"].find({"role": "athlete", "group_ids": {"$in": group_ids}}, {"_id": 1})]
 
 
 def visible_owner_ids(user):
@@ -36,8 +35,8 @@ def can_access_owner(user, owner_id):
         return True
     if user.get("role") != "coach" or not ObjectId.is_valid(owner_id):
         return False
-    owner = db["users"].find_one({"_id": ObjectId(owner_id)}, {"group_id": 1})
-    return bool(owner) and coach_of(owner) == _me(user)
+    owner = db["users"].find_one({"_id": ObjectId(owner_id)}, {"group_ids": 1})
+    return bool(owner) and _me(user) in coaches_of(owner)
 
 
 def can_access_video(user, video_doc):

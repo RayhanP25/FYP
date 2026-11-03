@@ -111,7 +111,7 @@ def delete_account(body: PasswordConfirm, response: Response, current_user: dict
     _require_password(user, body.password)
     if user["role"] == "coach":
         group_ids = [str(g["_id"]) for g in db["groups"].find({"coach_id": str(user["_id"])}, {"_id": 1})]
-        db["users"].update_many({"group_id": {"$in": group_ids}}, {"$set": {"group_id": None}})
+        db["users"].update_many({"group_ids": {"$in": group_ids}}, {"$pull": {"group_ids": {"$in": group_ids}}})
         db["groups"].delete_many({"coach_id": str(user["_id"])})
     if user.get("profile_picture_object"):
         try:

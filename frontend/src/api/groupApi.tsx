@@ -33,6 +33,7 @@ export interface CoachGroups {
 export interface GroupsResponse {
     coaches: CoachGroups[];
     unassigned: GroupAthlete[];
+    candidates: GroupAthlete[];
 }
 
 async function call<T>(request: Promise<AxiosResponse<T>>, fallback: string): Promise<T> {
@@ -48,7 +49,7 @@ export const getGroups = () => call(api.get<GroupsResponse>('/api/groups'), 'Fai
 export const createGroup = (name: string, coachId?: string) =>
     call(api.post<Group>('/api/groups', { name, coach_id: coachId }), 'Failed to create group');
 
-export const getMyGroup = () => call(api.get<{ group: MyGroup | null }>('/api/my-group'), 'Failed to load your group');
+export const getMyGroups = () => call(api.get<{ groups: MyGroup[] }>('/api/my-groups'), 'Failed to load your groups');
 
 export const updateGroup = (groupId: string, changes: { name?: string; coach_id?: string; members_visible?: boolean }) =>
     call(api.put<Group>(`/api/groups/${groupId}`, changes), 'Failed to update group');
@@ -56,8 +57,8 @@ export const updateGroup = (groupId: string, changes: { name?: string; coach_id?
 export const deleteGroup = (groupId: string) =>
     call(api.delete<{ message: string }>(`/api/groups/${groupId}`), 'Failed to delete group');
 
-export const setAthleteGroup = (athleteId: string, groupId: string | null) =>
-    call(api.put(`/api/athletes/${athleteId}/group`, { group_id: groupId }), 'Failed to move athlete');
+export const removeAthleteFromGroup = (groupId: string, athleteId: string) =>
+    call(api.delete(`/api/groups/${groupId}/athletes/${athleteId}`), 'Failed to remove athlete');
 
 export const addAthletesToGroup = (groupId: string, athleteIds: string[]) =>
     call(api.post<{ added: number }>(`/api/groups/${groupId}/athletes`, { athlete_ids: athleteIds }), 'Failed to add athletes');
