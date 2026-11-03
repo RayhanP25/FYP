@@ -197,7 +197,7 @@ export default function CameraCapture() {
                     ) : (
                         <div className="aspect-video max-h-full flex flex-col items-center justify-center p-8">
                             <VideoOff className="w-10 h-10 text-text-muted mb-2 opacity-40" />
-                            <p className="font-bold text-lg text-text">Cameras are off</p>
+                            <p className="font-bold text-lg text-text">Cameras Offline</p>
                             <p className="text-sm text-text-muted mt-2 text-center max-w-md">
                                 Check both cameras are plugged in, then click &quot;Start Live Feed&quot;.
                             </p>

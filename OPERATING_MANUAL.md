@@ -279,7 +279,7 @@ Record with both cameras to get the full 3D analysis. Make sure the room has bee
 
 1. Click **Camera** in the left menu.
 2. Click **Start Live Feed**. The 2K cameras can take up to 1 minute to open.
-3. **Check:** both pictures appear, labelled **Left** and **Right**. If you see **Cameras are off**, see Troubleshooting.
+3. **Check:** both pictures appear, labelled **Left** and **Right**. If you see **Cameras Offline**, see Troubleshooting.
 4. Ask the athlete to stand in the recording area. Check they are fully visible, head to toe, in **both** pictures, and that nobody else is in view.
 5. Click **Record Video** or press `Space`. The message "Recording started" appears.
 6. The athlete performs the movement. Keep clips short: 5–20 seconds is ideal.
@@ -296,7 +296,7 @@ The recording is saved but not analysed yet.
 3. Wait while the progress bar shows **Analysing the video** and each step (for example "Step 3 of 6: Finding body points"). A 10-second clip takes about 1 minute. You can leave the page; it keeps going.
 4. **Check:** "Analysis finished." appears and the results are shown (see Analysis studio).
 
-Picking the wrong calibration gives a twisted or swapped 3D skeleton. If that happens, click **Analyse again** and pick the right one.
+Picking the wrong calibration gives a twisted or swapped 3D skeleton. If that happens, click **Re-analyze** and pick the right one.
 
 **Good recordings**
 
@@ -365,13 +365,13 @@ Recordings made with both cameras show all panels. Single-camera uploads show th
 2. Move to the end and click **Set B**.
 3. The panel shows the straight-line distance from A to B and the length of the path travelled. **Whole clip** sets A and B to the first and last frame.
 
-**Cleaned up or as detected.** **As detected** shows the points exactly as the AI found them. **Cleaned up** (the default) has left/right mix-ups fixed, hidden joints filled in and the movement smoothed.
+**Processed or raw skeleton.** **Raw** shows the points exactly as the AI found them (with a **Raw detections** label). **Processed** (the default) has left/right mix-ups fixed, hidden joints filled in and the movement smoothed.
 
 **Correct the skeleton by hand**
 
 If a joint is clearly in the wrong place:
 
-1. Click **Correct the skeleton**.
+1. Click **Edit keypoints**.
 2. Pause on the frame, then drag the joint to the right spot in a camera view or in the 3D view. Tick **Keep bone length** to keep the limbs the same length.
 3. **Undo** / **Redo** step through your changes. **Revert this joint** or **Revert all** removes corrections.
 4. Click **Done** to save, or **Discard** to throw the changes away.
@@ -383,7 +383,7 @@ Corrected joints show a ring in the views. Re-analysing a video removes the hand
 - **Download**: save a camera's video with the skeleton, or without it (no skeleton). Camera recordings download at the full size they were recorded (2560 x 1440); a box shows the progress while the video is prepared.
 - **Assign video**: choose which athlete the video belongs to.
 - Pencil next to the title (**Edit video name**): rename the video.
-- **Analyse again**: run the AI again, for example with a different calibration.
+- **Re-analyze**: run the AI again, for example with a different calibration.
 
 ## Managing videos
 
@@ -424,7 +424,7 @@ Shortcuts do not work while you are typing in a box or while a pop-up window is 
 | Analysis | `Shift` + `←` / `→` | Back / forward 1 second |
 | Analysis | `R` / `End` | Back to the start / last frame |
 | Analysis | `1` to `7` | Show or hide each panel |
-| Analysis | `E` | Start / stop correcting the skeleton |
+| Analysis | `E` | Start / stop editing keypoints |
 | Analysis | `Ctrl` + `Z` / `Ctrl` + `Enter` | Undo a correction / save corrections |
 
 ## Troubleshooting
@@ -436,15 +436,15 @@ Try the fix in the right-hand column. If it still fails, take a screenshot of th
 | `localhost:5173` does not open ("This site can't be reached") | The app window is not running. Start it (Starting the system, window 2) |
 | Login says "Invalid email or password" for a correct account | The PC has no internet, or the online database does not accept this network yet. Check the internet; if it is fine, contact the SportPose team (the PC's network address must be allowed) |
 | Pages show errors or nothing loads | The server window is not running or has an error. Restart both windows |
-| **Cameras are off**, or the live feed does not start | Check both USB cables. Close Zoom, Teams, OBS and the Windows Camera app. Wait up to 1 minute, then try **Start Live Feed** again. Still failing: restart the server window |
+| **Cameras Offline**, or the live feed does not start | Check both USB cables. Close Zoom, Teams, OBS and the Windows Camera app. Wait up to 1 minute, then try **Start Live Feed** again. Still failing: restart the server window |
 | Left and right pictures are the wrong way round | Use **Cameras** → **Swap left / right** → **Save**, then calibrate again |
 | One camera's size shows in orange in **Cameras** | Wrong camera picked (for example the PC's own webcam), or the cable is in a slow USB port. Pick the other camera or move the cable to another USB port on the back of the PC |
 | Calibration: the board has no coloured dots | Board not fully in both pictures, too far away, too much glare, or moving. Move it closer, avoid reflections, hold it still |
 | Calibration: **Calibrate** stays grey | Fewer than 15 pairs. Capture more |
 | Calibration: the tilt counts do not go up | The board is not tilted enough (15° or more). Turn or tip it 25–40°; rotating it flat in the picture does not count |
-| The 3D skeleton is twisted, upside down, or arms and legs are crossed | Wrong calibration for this room, or a camera was moved. Pick the right one with **Analyse again**; if the camera moved, calibrate again and re-analyse |
+| The 3D skeleton is twisted, upside down, or arms and legs are crossed | Wrong calibration for this room, or a camera was moved. Pick the right one with **Re-analyze**; if the camera moved, calibrate again and re-analyse |
 | Analysis says "The analysis did not finish" | Restart both windows and try again. If it fails again, send the screenshots to the team |
-| A joint jumps around or is in the wrong place | The joint was hidden in a camera. Correct it by hand (Analysis studio → Correct the skeleton), or record again with a clearer view |
+| A joint jumps around or is in the wrong place | The joint was hidden in a camera. Correct it by hand (Analysis studio → Edit keypoints), or record again with a clearer view |
 | An uploaded MOV or AVI video does not play | Upload it again: uploads are now converted to MP4 automatically. Videos uploaded before this change must be uploaded again |
 
 ## Acceptance test checklist

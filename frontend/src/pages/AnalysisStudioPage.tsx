@@ -503,7 +503,7 @@ const AnalysisStudioPage = () => {
                         {analysis && (
                             <div className="mt-2 flex items-center gap-4 text-sm text-text-muted tabular-nums">
                                 <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium">{is3D ? '3D, two cameras' : 'One camera'}</span>
-                                {showRaw && <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-500 text-xs font-medium">Showing the AI's points as detected</span>}
+                                {showRaw && <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-500 text-xs font-medium">Raw detections</span>}
                                 {!showRaw && savedCount > 0 && (
                                     <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium" title="Joints corrected by hand (rings in the views)">
                                         {savedCount} edited {savedCount === 1 ? 'joint' : 'joints'}
@@ -517,7 +517,7 @@ const AnalysisStudioPage = () => {
                         <div className="flex items-center gap-2">
                             <div
                                 className="inline-flex h-9 p-1 rounded-lg border border-border"
-                                title={hasRaw ? 'As detected: the body points exactly as the AI found them. Cleaned up: left/right mix-ups fixed, hidden joints filled in and the movement smoothed.' : 'Analyse this video again to compare with the points as detected.'}
+                                title={hasRaw ? 'Raw: the keypoints exactly as the model detected them. Processed: after left/right fixes, filling hidden joints, bone lengths and smoothing.' : 'Re-analyze this video to compare with the raw detections.'}
                             >
                                 {(['processed', 'raw'] as KeypointMode[]).map((m) => (
                                     <button
@@ -526,13 +526,13 @@ const AnalysisStudioPage = () => {
                                         disabled={(m === 'raw' && !hasRaw) || editing}
                                         className={`px-3 text-sm rounded-md capitalize transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${(m === 'raw' ? showRaw : !showRaw) ? 'bg-primary text-white' : 'text-text-secondary hover:text-text'}`}
                                     >
-                                        {m === 'raw' ? 'As detected' : 'Cleaned up'}
+                                        {m}
                                     </button>
                                 ))}
                             </div>
                             {canEdit && !editing && (
-                                <button onClick={startEditing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors" title="Move a body point that is in the wrong place, on the videos or in the 3D view">
-                                    <Pencil className="w-4 h-4" /> Correct the skeleton
+                                <button onClick={startEditing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors" title="Correct keypoints by dragging them on the videos or in the 3D view">
+                                    <Pencil className="w-4 h-4" /> Edit keypoints
                                 </button>
                             )}
                             {canAssign && (
@@ -587,7 +587,7 @@ const AnalysisStudioPage = () => {
                                 <RotateCcw className="w-4 h-4" /> Reset sizes
                             </button>
                             <button onClick={requestAnalyze} disabled={isAnalyzing} className="inline-flex items-center gap-2 h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text hover:bg-background transition-colors disabled:opacity-50">
-                                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Analyse again
+                                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Re-analyze
                             </button>
                         </div>
                     )}
@@ -595,7 +595,7 @@ const AnalysisStudioPage = () => {
 
                 {editing && (
                     <div className="sticky top-2 z-20 -mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-primary/50 bg-background-main/95 backdrop-blur px-4 py-2.5">
-                        <span className="inline-flex items-center gap-2 text-sm font-medium text-text"><Pencil className="w-4 h-4 text-primary" /> Correcting the skeleton</span>
+                        <span className="inline-flex items-center gap-2 text-sm font-medium text-text"><Pencil className="w-4 h-4 text-primary" /> Editing keypoints</span>
                         <span className="text-xs text-text-muted">
                             Drag a joint on either video or in the 3D view; the other views follow. Ctrl+Z undoes the last change. Saved edits ease into the {editInfo?.fade_frames ?? 5} frames on each side,
                             and edits of a joint up to {editInfo?.keyframe_gap ?? 30} frames apart are joined.
@@ -704,7 +704,7 @@ const AnalysisStudioPage = () => {
                     <Dialog.Overlay className="fixed inset-0 z-40 bg-black/70" />
                     <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[75vh] w-[92vw] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background shadow-xl focus:outline-none">
                         <div className="border-b border-border px-5 py-4">
-                            <Dialog.Title className="font-semibold text-text">{analysis ? 'Analyse the recording again' : 'Analyse the recording'}</Dialog.Title>
+                            <Dialog.Title className="font-semibold text-text">{analysis ? 'Re-analyze recording' : 'Analyze recording'}</Dialog.Title>
                             <Dialog.Description className="mt-1 text-xs text-text-muted">
                                 Pick the calibration of the camera setup this was filmed with. A wrong one swaps joints and puts the 3D in the wrong place.
                             </Dialog.Description>
@@ -737,7 +737,7 @@ const AnalysisStudioPage = () => {
                                 <button className="h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text">Cancel</button>
                             </Dialog.Close>
                             <Button size="sm" className="h-9 gap-2" disabled={!chosenCalibration} onClick={() => analyze(chosenCalibration)}>
-                                <RefreshCw className="w-4 h-4" /> {analysis ? 'Analyse again' : 'Analyse'}
+                                <RefreshCw className="w-4 h-4" /> {analysis ? 'Re-analyze' : 'Analyze'}
                             </Button>
                         </div>
                     </Dialog.Content>
