@@ -20,20 +20,17 @@ const AddUserButton = () => {
     const [isOpen, setIsOpen] = useState(false);
     const queryClient = useQueryClient();
 
+    const reset = () => {
+        setFormData({ full_name: '', email: '', password: '', confirm_password: '', role: 'athlete' });
+        setProfilePic(null);
+        setErrors({});
+    };
+
     const createUserMutation = useMutation({
         mutationFn: createUser,
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['users'] });
-
-            setFormData({
-                full_name: '',
-                email: '',
-                password: '',
-                confirm_password: '',
-                role: 'athlete'
-            });
-            setProfilePic(null);
-            setErrors({});
+            reset();
 
             toast.success('User created successfully!', {
                 position: "top-right",
@@ -134,7 +131,7 @@ const AddUserButton = () => {
     };
 
     return (
-        <Dialog.Root open={isOpen} onOpenChange={setIsOpen}>
+        <Dialog.Root open={isOpen} onOpenChange={(open) => { setIsOpen(open); if (!open) reset(); }}>
             <Dialog.Trigger asChild>
                 <Button>
                     Add User
