@@ -7,6 +7,9 @@ and compare.
 - `backend/` is the FastAPI server, the pose pipeline (mmpose / mmdet / PyTorch) and camera capture.
 - `frontend/` is the React + Vite web app.
 
+For using the system day to day (starting it, cameras, calibration, recording, analysis), see
+[OPERATING_MANUAL.md](OPERATING_MANUAL.md). This README covers installing it.
+
 Data lives in MongoDB Atlas (users, analyses, calibrations). Videos live in Cloudflare R2, accessed
 through the MinIO client.
 
