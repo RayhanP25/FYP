@@ -1,14 +1,12 @@
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { Home, Video, Camera, BarChart3, User2, Users, UsersRound, Search, ChevronDown, LogOut, Crosshair } from 'lucide-react';
+import { Home, Video, Camera, BarChart3, User2, Users, UsersRound, ChevronDown, LogOut, Crosshair } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../dropdown/dropdown';
 import SidebarItem from './sidebarItem';
 import SectionTitle from './sectionTitle';
 import logo from '@/assets/neuon-logo-white.png';
 
 const Sidebar = () => {
-    const [searchTerm, setSearchTerm] = useState('');
     const navigate = useNavigate();
     const { user, logout, isAuthenticated } = useAuth();
 
@@ -48,20 +46,6 @@ const Sidebar = () => {
                             <SidebarItem icon={Users} text="Users" href="/view-users" />
                         )}
                     </nav>
-                </div>
-            </div>
-
-            {/* doesnt work for now */}
-            <div className="p-4 border-t border-border">
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
-                    <input
-                        type="text"
-                        placeholder="Search..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2 bg-background border border-border rounded-lg text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-                    />
                 </div>
             </div>
 
