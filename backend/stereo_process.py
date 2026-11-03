@@ -178,6 +178,10 @@ def _infer_both(lp, rp):
     """The AI on both camera views. By default the two run at the same time (each prepares its frames on the
     CPU while the other uses the GPU); POSE_PARALLEL_VIEWS=0, or any error, runs them one after the other."""
     if PARALLEL_VIEWS:
+        # Load the models once first: two threads loading them at the same time load them twice, or fail
+        # inside the package loader (seen on the first analysis after the server starts).
+        from pose_estimator import _load_models
+        _load_models()
         progress.stage("Finding body points: both cameras")
         out, errors = {}, []
 
