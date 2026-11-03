@@ -26,7 +26,7 @@ def start(key, stages=None):
     with _lock:
         _prune(now)
         _jobs[key] = dict(stage="Starting", stages=list(stages or []), done=0, total=0,
-                          finished=False, error=None, started=now, updated=now)
+                          finished=False, error=None, started=now, updated=now, log=[("Starting", now)])
     _local.key = key
 
 
@@ -41,7 +41,10 @@ def stage(name, total=0, key=None):
     with _lock:
         j = _jobs.get(key)
         if j:
-            j.update(stage=name, done=0, total=int(total or 0), updated=time.time())
+            now = time.time()
+            if j["stage"] != name:
+                j["log"].append((name, now))
+            j.update(stage=name, done=0, total=int(total or 0), updated=now)
 
 
 def step(done, total=None, key=None):
@@ -76,7 +79,12 @@ def finish(key=None, error=None):
     with _lock:
         j = _jobs.get(key)
         if j:
-            j.update(finished=True, error=error, updated=time.time())
+            now = time.time()
+            j.update(finished=True, error=error, updated=now)
+            # How long each step took, in the server window: shows where the time goes.
+            log = j["log"] + [("end", now)]
+            steps = " | ".join(f"{name} {t1 - t0:.1f}s" for (name, t0), (_, t1) in zip(log, log[1:]) if t1 - t0 >= 0.05)
+            print(f"[{key}] {'FAILED: ' + str(error) + ' | ' if error else ''}{steps} | total {now - j['started']:.1f}s")
     if getattr(_local, "key", None) == key:
         _local.key = None
 
@@ -84,7 +92,7 @@ def finish(key=None, error=None):
 def get(key):
     with _lock:
         j = _jobs.get(key)
-        return dict(j) if j else None
+        return {k: v for k, v in j.items() if k != "log"} if j else None
 
 
 def wrap(fn):

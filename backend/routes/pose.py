@@ -8,6 +8,8 @@ from routes.users import get_current_user
 from routes.edits import apply_to as apply_keypoint_edits
 from pose_estimator import process_video_with_overlays, POSE_MIN_CONF, POSE_SURE_CONF
 from bson import ObjectId
+import functools
+import background_upload
 import calibration_store
 import media_cache
 import progress
@@ -64,7 +66,18 @@ def _upload_results(files):
     return done
 
 
+def _holding_uploads(fn):
+    """Recordings waiting to upload in the background pause while this runs (functools.wraps keeps the
+    parameters FastAPI reads)."""
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        with background_upload.hold():
+            return fn(*args, **kwargs)
+    return run
+
+
 @router.post("/process-video/{video_id}")
+@_holding_uploads
 def process_video(
     video_id: str,
     force: bool = False,                      # set ?force=true to re-process

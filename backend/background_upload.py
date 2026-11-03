@@ -7,18 +7,56 @@ the upload. If the server stops half way, resume_pending() sends the rest when i
 """
 import os
 import threading
+import time
+from contextlib import contextmanager
 
 import media_cache
 from database import client, database_name
 from minio_client import BUCKET, minio_client
 
 
+_busy = 0                     # analyses running now: background uploads wait for them
+_busy_lock = threading.Lock()
+
+
+@contextmanager
+def hold():
+    """While an analysis runs, background uploads pause, so its results reach storage first instead of sharing
+    the internet upload with a large recording."""
+    global _busy
+    with _busy_lock:
+        _busy += 1
+    try:
+        yield
+    finally:
+        with _busy_lock:
+            _busy -= 1
+
+
+class _PausingReader:
+    """A file that waits before each read while an analysis is running (at most 30 minutes)."""
+
+    def __init__(self, f):
+        self.f = f
+
+    def read(self, n=-1):
+        waited = 0.0
+        while _busy and waited < 1800:
+            time.sleep(0.5)
+            waited += 0.5
+        return self.f.read(n)
+
+
 def _send(video_id, files):
     videos = client[database_name]["videos"]
     try:
+        time.sleep(3)                          # an analysis started straight after saving goes first
         for object_name, path in files:
-            minio_client.fput_object(BUCKET, object_name, path, content_type="video/mp4",
-                                     part_size=16 * 1024 * 1024, num_parallel_uploads=4)
+            t0 = time.time()
+            with open(path, "rb") as f:
+                minio_client.put_object(BUCKET, object_name, _PausingReader(f), length=os.path.getsize(path),
+                                        content_type="video/mp4", part_size=16 * 1024 * 1024, num_parallel_uploads=2)
+            print(f"[upload] {object_name}: {os.path.getsize(path) / 1e6:.0f} MB in {time.time() - t0:.0f}s")
         videos.update_one({"_id": video_id}, {"$set": {"uploading": False}})
         for _, path in files:                  # a temp file the cache could not take is not needed any more
             if os.path.dirname(os.path.abspath(path)) != os.path.abspath(media_cache.DIR) and os.path.exists(path):
