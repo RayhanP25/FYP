@@ -131,7 +131,7 @@ def _recorded_by(video_doc, people=None):
 
 
 @router.get("/get-video/{video_id}")
-async def get_video(video_id: str, view: str = "left", variant: str = "overlay", download: bool = False,
+async def get_video(request: Request, video_id: str, view: str = "left", variant: str = "overlay", download: bool = False,
                     current_user: dict = Depends(get_current_user)):
     """variant="plain": the camera view without a skeleton drawn (the analysis page draws raw or processed
     keypoints over it). Falls back to the overlay video when there is no plain one (older analyses)."""
@@ -178,15 +178,21 @@ async def get_video(video_id: str, view: str = "left", variant: str = "overlay",
         camera = "right" if view == "right" and right_object_name else "left"
         name = f"{stem}-{camera}{'-no-skeleton' if plain else ''}.{ext}"
         headers = {"response-content-disposition": f"attachment; filename*=UTF-8''{quote(name)}"}
-    try:
-        presigned_url = minio_client.presigned_get_object(
-            bucket_name=video_doc["bucket_name"],
-            object_name=object_name,
-            expires=timedelta(hours=1),
-            response_headers=headers,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate video URL: {str(e)}")
+    if media_cache.get(object_name):
+        # On this PC: played from here (no wait for cloud storage, and no download from it).
+        presigned_url = f"{str(request.base_url).rstrip('/')}/api/media/{quote(object_name)}"
+        if download:
+            presigned_url += f"?download={quote(name)}"
+    else:
+        try:
+            presigned_url = minio_client.presigned_get_object(
+                bucket_name=video_doc["bucket_name"],
+                object_name=object_name,
+                expires=timedelta(hours=1),
+                response_headers=headers,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to generate video URL: {str(e)}")
     
     return {
         "video_id": video_id,
@@ -206,6 +212,23 @@ async def get_video(video_id: str, view: str = "left", variant: str = "overlay",
         "variant": "plain" if plain else "overlay",
         "has_right_view": bool(right_object_name)
     }
+
+_MEDIA_KEYS = ("object_name", "object_name_right", "processed_object_name", "processed_object_name_right",
+               "plain_object_name", "plain_object_name_right")
+
+
+@router.get("/media/{object_name}")
+def get_media(object_name: str, download: str = None, current_user: dict = Depends(get_current_user)):
+    """A video file from this PC's copy (media_cache.py), for videos that are here: they play at once, also
+    while they are still being copied to cloud storage. Supports seeking (HTTP range requests)."""
+    doc = client[database_name]["videos"].find_one({"$or": [{k: object_name} for k in _MEDIA_KEYS]})
+    path = media_cache.get(object_name)
+    if not doc or not path or not can_access_video(current_user, doc):
+        raise HTTPException(status_code=404, detail="Video not found")
+    if download:
+        return FileResponse(path, media_type="video/mp4", filename=download)
+    return FileResponse(path, media_type="video/mp4")
+
 
 @router.get("/my-videos")
 async def get_my_videos(current_user: dict = Depends(get_current_user)):
@@ -314,7 +337,7 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
     except Exception as e:
         if not video_doc.get("uploading"):     # still uploading: it may not be in storage yet
             raise HTTPException(status_code=500, detail=f"Failed to delete video from storage: {str(e)}")
-    for key in ("object_name", "object_name_right"):
+    for key in _MEDIA_KEYS:                     # this PC's copies too
         media_cache.remove(video_doc.get(key))
     if video_doc.get("object_name_right"):
         try:

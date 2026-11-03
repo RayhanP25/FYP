@@ -20,6 +20,8 @@ from bson import ObjectId
 import video_io
 from database import client, database_name
 from minio_client import BUCKET, minio_client
+import media_cache
+import shutil
 
 _locks = defaultdict(threading.Lock)
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -103,10 +105,15 @@ def _rebuild(video_doc, baked_key, clean_key, frames, fps, changed):
     """Replace the changed frames of one stored camera video. Returns the new object name."""
     with tempfile.TemporaryDirectory() as d:
         old, clean, out = (os.path.join(d, n) for n in ("old.mp4", "clean.mp4", "out.mp4"))
-        minio_client.fget_object(BUCKET, video_doc[baked_key], old)
-        minio_client.fget_object(BUCKET, video_doc[clean_key], clean)
+        for name, dst in ((video_doc[baked_key], old), (video_doc[clean_key], clean)):
+            local = media_cache.get(name)          # this PC's copy (it may not be in cloud storage yet)
+            if local:
+                shutil.copyfile(local, dst)
+            else:
+                minio_client.fget_object(BUCKET, name, dst)
         splice(old, clean, out, frames, fps, changed)
         new_name = f"{baked_key.replace('_object_name', '')}_{uuid.uuid4()}.mp4"
+        media_cache.put(new_name, out)             # played from this PC
         with open(out, "rb") as f:
             minio_client.put_object(bucket_name=BUCKET, object_name=new_name, data=f, length=-1,
                                     part_size=10 * 1024 * 1024, content_type="video/mp4")

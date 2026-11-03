@@ -15,6 +15,7 @@ working on the left view) plus a "frames_3d" list for the 3D viewer.
 
 import os
 import tempfile
+import threading
 import time
 import numpy as np
 import cv2
@@ -170,6 +171,36 @@ def _split_to_temp(input_path, target_w):
     return lp, rp, fps
 
 
+PARALLEL_VIEWS = os.environ.get("POSE_PARALLEL_VIEWS", "1") == "1"
+
+
+def _infer_both(lp, rp):
+    """The AI on both camera views. By default the two run at the same time (each prepares its frames on the
+    CPU while the other uses the GPU); POSE_PARALLEL_VIEWS=0, or any error, runs them one after the other."""
+    if PARALLEL_VIEWS:
+        progress.stage("Finding body points: both cameras")
+        out, errors = {}, []
+
+        def run(side, path):
+            try:
+                out[side] = _run_inference(path)
+            except Exception as ex:
+                errors.append(ex)
+        threads = [threading.Thread(target=progress.wrap(run), args=(s, p)) for s, p in (("L", lp), ("R", rp))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if not errors:
+            return out["L"], out["R"]
+        print(f"pose: running both cameras at once failed ({errors[0]!r}); running them one after the other")
+    progress.stage("Finding body points: left camera")
+    rawL = _run_inference(lp)
+    progress.stage("Finding body points: right camera")
+    rawR = _run_inference(rp)
+    return rawL, rawR
+
+
 def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
                          target_w=1280, output_path_right=None, plain_paths=None, input_path_right=None):
     """
@@ -197,10 +228,7 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
     roTmp = output_path_right or tempfile.mktemp(suffix="_Ro.mp4")
     try:
         # 1. Raw 2D detections in each view (no healing yet).
-        progress.stage("Finding body points: left camera")
-        rawL = _run_inference(lp)
-        progress.stage("Finding body points: right camera")
-        rawR = _run_inference(rp)
+        rawL, rawR = _infer_both(lp, rp)
         progress.stage("Building the 3D skeleton")
         origL = [copy.deepcopy(f.get("keypoints")) for f in rawL["frames"]]
         origR = [copy.deepcopy(f.get("keypoints")) for f in rawR["frames"]]

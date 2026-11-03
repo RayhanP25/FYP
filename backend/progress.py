@@ -72,6 +72,17 @@ def add(n, key=None):
             j["updated"] = time.time()
 
 
+def add_total(n, key=None):
+    """More work to do in the current step (several threads each add theirs)."""
+    key = key or current()
+    if not key:
+        return
+    with _lock:
+        j = _jobs.get(key)
+        if j:
+            j["total"] += int(n)
+
+
 def finish(key=None, error=None):
     key = key or current()
     if not key:

@@ -312,8 +312,49 @@ class Recorder:
         progress.stage("Preparing the video", total=2 * written)
         errors = []
 
+        def ffmpeg_side(col, path):
+            """FFmpeg reads the stills itself (a concat list with each still's duration, so gaps repeat the
+            previous one) and encodes on the GPU: no frame passes through Python."""
+            import subprocess
+            exe = video_io.ffmpeg_exe()
+            first = cv2.imread(self.stills[0][col])
+            h, w = first.shape[:2]
+            enc = video_io.pick_encoder(w, h)
+            if not exe or not enc:
+                return False
+            lst = os.path.join(self.dir, f"list_{col}.txt")
+            with open(lst, "w", encoding="utf-8") as f:
+                for still, n in zip(self.stills, repeats):
+                    f.write(f"file '{still[col].replace(chr(92), '/')}'\nduration {n * period:.6f}\n")
+                f.write(f"file '{self.stills[-1][col].replace(chr(92), '/')}'\n")   # concat needs the last one twice
+            cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
+                   "-fps_mode", "cfr", "-r", str(CAP_FPS), "-frames:v", str(written),
+                   "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", enc, *video_io._ENCODERS[enc],
+                   "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", path]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            last = 0
+            for line in proc.stdout:              # "frame=123" lines: progress for the page
+                if line.startswith("frame="):
+                    try:
+                        n = int(line.split("=", 1)[1])
+                        progress.add(n - last)
+                        last = n
+                    except ValueError:
+                        pass
+            err = proc.stderr.read()
+            if proc.wait() != 0 or not os.path.exists(path):
+                print(f"recording: ffmpeg could not write the video ({err[-300:]}); using the slower way")
+                progress.add(-last)
+                return False
+            progress.add(written - last)
+            self.encoder = enc
+            return True
+
         def write_side(col, path):
-            writer = None
+            if ffmpeg_side(col, path):
+                return
+            writer = None                         # fallback: decode each still here and pipe it to the encoder
             try:
                 for (still, n) in zip(self.stills, repeats):
                     img = cv2.imread(still[col])

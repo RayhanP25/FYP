@@ -200,12 +200,17 @@ def process_video(
         name = f"{key.replace('_object_name', '')}_{uuid.uuid4()}.mp4"
         plain_keys[name] = key
         uploads.append((name, path))
-    try:
-        sent = _upload_results(uploads)
-    finally:
-        for _, path in uploads:
-            if path and os.path.exists(path):
-                os.unlink(path)
+    # The page plays them from this PC at once (GET /api/media/...); cloud storage gets them in the background.
+    progress.stage("Saving the results")
+    kept = [(n, media_cache.put(n, p, move=True)) for n, p in uploads if p and os.path.exists(p)]
+    results_uploading = all(c for _, c in kept)
+    if results_uploading:
+        sent = {n for n, _ in kept}
+    else:                                       # no local copies possible: upload now, as before
+        sent = set(_upload_results(uploads))
+    for _, path in uploads:
+        if path and os.path.exists(path):
+            os.unlink(path)
     if processed_object_name not in sent:
         progress.finish(error="upload failed")
         raise HTTPException(status_code=500, detail="Failed to upload processed video")
@@ -214,13 +219,16 @@ def process_video(
     plain_names = {plain_keys[n]: n for n in plain_keys if n in sent}   # missing: the page uses the overlays
 
     # 8. Update video metadata with processed video info
-    update_fields = {"processed_object_name": processed_object_name, **plain_names}
+    update_fields = {"processed_object_name": processed_object_name, **plain_names,
+                     "results_uploading": results_uploading}
     if processed_object_name_right:
         update_fields["processed_object_name_right"] = processed_object_name_right
     if picked_calibration and is_stereo:          # later re-analyses and keypoint edits use it too
         update_fields["calibration_id"] = str(picked_calibration["_id"])
         update_fields["calibration_setup"] = picked_calibration.get("setup")
     videos_collection.update_one({"_id": ObjectId(video_id)}, {"$set": update_fields})
+    if results_uploading:
+        background_upload.send(ObjectId(video_id), kept, "results_uploading")
 
     # How the page should draw keypoints itself (same rules as the overlay videos).
     result["overlay_conf"] = {"min": POSE_MIN_CONF, "sure": POSE_SURE_CONF}

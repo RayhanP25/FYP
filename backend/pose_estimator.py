@@ -360,8 +360,7 @@ def _run_inference(video_path: str) -> dict:
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_data = []
-    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    progress.step(0, n_frames)
+    progress.add_total(int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0))   # both cameras can run at once
     last_box = None
     det_time = 0.0
     det_runs = 0
@@ -446,7 +445,7 @@ def _run_inference(video_path: str) -> dict:
                 "keypoints": custom_18,
                 "angles": calculate_frame_angles(custom_18) if custom_18 else {}
             })
-        progress.step(len(frame_data))
+        progress.add(len(chunk))
         if len(chunk) < batch:
             break
     frame_idx = len(frame_data)
