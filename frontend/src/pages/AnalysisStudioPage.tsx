@@ -662,8 +662,7 @@ const AnalysisStudioPage = () => {
                         <p className="text-sm text-text-muted -mt-2">Analyse it to see the skeleton on the video{hasRight ? ', the 3D skeleton' : ''} and the graphs.</p>
                         {isAnalyzing ? (
                             <div className="w-full max-w-md px-4">
-                                <JobProgress title="Analysing the video" job={analysisProgress} fallbackStage="Starting"
-                                    note="This takes about 1 minute for every 10 seconds of video. You can leave this page; it keeps going." />
+                                <JobProgress title="Analysing the video" job={analysisProgress} fallbackStage="Starting" />
                             </div>
                         ) : (
                             <Button onClick={requestAnalyze} className="px-6 gap-2">
