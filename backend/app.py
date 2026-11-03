@@ -18,6 +18,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Lets the page read a download's file name (otherwise the browser hides this header from it).
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(ping.router, prefix="/api")
