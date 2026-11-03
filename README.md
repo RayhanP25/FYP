@@ -68,12 +68,18 @@ uv venv --python 3.10 .venv
 .venv\Scripts\activate
 uv pip install -r requirements-venv.txt --index-strategy unsafe-best-match
 uv pip install --no-deps mmpose==1.3.2
+uv pip uninstall opencv-python
+uv pip install --no-deps opencv-python==5.0.0.93
 ```
 
 - `--index-strategy unsafe-best-match` lets uv take PyTorch from the PyTorch index and everything else
   from PyPI.
 - mmpose is installed with `--no-deps` because it lists `chumpy`, which no longer builds and is never
   used. Its real dependencies are already in `requirements-venv.txt`.
+- OpenCV 5 makes calibration much faster with many pairs (100 pairs: about 9 s instead of about 77 s
+  with the 4.10 in `requirements-venv.txt`). It is installed with `--no-deps` because it asks for numpy 2,
+  which the mm* packages can't use; it works with numpy 1.26.4. Skipping these two lines only makes
+  calibration slower.
 - `set UV_LINK_MODE=copy` only hides a harmless warning when the venv and uv's cache are on different
   drives.
 
@@ -147,7 +153,11 @@ Make sure `frontend\.env` contains `VITE_API_URL=http://localhost:8000`.
 
 ## 6. Run
 
-Use two Command Prompt windows.
+**Quick start:** double-click `start_sportpose.bat` in the `FYP` folder. It opens the server and the app
+in two windows (leave both open) and then the browser at http://localhost:5173. Close the two windows to
+stop. A shortcut to it on the desktop makes this one double-click for the operator.
+
+To start by hand instead, use two Command Prompt windows.
 
 **Backend:**
 
@@ -196,6 +206,8 @@ git pull
 cd backend
 .venv\Scripts\activate
 uv pip install -r requirements-venv.txt --index-strategy unsafe-best-match
+uv pip uninstall opencv-python
+uv pip install --no-deps opencv-python==5.0.0.93
 cd ..\frontend
 npm install
 ```

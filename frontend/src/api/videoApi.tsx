@@ -44,8 +44,9 @@ export const uploadVideo = async (formData: FormData): Promise<VideoUploadRespon
             },
         });
         return response.data;
-    } catch (error) {
-        throw new Error('Failed to upload video');
+    } catch (error: any) {
+        // The server says why (e.g. the file is not a video, or too large); fall back to a general message.
+        throw new Error(error?.response?.data?.detail || 'Failed to upload video');
     }
 };
 

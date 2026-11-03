@@ -55,7 +55,7 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
             const videoData = await getVideoUrl(response.video_id);
             onUploadSuccess?.(response.video_id, videoData.presigned_url);
         } catch (error) {
-            toast.error('Failed to upload video');
+            toast.error(error instanceof Error ? error.message : 'Failed to upload video');
             console.error('Upload error:', error);
         } finally {
             setIsUploading(false);

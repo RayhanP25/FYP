@@ -4,7 +4,11 @@ from datetime import timedelta, datetime
 from database import client, database_name
 from bson import ObjectId
 from pydantic import BaseModel
+import os
+import tempfile
 import uuid
+from fastapi.concurrency import run_in_threadpool
+import video_io
 from urllib.parse import quote
 from routes.users import get_current_user
 from access import can_access_owner, can_access_video, names, visible_owner_ids
@@ -39,21 +43,33 @@ async def upload_video(video: UploadFile = File(...), current_user: dict = Depen
             detail="File too large. Maximum size is {max_size}"
         )
     
-    # Generate unique filename
-    object_name = f"{uuid.uuid4()}.{file_ext}"
-    
-    # Upload to MinIO
+    # Every upload is stored as a browser-ready H.264 MP4: MOV and AVI files (and MP4s in other codecs,
+    # e.g. iPhone HEVC) don't play in Chrome / Edge, so they are converted here first.
+    tmp_dir = tempfile.mkdtemp(prefix="upload_")
+    src = os.path.join(tmp_dir, f"in.{file_ext}")
+    dst = os.path.join(tmp_dir, "out.mp4")
     try:
-        minio_client.put_object(
-            bucket_name=BUCKET,
-            object_name=object_name,
-            data=video.file,
-            length=-1,
-            part_size=10*1024*1024,
-            content_type=video.content_type
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        with open(src, "wb") as f:
+            while chunk := await video.read(8 * 1024 * 1024):
+                f.write(chunk)
+        try:
+            converted = await run_in_threadpool(video_io.to_browser_mp4, src, dst)
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        path = dst if converted else src
+        object_name = f"{uuid.uuid4()}.mp4"
+        stored_name = os.path.splitext(video.filename)[0] + ".mp4"
+        try:
+            minio_client.fput_object(BUCKET, object_name, path, content_type="video/mp4",
+                                     part_size=10 * 1024 * 1024)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        stored_size = os.path.getsize(path)
+    finally:
+        for p in (src, dst):
+            if os.path.exists(p):
+                os.unlink(p)
+        os.rmdir(tmp_dir)
     
     # Save metadata to MongoDB
     videos_collection = client[database_name]["videos"]
@@ -62,9 +78,10 @@ async def upload_video(video: UploadFile = File(...), current_user: dict = Depen
         "user_id": str(current_user["_id"]),
         "object_name": object_name,
         "bucket_name": BUCKET,
-        "original_filename": video.filename,
-        "content_type": video.content_type,
-        "file_size": video.size,
+        "original_filename": stored_name,
+        "content_type": "video/mp4",
+        "file_size": stored_size,
+        "uploaded_from": video.filename if stored_name != video.filename else None,
         "uploaded_at": datetime.now()
     }
     

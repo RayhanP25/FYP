@@ -71,6 +71,18 @@ export default function Skeleton3DViewer({
   const view = useRef<{ S: number; cyaw: number; syaw: number; cp: number; sp: number; P: ({ sx: number; sy: number } | null)[] } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // Full screen: the whole 3D view (canvas + its controls) fills the screen; Esc or the button goes back.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [fullScreen, setFullScreen] = useState(false);
+  useEffect(() => {
+    const onChange = () => setFullScreen(document.fullscreenElement === rootRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const toggleFullScreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else rootRef.current?.requestFullscreen().catch(() => {});
+  };
 
   // Keep the canvas backing store matched to its displayed size, otherwise the
   // fixed 800x600 buffer gets stretched to fit and the skeleton looks squashed.
@@ -349,7 +361,7 @@ export default function Skeleton3DViewer({
   }, []);
 
   return (
-    <div className="w-full h-full relative bg-background-main font-sans overflow-hidden">
+    <div ref={rootRef} className="w-full h-full relative bg-background-main font-sans overflow-hidden">
       <canvas
         ref={canvasRef}
         style={{ display: "block", width: "100%", height: "100%", cursor: dragging ? "grabbing" : "grab", touchAction: "none", overscrollBehavior: "contain" }}
@@ -390,6 +402,10 @@ export default function Skeleton3DViewer({
             <span>{editing ? "Drag a joint to move it • ←/→ change frame • Drag empty space to rotate" : "Drag to rotate • Scroll to zoom"}</span>
             <div className="w-[1px] h-3 bg-border"></div>
             <button onClick={() => { setYaw(0.5); setPitch(0.15); setZoom(1); }} className="text-primary hover:brightness-110 font-semibold transition-all">Reset</button>
+            <div className="w-[1px] h-3 bg-border"></div>
+            <button onClick={toggleFullScreen} className="text-primary hover:brightness-110 font-semibold transition-all" title={fullScreen ? "Back to the page (Esc)" : "Show the 3D view full screen"}>
+              {fullScreen ? "Exit full screen" : "Full screen"}
+            </button>
         </div>
       </div>
     </div>

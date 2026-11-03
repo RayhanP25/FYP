@@ -50,7 +50,7 @@ numpy==1.26.4              # keep below 2 for the mm* packages
 scipy==1.15.3
 matplotlib==3.10.9
 pillow==12.3.0
-opencv-python==4.10.0.84
+opencv-python==4.10.0.84     # README step 3 swaps this for 5.0.0.93 (--no-deps): much faster calibration
 imageio-ffmpeg==0.6.0      # bundled ffmpeg for GPU (NVENC) video encoding, see video_io.py
 
 # Packaging helpers (a uv venv starts empty; mmengine still imports pkg_resources)

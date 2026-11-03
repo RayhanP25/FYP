@@ -227,6 +227,48 @@ class VideoReader:
             self.proc.wait()
 
 
+def probe_video(path):
+    """(codec, pixel format, width, height) of the first video stream, read from ffmpeg's own report.
+    None where it can't be read (no ffmpeg, not a video)."""
+    import re
+    exe = ffmpeg_exe()
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "-hide_banner", "-i", path], capture_output=True, timeout=60,
+                             creationflags=_NO_WINDOW).stderr.decode(errors="ignore")
+    except Exception:
+        return None
+    m = re.search(r"Stream #\S+.*?: Video: (\w+)[^,]*, (\w+)[^,]*?(?:\([^)]*\))?, (\d+)x(\d+)", out)
+    return (m.group(1), m.group(2), int(m.group(3)), int(m.group(4))) if m else None
+
+
+def to_browser_mp4(src, dst):
+    """Make an upload playable in every browser: H.264, yuv420p, AAC sound, MP4 with faststart.
+
+    MOV (iPhone HEVC / ProRes), AVI (MJPEG, Xvid, ...) and MKV don't play in Chrome or Edge, and the AI's
+    reader handles H.264 MP4 best. A file that already is browser-ready H.264 MP4 is left as it is.
+    Returns True if dst was written, False if src can be used unchanged. Raises RuntimeError if it can't be
+    converted."""
+    info = probe_video(src)
+    if info is None:
+        raise RuntimeError("This file could not be read as a video.")
+    codec, pix, w, h = info
+    if src.lower().endswith(".mp4") and codec == "h264" and pix == "yuv420p":
+        return False
+    exe = ffmpeg_exe()
+    enc = pick_encoder(w, h) or "libx264"
+    if enc not in ("h264_nvenc", "libx264"):
+        enc = "libx264"
+    cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-i", src, "-map", "0:v:0", "-map", "0:a:0?",
+           "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", enc, *_ENCODERS[enc], "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", dst]
+    p = subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW)
+    if p.returncode != 0 or not os.path.exists(dst) or os.path.getsize(dst) == 0:
+        raise RuntimeError("The video could not be converted: " + p.stderr.decode(errors="ignore")[-300:])
+    return True
+
+
 def describe():
     """One line for the startup log: which encoders work on this machine."""
     exe = ffmpeg_exe()
