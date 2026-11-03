@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/axiosInstance';
-import { Camera, VideoOff, Video, StopCircle } from 'lucide-react';
+import { Camera, VideoOff, Video, StopCircle, Settings2 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import AppLayout from '../layout/AppLayout';
 import { useShortcut } from '@/shortcuts/useShortcut';
+import { useAuth } from '@/hooks/useAuth';
+import CameraSetupDialog from '@/components/camera/CameraSetupDialog';
 
 export default function CameraCapture() {
     const navigate = useNavigate();
@@ -14,6 +16,8 @@ export default function CameraCapture() {
     const [streamKey, setStreamKey] = useState(0);
     const [mode, setMode] = useState<string>('IDLE');
     const [lastVideoId, setLastVideoId] = useState<string | null>(null);
+    const [camerasOpen, setCamerasOpen] = useState(false);
+    const { user } = useAuth();
 
     const backendUrl = api.defaults.baseURL || 'http://localhost:8000';
 
@@ -142,6 +146,15 @@ export default function CameraCapture() {
                     </div>
 
                     <div className="flex gap-3">
+                        {user?.role === 'admin' && (
+                            <button
+                                onClick={() => setCamerasOpen(true)}
+                                title="Choose which camera is left and which is right"
+                                className="flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all h-fit whitespace-nowrap text-sm font-medium border border-border bg-background-main text-text hover:bg-background"
+                            >
+                                <Settings2 className="w-4 h-4" /> Cameras
+                            </button>
+                        )}
                         {isStreaming && (
                             <button
                                 onClick={isRecording ? handleStopRecording : handleStartRecording}
@@ -206,6 +219,7 @@ export default function CameraCapture() {
                     </div>
                 </div>
             </div>
+            <CameraSetupDialog open={camerasOpen} onOpenChange={setCamerasOpen} busy={isStreaming || isRecording} />
         </AppLayout>
     );
 }

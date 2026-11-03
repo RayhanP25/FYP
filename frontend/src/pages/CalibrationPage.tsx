@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
-import { Calculator, Camera, FolderOpen, Layers, Play, StopCircle, Undo2 } from 'lucide-react';
+import { Calculator, Camera, FolderOpen, Layers, Play, Settings2, StopCircle, Undo2 } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
@@ -21,6 +21,7 @@ import CoverageChecks from '@/components/calibration/CoverageChecks';
 import CalibrationReport from '@/components/calibration/CalibrationReport';
 import CalibrationLibrary from '@/components/calibration/CalibrationLibrary';
 import PreviousSessionsDialog from '@/components/calibration/PreviousSessionsDialog';
+import CameraSetupDialog from '@/components/camera/CameraSetupDialog';
 import { useShortcut } from '@/shortcuts/useShortcut';
 
 
@@ -42,6 +43,7 @@ const CalibrationPage = () => {
     const [streamKey, setStreamKey] = useState(0);
     const [setupName, setSetupName] = useState<string | null>(null);
     const [previousOpen, setPreviousOpen] = useState(false);
+    const [camerasOpen, setCamerasOpen] = useState(false);
     const lastJob = useRef<string | null>(null);
 
     const { data: status } = useQuery({
@@ -155,6 +157,10 @@ const CalibrationPage = () => {
                                             title="Open an earlier session again from its saved photos">
                                             <FolderOpen className="w-4 h-4" /> Previous sessions
                                         </Button>
+                                        <Button variant="secondary" onClick={() => setCamerasOpen(true)} disabled={isPending} className="gap-2 !py-2 text-sm"
+                                            title="Choose which camera is left and which is right">
+                                            <Settings2 className="w-4 h-4" /> Cameras
+                                        </Button>
                                     </div>
                                 }
                             />
@@ -205,12 +211,16 @@ const CalibrationPage = () => {
                                     <div className="flex items-baseline justify-between">
                                         <span className="text-2xl font-semibold tabular-nums text-text">
                                             {pairs}
-                                            <span className="text-sm font-normal text-text-muted"> / {aimPairs} pairs</span>
+                                            <span className="text-sm font-normal text-text-muted"> pairs</span>
                                         </span>
-                                        <span className="text-xs text-text-muted">min {minPairs}</span>
+                                        <span className="text-xs text-text-muted">min {minPairs} · {aimPairs}+ recommended</span>
                                     </div>
+                                    {/* A guide, not a limit: fills up to the recommended count, more pairs are fine. */}
                                     <div className="h-1.5 rounded-full bg-border overflow-hidden">
-                                        <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.min(100, (pairs / aimPairs) * 100)}%` }} />
+                                        <div
+                                            className={`h-full transition-all duration-300 ${pairs >= aimPairs ? 'bg-green-500' : pairs >= minPairs ? 'bg-primary' : 'bg-amber-500'}`}
+                                            style={{ width: `${Math.min(100, (pairs / aimPairs) * 100)}%` }}
+                                        />
                                     </div>
                                     {status?.job === 'loading' && (
                                         <p className="text-xs text-primary">Finding the board in the saved photos... {pairs} pairs so far</p>
@@ -221,7 +231,9 @@ const CalibrationPage = () => {
                             </Panel>
                         )}
 
-                        <Panel title="In use">
+                        {/* During a session the calibration in use is not shown; once this session is calibrated its result is. */}
+                        {(!session || session.calibrated) && (
+                        <Panel title={session ? 'Result' : 'In use'}>
                             {calibration ? (
                                 <div className="flex flex-col gap-3">
                                     {status?.size_mismatch && (
@@ -241,10 +253,12 @@ const CalibrationPage = () => {
                                 <p className="text-sm text-text-muted">No calibration yet. Start a new calibration, capture pairs, then calibrate.</p>
                             )}
                         </Panel>
+                        )}
                     </aside>
                 </div>
             </div>
             <PreviousSessionsDialog open={previousOpen} onOpenChange={setPreviousOpen} setups={library?.setups ?? []} />
+            <CameraSetupDialog open={camerasOpen} onOpenChange={setCamerasOpen} busy={!!session || busy || !!status?.recording || live} />
         </AppLayout>
     );
 };

@@ -1,7 +1,8 @@
 """
 camera.py  -- native synchronized stereo capture (no OBS required)
 
-Uses two USB webcams via CAMERA_LEFT_INDEX / CAMERA_RIGHT_INDEX.
+Uses two USB webcams via CAMERA_LEFT_INDEX / CAMERA_RIGHT_INDEX, or the left/right picked in the app
+(Cameras dialog -> backend/camera_settings.json, which overrides .env on this PC).
 
 Each camera has its OWN reader thread (so one slow read never blocks the other)
 and publishes its latest frame with a capture timestamp. On Windows USB cameras
@@ -13,6 +14,8 @@ and the live preview is sent at a lower rate/size so it does not starve capture.
 <img>. Recording writes a side-by-side MP4, uploads to MinIO, makes a videos doc.
 """
 
+import base64
+import json
 import os
 import time
 import asyncio
@@ -31,7 +34,9 @@ import calibration_store
 import video_io
 from database import client, database_name
 from minio_client import BUCKET, minio_client
-from routes.users import get_current_user
+from pydantic import BaseModel
+
+from routes.users import get_current_user, require_admin
 
 router = APIRouter(prefix="/camera", tags=["camera"])
 
@@ -46,6 +51,25 @@ CAMERA_API = os.getenv("CAMERA_API", "msmf").lower()
 # Live preview: lower rate + size than the recording, so it doesn't steal CPU from capture
 PREVIEW_FPS = float(os.getenv("PREVIEW_FPS", "30"))
 PREVIEW_SCALE = float(os.getenv("PREVIEW_SCALE", "0.5"))
+SCAN_MAX = int(os.getenv("CAMERA_SCAN_MAX", "6"))          # camera indices 0..SCAN_MAX-1 are tried by a scan
+
+# Which camera is left / right, as picked in the app. Kept per PC (each has its own cameras), not in git.
+SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "camera_settings.json")
+
+
+def _load_settings():
+    global LEFT_INDEX, RIGHT_INDEX
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        LEFT_INDEX, RIGHT_INDEX = int(d["left"]), int(d["right"])
+    except FileNotFoundError:
+        pass
+    except Exception as ex:
+        print(f"camera: ignoring {SETTINGS_PATH} ({ex!r}); using CAMERA_LEFT_INDEX / CAMERA_RIGHT_INDEX")
+
+
+_load_settings()
 
 
 def _compose(fL, fR):
@@ -106,7 +130,7 @@ def _open_source(index, timeout):
 
 def _fail_msg(side, index):
     return (f"Could not open the {side} USB camera (index {index}). "
-            f"Close OBS/Zoom/Teams, or fix CAMERA_LEFT_INDEX / CAMERA_RIGHT_INDEX in .env.")
+            f"Close OBS/Zoom/Teams, or pick the right cameras with the Cameras button.")
 
 
 class _CamReader:
@@ -303,6 +327,85 @@ class Recorder:
 recorder = Recorder()
 
 
+# ---- choosing which camera is left / right ----
+
+class CameraSettings(BaseModel):
+    left: int
+    right: int
+
+
+def _cameras_free():
+    if recorder.active:
+        raise HTTPException(status_code=409, detail="Stop the recording first.")
+    if manager.running:
+        raise HTTPException(status_code=409, detail="Stop the live feed (or end the calibration session) first.")
+
+
+@router.get("/settings")
+def get_settings(current_user: dict = Depends(get_current_user)):
+    return dict(left=LEFT_INDEX, right=RIGHT_INDEX, width=CAP_WIDTH, height=CAP_HEIGHT,
+                saved=os.path.exists(SETTINGS_PATH))
+
+
+@router.put("/settings")
+def put_settings(body: CameraSettings, current_user: dict = Depends(require_admin)):
+    global LEFT_INDEX, RIGHT_INDEX
+    if body.left == body.right:
+        raise HTTPException(status_code=422, detail="Left and right must be different cameras.")
+    if not (0 <= body.left < 64 and 0 <= body.right < 64):
+        raise HTTPException(status_code=422, detail="Camera index out of range.")
+    with manager.lock:
+        _cameras_free()
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(dict(left=body.left, right=body.right), f)
+        LEFT_INDEX, RIGHT_INDEX = body.left, body.right
+    return get_settings(current_user)
+
+
+_scan_lock = threading.Lock()
+
+
+@router.post("/devices/scan")
+def scan_devices(current_user: dict = Depends(require_admin)):
+    """Open every camera index once: what size it really delivers, and a small snapshot to tell them apart."""
+    if not _scan_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A scan is already running.")
+    try:
+        with manager.lock:                       # nobody starts the feed while the cameras are being probed
+            _cameras_free()
+            found = {}
+
+            def probe(i):
+                cap = _open_source(i, OPEN_TIMEOUT)
+                if cap is None:
+                    return
+                try:
+                    frame = None
+                    for _ in range(5):           # a few frames so exposure settles and the size is final
+                        ok, f = cap.read()
+                        if ok:
+                            frame = f
+                    if frame is None:
+                        return
+                    h, w = frame.shape[:2]
+                    thumb = cv2.resize(frame, (320, max(1, int(320 * h / w))), interpolation=cv2.INTER_AREA)
+                    ok, jpg = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    found[i] = dict(index=i, width=w, height=h,
+                                    preview="data:image/jpeg;base64," + base64.b64encode(jpg.tobytes()).decode() if ok else None)
+                finally:
+                    cap.release()
+
+            threads = [threading.Thread(target=probe, args=(i,), daemon=True) for i in range(SCAN_MAX)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        return dict(devices=[found[i] for i in sorted(found)], left=LEFT_INDEX, right=RIGHT_INDEX,
+                    width=CAP_WIDTH, height=CAP_HEIGHT)
+    finally:
+        _scan_lock.release()
+
+
 @router.post("/start-feed")
 def start_feed(current_user: dict = Depends(get_current_user)):
     manager.start()
@@ -404,4 +507,4 @@ def stop_recording(current_user: dict = Depends(get_current_user)):
     return {"status": "saved", "video_id": str(result.inserted_id),
             "object_name": object_name, "frames": frames,
             "dup_frames": dup_frames, "real_fps": real_fps,
-            "dropped_frames": recorder.dropped, "encoder": recorder.encoder}
+            "dropped_frames": recorder.dropped, "encoder": recorder.encoder}

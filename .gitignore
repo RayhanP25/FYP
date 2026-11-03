@@ -63,3 +63,6 @@ backend/calibration_backup_*.npz
 backend/calib_sessions/
 backend/_debug/
 backend/probe_*.jpg
+
+# Which camera is left / right on this PC (picked in the app)
+backend/camera_settings.json

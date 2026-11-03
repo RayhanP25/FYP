@@ -136,10 +136,45 @@ def capture_still(grab):
     return (fL2, fR2, res[2], res[3]), "ok"
 
 
+TILT_COUNT_DEG = 15.0   # a pair counts as "tilted" (left/right or up/down) beyond this angle to the line of sight
+
+
+def board_tilt(c, size, K=None, D=None):
+    """How far the board is turned left/right and tilted up/down, in degrees, relative to the line of sight.
+
+    Uses the board's 3D pose (solvePnP on its corners). With the camera's calibration (K, D) the angles are
+    accurate; without one a typical focal length is assumed, which is close enough for counting tilted photos.
+    The old check compared opposite edge lengths in the image, which barely changes for an up/down tilt of a
+    wide board a few metres away, so up/down tilts were hardly ever counted."""
+    w, h = float(size[0]), float(size[1])
+    if K is None:
+        f = 0.8 * w
+        K, D = np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1.0]]), None
+    pts = np.asarray(c, np.float64).reshape(-1, 1, 2)
+    try:
+        ok, rv, tv = cv2.solvePnP(OBJP.astype(np.float64), pts, np.asarray(K, np.float64),
+                                  None if D is None else np.asarray(D, np.float64), flags=cv2.SOLVEPNP_IPPE)
+    except cv2.error:
+        ok = False
+    if not ok:
+        return 0.0, 0.0
+    R, _ = cv2.Rodrigues(rv)
+    n = R[:, 2]                                   # board normal in camera coordinates
+    v = tv.ravel() / np.linalg.norm(tv)           # line of sight to the board
+    ex = np.array([1.0, 0.0, 0.0]) - v[0] * v     # sideways, perpendicular to the line of sight
+    ex /= np.linalg.norm(ex)
+    ey = np.cross(v, ex)                          # up/down, perpendicular to both
+    lr = float(np.degrees(np.arcsin(np.clip(abs(n @ ex), 0, 1))))
+    ud = float(np.degrees(np.arcsin(np.clip(abs(n @ ey), 0, 1))))
+    return lr, ud
+
+
 class Coverage:
     GRID = 8      # boxes per side of each view in the preview; a box turns green once the board has covered it
 
-    def __init__(self):
+    def __init__(self, K=None, D=None):
+        """K, D: the left camera's calibration if one exists at this size (makes the tilt angles exact)."""
+        self.K, self.D = K, D
         self.cells = [np.zeros((self.GRID, self.GRID), bool), np.zeros((self.GRID, self.GRID), bool)]
         self.pairs = []
 
@@ -162,26 +197,26 @@ class Coverage:
             hull = cv2.convexHull(xy.astype(np.float32))
             inside = np.array([cv2.pointPolygonTest(hull, (float(x), float(y)), False) >= 0 for x, y in centres])
             self.cells[k] |= inside.reshape(self.GRID, self.GRID)
-        w, th, tv = self.shape_stats(cL, sizeL)
-        self.pairs.append(dict(width=w, tiltH=th, tiltV=tv))
+        w, _, _ = self.shape_stats(cL, sizeL)
+        lr, ud = board_tilt(cL, sizeL, self.K, self.D)
+        self.pairs.append(dict(width=w, tiltH=lr, tiltV=ud))
 
     def pop(self, all_corners, sizeL, sizeR):
-        self.__init__()
+        self.__init__(self.K, self.D)
         for cL, cR in all_corners:
             self.add(cL, cR, sizeL, sizeR)
 
     def summary(self):
         n = len(self.pairs)
-        # foreshortening log-ratio 0.08 ~ 20 deg tilt at these distances
-        th = sum(p["tiltH"] > 0.08 for p in self.pairs)
-        tv = sum(p["tiltV"] > 0.08 for p in self.pairs)
+        th = sum(p["tiltH"] > TILT_COUNT_DEG for p in self.pairs)
+        tv = sum(p["tiltV"] > TILT_COUNT_DEG for p in self.pairs)
         ws = [p["width"] for p in self.pairs]
         spread = (max(ws) / min(ws)) if ws else 0
         cov = [c.mean() for c in self.cells]
         ok = dict(n=n >= 25, area=min(cov) >= 0.75, tilt=th >= 6 and tv >= 6, spread=spread >= 1.6)  # one flag per line
-        lines = [f"pairs {n} (aim 25-40)",
+        lines = [f"pairs {n} (25+ recommended)",
                  f"image covered L {100 * cov[0]:.0f}% R {100 * cov[1]:.0f}% (aim 75%+)",
-                 f"tilted left/right {th}, up/down {tv} (aim 6+ each)",
+                 f"tilted left/right {th}, up/down {tv} (aim 6+ each, {TILT_COUNT_DEG:.0f}+ deg)",
                  f"near/far size ratio {spread:.1f} (aim 1.6+)"]
         return lines, ok
 
@@ -369,8 +404,9 @@ def load(path=OUT):
     return {k: d[k] for k in d.files}
 
 
-def render_preview(fL, fR, cov, msg="", det=None):
+def render_preview(fL, fR, cov, msg="", det=None, text=True):
     """Side-by-side preview: board corners per view, coverage grid and status lines. Shared by the terminal and the web page.
+    text=False: no status lines on the picture (the web page shows them beside it).
     det: optional ((foundL, cornersL), (foundR, cornersR)) already computed elsewhere (the web page detects in a
     background thread so the stream is not held back by the ~150 ms per view that findChessboardCorners takes)."""
     sc, disp_w = 0.33, 800
@@ -391,6 +427,8 @@ def render_preview(fL, fR, cov, msg="", det=None):
     if fdR:
         cv2.drawChessboardCorners(dR, CHECKERBOARD, (cR * dsR).astype(np.float32), True)
     disp = cv2.hconcat([dL, dR])
+    if not text:
+        return disp
     lines, ok = cov.summary()
     col = (0, 200, 0) if (fdL and fdR) else (0, 0, 255)
     cv2.putText(disp, f"board in both: {'YES' if (fdL and fdR) else 'no'}", (10, 25),
@@ -403,6 +441,17 @@ def render_preview(fL, fR, cov, msg="", det=None):
     return disp
 
 
+def _left_camera(path, size):
+    """(K1, D1) of the calibration at `path` if it was made at this camera size, else (None, None)."""
+    try:
+        d = load(path)
+        if d is not None and tuple(int(v) for v in np.asarray(d["size1"]).ravel()[:2]) == tuple(size):
+            return d["K1"], d["D1"]
+    except Exception:
+        pass
+    return None, None
+
+
 class CalibrationSession:
     """Capture, calibrate and floor-level state. Used by the terminal loop (live) and the web calibration page."""
 
@@ -410,7 +459,7 @@ class CalibrationSession:
         self.folder, self.sizeL, self.sizeR, self.out = folder, sizeL, sizeR, out
         self.meta = meta or {}
         self.objpoints, self.imgL, self.imgR, self.saved = [], [], [], []
-        self.cov, self.calib = Coverage(), None
+        self.cov, self.calib = Coverage(*_left_camera(out, sizeL)), None
         os.makedirs(folder, exist_ok=True)
 
     def _path(self, k, side):
@@ -592,7 +641,7 @@ def from_folder(folders, out=OUT):
     print(f"{len(objpoints)} usable pairs from {', '.join(folders)}")
     if len(objpoints) < MIN_PAIRS:
         sys.exit(f"need at least {MIN_PAIRS} pairs")
-    cov = Coverage()
+    cov = Coverage(*_left_camera(out, size))
     for cl, cr in zip(imgL, imgR):
         cov.add(cl, cr, size, size)
     calib, rep = calibrate(objpoints, imgL, imgR, size, size)
