@@ -1,18 +1,18 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from database import client, database_name
-from minio_client import BUCKET, minio_client
-from access import can_access_analysis, can_access_video
+from core.database import client, database_name
+from core.minio_client import BUCKET, minio_client
+from core.access import can_access_analysis, can_access_video
 from routes.users import get_current_user
 from routes.edits import apply_to as apply_keypoint_edits
-from pose_estimator import process_video_with_overlays, POSE_MIN_CONF, POSE_SURE_CONF
+from pose.pose_estimator import process_video_with_overlays, POSE_MIN_CONF, POSE_SURE_CONF
 from bson import ObjectId
 import functools
-import background_upload
-import calibration_store
-import media_cache
-import progress
+from video import background_upload
+from calibration import calibration_store
+from video import media_cache
+from core import progress
 from concurrent.futures import ThreadPoolExecutor
 import os
 import tempfile
@@ -150,7 +150,7 @@ def process_video(
     try:
         temp_output_path = tempfile.mktemp(suffix="_processed.mp4")
         if is_stereo and os.path.exists(calib_path):
-            from stereo_process import process_stereo_video
+            from stereo.stereo_process import process_stereo_video
             temp_output_right_path = tempfile.mktemp(suffix="_processed_right.mp4")
             plain_paths = (tempfile.mktemp(suffix="_plain_L.mp4"), tempfile.mktemp(suffix="_plain_R.mp4"))
             result = process_stereo_video(temp_input_path, temp_output_path,

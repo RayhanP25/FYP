@@ -8,7 +8,9 @@ Oldest files are removed when the cache grows past MEDIA_CACHE_GB (default 20).
 import os
 import shutil
 
-DIR = os.getenv("MEDIA_CACHE_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "_media_cache")
+from core.paths import BACKEND_DIR
+
+DIR = os.getenv("MEDIA_CACHE_DIR") or os.path.join(BACKEND_DIR, "_media_cache")
 MAX_BYTES = float(os.getenv("MEDIA_CACHE_GB", "20")) * 1024 ** 3
 
 

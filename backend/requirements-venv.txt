@@ -9,7 +9,7 @@
 #   uv pip install --no-deps mmpose==1.3.2
 #
 # mmpose goes in with --no-deps because it asks for chumpy, which fails to build and is
-# never used. mmcv is mmcv-lite (no compiled ops); backend/mmcv_ext_shim.py supplies the
+# never used. mmcv is mmcv-lite (no compiled ops); backend/core/mmcv_ext_shim.py supplies the
 # one op the person detector needs (NMS) through torchvision.
 #
 # Check:
@@ -23,7 +23,7 @@ torchvision==0.22.1+cu128
 
 # OpenMMLab
 mmengine==0.10.7
-mmcv-lite==2.1.0           # pure-Python mmcv; see backend/mmcv_ext_shim.py
+mmcv-lite==2.1.0           # pure-Python mmcv; see backend/core/mmcv_ext_shim.py
 mmdet==3.2.0
 mmpretrain==1.2.0          # ViTPose's backbone is mmpretrain.VisionTransformer
 

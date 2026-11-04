@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, Response, Cookie, status
-from database import client, database_name
+from core.database import client, database_name
 from pydantic import BaseModel
 from bson import ObjectId
 import bcrypt, os, jwt
@@ -7,8 +7,8 @@ from fastapi.security import OAuth2PasswordBearer
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from access import names
-from avatars import picture_url
+from core.access import names
+from core.avatars import picture_url
 
 
 router = APIRouter()

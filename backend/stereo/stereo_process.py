@@ -20,14 +20,14 @@ import time
 import numpy as np
 import cv2
 
-import progress
-import video_io
+from core import progress
+from video import video_io
 import copy
 
-from pose_estimator import _run_inference, heal_and_render, calculate_frame_angles, _render_overlay
-import stereo_bones
-from triangulate import load_calibration, angle_3d, DEFAULT_CONF_THRESHOLD
-from stereo_refine import fix_swaps, triangulate_checked, reprojection_summary, spike_mask, NUM_KEYPOINTS, SPIKE_MM, JOINT_NAMES
+from pose.pose_estimator import _run_inference, heal_and_render, calculate_frame_angles, _render_overlay
+from stereo import stereo_bones
+from stereo.triangulate import load_calibration, angle_3d, DEFAULT_CONF_THRESHOLD
+from stereo.stereo_refine import fix_swaps, triangulate_checked, reprojection_summary, spike_mask, NUM_KEYPOINTS, SPIKE_MM, JOINT_NAMES
 
 # 18-point skeleton: 0 nose,1 neck,2 Lsho,3 Rsho,4 Lelb,5 Relb,6 Lwri,7 Rwri,
 # 8 Lidx,9 Ridx,10 Lhip,11 Rhip,12 Lknee,13 Rknee,14 Lank,15 Rank,16 Ltoe,17 Rtoe
@@ -180,7 +180,7 @@ def _infer_both(lp, rp):
     if PARALLEL_VIEWS:
         # Load the models once first: two threads loading them at the same time load them twice, or fail
         # inside the package loader (seen on the first analysis after the server starts).
-        from pose_estimator import _load_models
+        from pose.pose_estimator import _load_models
         _load_models()
         progress.stage("Finding body points: both cameras")
         out, errors = {}, []

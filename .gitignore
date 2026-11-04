@@ -67,5 +67,5 @@ backend/probe_*.jpg
 # Which camera is left / right on this PC (picked in the app)
 backend/camera_settings.json
 
-# Local copies of recorded / uploaded videos (backend/media_cache.py)
+# Local copies of recorded / uploaded videos (backend/video/media_cache.py)
 backend/_media_cache/

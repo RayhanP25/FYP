@@ -2,8 +2,8 @@
 diag_video.py -- check the video path the analysis uses (ffmpeg encode / split / decode) on this PC.
 
 Run from the backend folder in the venv, with the backend stopped or running (it doesn't matter):
-    python diag_video.py                    # synthetic test only
-    python diag_video.py "C:\\path\\to\\recording.mp4"   # also check a real recording
+    python -m tools.diag_video                    # synthetic test only
+    python -m tools.diag_video "C:\\path\\to\\recording.mp4"   # also check a real recording
 
 It builds a small side-by-side test video, then runs it through the same steps as stereo analysis:
 the one-pass ffmpeg split into left/right halves and the frame reader, once with the GPU (NVENC/NVDEC)
@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import video_io  # noqa: E402
+from video import video_io  # noqa: E402
 
 
 def frames_cv(path):
@@ -62,7 +62,7 @@ def section(title):
 
 
 def check_split(src, label):
-    import stereo_process
+    from stereo import stereo_process
     t = time.time()
     res = stereo_process._split_ffmpeg(src, 1280)
     if res is None:

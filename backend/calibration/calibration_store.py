@@ -24,9 +24,9 @@ from datetime import datetime
 import numpy as np
 from bson import Binary, ObjectId
 
-from database import client, database_name
+from core.database import client, database_name
+from core.paths import BACKEND_DIR
 
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 CALIB_PATH = os.path.join(BACKEND_DIR, "calibration.npz")
 UNASSIGNED = "Unassigned"
 _KEYS = ("K1", "D1", "K2", "D2", "R", "T", "R_level")      # what makes two calibrations the same

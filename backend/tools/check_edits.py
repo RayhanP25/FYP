@@ -2,8 +2,8 @@
 check_edits.py -- why does (or doesn't) a saved keypoint edit show on the camera videos?
 
     cd backend
-    python check_edits.py                 # every video with edits
-    python check_edits.py <video_id>      # one video
+    python -m tools.check_edits                 # every video with edits
+    python -m tools.check_edits <video_id>      # one video
 
 For each edit it prints the joint's 2D position in both cameras before and after the edits are applied
 (what GET /api/get-analysis returns), whether that lands inside the picture, which calibration was used,
@@ -13,9 +13,9 @@ import sys
 
 import numpy as np
 
-import calibration_store
-import keypoint_edits
-from database import client, database_name
+from calibration import calibration_store
+from stereo import keypoint_edits
+from core.database import client, database_name
 from routes.edits import calibration_for, edits_for
 from bson import ObjectId
 
@@ -53,7 +53,7 @@ def check(video_id):
     print(f"  {len(edits)} edit(s)")
     calib = calibration_for(a)
     out = keypoint_edits.apply_edits(r, edits_for(video_id), calib)     # as get-analysis (angles left out)
-    import stereo_bones
+    from stereo import stereo_bones
     rig = stereo_bones.Rig(calib)
     for e in edits:
         t, j = e["frame"], e["joint"]

@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from minio_client import minio_client
+from core.minio_client import minio_client
 
 AVATAR_BUCKET = "sport-pose-avatars"
 

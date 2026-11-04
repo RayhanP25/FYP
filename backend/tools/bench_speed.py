@@ -1,5 +1,5 @@
 """Speed / accuracy of each GPU speed-up. Stop the backend first, then:
-    python bench_speed.py          (newest stereo recording in MinIO, or pass a video path)
+    python -m tools.bench_speed          (newest stereo recording in MinIO, or pass a video path)
 Each row adds one change; keypoint differences are against the first row (your current settings)."""
 import os, sys, time, tempfile
 import numpy as np
@@ -7,17 +7,17 @@ from dotenv import load_dotenv
 load_dotenv()
 os.environ.setdefault("POSE_FP16", "1")
 import torch
-import pose_estimator as pe
-import pose_gpu
-import stereo_process as sp
-import video_io
+from pose import pose_estimator as pe
+from pose import pose_gpu
+from stereo import stereo_process as sp
+from video import video_io
 
 N = int(os.environ.get("BENCH_FRAMES", "160"))
 
 def get_video():
     if len(sys.argv) > 1:
         return sys.argv[1]
-    from minio_client import minio_client
+    from core.minio_client import minio_client
     bucket = os.getenv("MINIO_BUCKET", "sport-pose-videos")
     o = max((o for o in minio_client.list_objects(bucket) if o.object_name.startswith("stereo_")), key=lambda o: o.last_modified)
     p = tempfile.mktemp(suffix=".mp4"); minio_client.fget_object(bucket, o.object_name, p)

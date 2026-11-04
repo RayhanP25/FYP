@@ -124,7 +124,7 @@ def apply_edits(result, edits, calib, angle_triplets=None, angle_3d=None, frame_
     """A copy of a stereo analysis `result` with `edits` applied (see the module docstring)."""
     if not edits or not result or result.get("mode") != "stereo_3d" or not result.get("frames_3d"):
         return result
-    import stereo_bones                                  # numpy / OpenCV only
+    from stereo import stereo_bones                                  # numpy / OpenCV only
     rig = stereo_bones.Rig(calib)
     changes, pinned2d = plan(result, edits, rig)
     if not changes:

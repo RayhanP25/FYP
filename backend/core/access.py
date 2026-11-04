@@ -1,7 +1,7 @@
 """Who can see and act on which user's videos."""
 from bson import ObjectId
 
-from database import client, database_name
+from core.database import client, database_name
 
 db = client[database_name]
 

@@ -1,4 +1,4 @@
-"""Lists which camera index gives which resolution. Run with the backend STOPPED:  python probe_cams.py"""
+"""Lists which camera index gives which resolution. Run with the backend STOPPED:  python -m tools.probe_cams"""
 import cv2, os
 os.environ.setdefault("OPENCV_VIDEOIO_PRIORITY_OBSENSOR", "0")
 for api_name, api in (("MSMF", cv2.CAP_MSMF), ("DSHOW", cv2.CAP_DSHOW)):

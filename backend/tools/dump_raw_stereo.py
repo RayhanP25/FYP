@@ -1,7 +1,7 @@
 """Save the raw 2D keypoints of both cameras for stereo recordings (offline testing of stereo_refine.py).
 
-    python dump_raw_stereo.py                 list the 20 latest stereo recordings
-    python dump_raw_stereo.py <id> [<id> ...] write _debug/raw_<id>.json for each
+    python -m tools.dump_raw_stereo                 list the 20 latest stereo recordings
+    python -m tools.dump_raw_stereo <id> [<id> ...] write _debug/raw_<id>.json for each
                                               (<id> = database id or MinIO file name, e.g. stereo_....mp4)
 """
 import json
@@ -10,12 +10,13 @@ import sys
 
 from bson import ObjectId
 
-from database import client, database_name
-from minio_client import minio_client
-from pose_estimator import _run_inference
-from stereo_process import _split_to_temp
+from core.database import client, database_name
+from core.minio_client import minio_client
+from core.paths import BACKEND_DIR
+from pose.pose_estimator import _run_inference
+from stereo.stereo_process import _split_to_temp
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = BACKEND_DIR
 videos = client[database_name]["videos"]
 analysis = client[database_name]["analysis"] if "analysis" in client[database_name].list_collection_names() else None
 

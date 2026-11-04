@@ -1,16 +1,18 @@
 """Person-detector speed with RTMDet's default output settings vs the tuned ones (POSE_DET_SCORE_THR),
-and proof that the person box we use is the same. Stop the backend first, then:  python bench_det.py"""
+and proof that the person box we use is the same. Stop the backend first, then:  python -m tools.bench_det"""
 import os, sys, time, tempfile
 import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 os.environ.setdefault("POSE_FP16", "1")
 import torch
-import pose_estimator as pe, stereo_process as sp, video_io
+from pose import pose_estimator as pe
+from stereo import stereo_process as sp
+from video import video_io
 
 def get_video():
     if len(sys.argv) > 1: return sys.argv[1]
-    from minio_client import minio_client
+    from core.minio_client import minio_client
     b = os.getenv("MINIO_BUCKET", "sport-pose-videos")
     o = max((o for o in minio_client.list_objects(b) if o.object_name.startswith("stereo_")), key=lambda o: o.last_modified)
     p = tempfile.mktemp(suffix=".mp4"); minio_client.fget_object(b, o.object_name, p); return p

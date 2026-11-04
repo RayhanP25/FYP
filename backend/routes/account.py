@@ -8,9 +8,9 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 
-from avatars import AVATAR_BUCKET
-from database import client, database_name
-from minio_client import minio_client
+from core.avatars import AVATAR_BUCKET
+from core.database import client, database_name
+from core.minio_client import minio_client
 from routes.users import create_access_token, get_current_user, set_auth_cookie
 
 router = APIRouter(prefix="/me", tags=["account"])

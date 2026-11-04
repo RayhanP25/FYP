@@ -15,8 +15,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends
 
-from access import visible_owner_ids
-from database import client, database_name
+from core.access import visible_owner_ids
+from core.database import client, database_name
 from routes.users import get_current_user
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])

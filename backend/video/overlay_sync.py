@@ -17,10 +17,10 @@ from collections import defaultdict
 import numpy as np
 from bson import ObjectId
 
-import video_io
-from database import client, database_name
-from minio_client import BUCKET, minio_client
-import media_cache
+from video import video_io
+from core.database import client, database_name
+from core.minio_client import BUCKET, minio_client
+from video import media_cache
 import shutil
 
 _locks = defaultdict(threading.Lock)
@@ -28,7 +28,7 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _drawn(frames):
-    from pose_estimator import _overlay_confidences
+    from pose.pose_estimator import _overlay_confidences
     return [f.get("keypoints") for f in frames], _overlay_confidences(frames)
 
 
@@ -75,7 +75,7 @@ def _run(args):
 
 def splice(old, clean, out, frames, fps, changed):
     """Write `out`: the stored video `old` with the frames in `changed` re-drawn from the clean video `clean`."""
-    from pose_estimator import _render_overlay
+    from pose.pose_estimator import _render_overlay
     with tempfile.TemporaryDirectory() as d:
         keys, total = _keyframes(old)
         segments, pos = [], 0

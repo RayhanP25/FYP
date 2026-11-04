@@ -35,10 +35,7 @@ You do **not** need conda, the CUDA toolkit, Visual Studio or a system-wide Pyth
 cd /d D:\
 git clone https://github.com/RayhanP25/FYP.git
 cd FYP
-git checkout feature/keypoint-distance-measurement
 ```
-
-(Use whichever branch is current; `main` may be behind.)
 
 ### Files that are not in git (copy them in by hand)
 
@@ -109,7 +106,7 @@ It should show `pose: mmcv-lite detected, using torchvision NMS`, `pose: running
 
 RTX 50-series cards need PyTorch 2.7+ with CUDA 12.8, and there is no prebuilt full `mmcv` for that
 version on Windows; building one needs Visual Studio and the CUDA toolkit. The venv therefore uses
-`mmcv-lite`, the official pure-Python mmcv build. `backend/mmcv_ext_shim.py` supplies the one compiled op
+`mmcv-lite`, the official pure-Python mmcv build. `backend/core/mmcv_ext_shim.py` supplies the one compiled op
 the pipeline needs (non-maximum suppression in the person detector) through torchvision, which gives the
 same result. With a full mmcv installed (an old conda env) the shim does nothing.
 
@@ -188,7 +185,7 @@ accepts the app from port 5173, and `npm start` serves it on 3000, so every requ
 2. **Cameras:** plug in both USB cameras, stop the backend, and run this in the activated venv:
    ```bat
    cd /d D:\FYP\backend
-   python probe_cams.py
+   python -m tools.probe_cams
    ```
    It lists the camera indices that work and saves a `probe_*.jpg` snapshot from each, so you can see
    which camera is which. Set `CAMERA_LEFT_INDEX` / `CAMERA_RIGHT_INDEX` in `backend\.env` (with a

@@ -54,7 +54,7 @@ def install():
     def _missing(name):
         def op(*args, **kwargs):
             raise RuntimeError(f"mmcv op '{name}' needs the compiled mmcv; this install uses mmcv-lite "
-                               "(see backend/mmcv_ext_shim.py)")
+                               "(see backend/core/mmcv_ext_shim.py)")
         return op
 
     def __getattr__(name):              # mmcv checks every op name exists when its modules load

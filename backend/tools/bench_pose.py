@@ -1,20 +1,20 @@
 """Speed / accuracy check of the pose model settings. Stop the backend first, then:
-    python bench_pose.py            (uses your newest stereo recording from MinIO)
-    python bench_pose.py some.mp4   (or any video file)
+    python -m tools.bench_pose            (uses your newest stereo recording from MinIO)
+    python -m tools.bench_pose some.mp4   (or any video file)
 Compares the old one-frame-at-a-time path with batched float32 and batched float16."""
 import os, sys, time, tempfile
 import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
-import pose_estimator as pe
-import stereo_process as sp
+from pose import pose_estimator as pe
+from stereo import stereo_process as sp
 
 FRAMES = int(os.environ.get("BENCH_FRAMES", "150"))
 
 def get_video():
     if len(sys.argv) > 1:
         return sys.argv[1]
-    from minio_client import minio_client
+    from core.minio_client import minio_client
     bucket = os.getenv("MINIO_BUCKET", "sport-pose-videos")
     objs = [o for o in minio_client.list_objects(bucket) if o.object_name.startswith("stereo_")]
     newest = max(objs, key=lambda o: o.last_modified)
@@ -31,7 +31,8 @@ left = split[0]
 print(f"split (ffmpeg, both halves): {t_split:.1f} s")
 
 # keep only the first FRAMES frames for the comparison
-import cv2, video_io
+import cv2
+from video import video_io
 short = tempfile.mktemp(suffix=".mp4")
 r = video_io.VideoReader(left); w = None
 for i in range(FRAMES):

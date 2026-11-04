@@ -170,7 +170,7 @@ def heal_and_smooth(result, conf_threshold=0.5, max_gap=30, window_length=7,
               "healed_joints": [int(j) for j in range(NUM_KEYPOINTS) if healed_mask[t, j]] if kp_out else []}
         if recompute_angles and kp_out is not None:
             try:
-                from pose_estimator import calculate_frame_angles
+                from pose.pose_estimator import calculate_frame_angles
                 nf["angles"] = calculate_frame_angles(kp_out)
             except Exception:
                 nf["angles"] = fr.get("angles", {})

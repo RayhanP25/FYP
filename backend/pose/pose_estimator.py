@@ -4,17 +4,17 @@ import time
 import cv2
 import numpy as np
 import math
-import mmcv_ext_shim
+from core import mmcv_ext_shim
 mmcv_ext_shim.install()   # before mmpose/mmdet: lets a venv with mmcv-lite run (RTX 50-series)
 from mmpose.apis import init_model, inference_topdown
 from mmdet.apis import DetInferencer
 
-import progress
-import video_io
+from core import progress
+from core.paths import BACKEND_DIR
+from video import video_io
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_POSE_CONFIG = os.path.join(_HERE, "models", "vitpose_base_512_v2.py")
-_POSE_CKPT   = os.path.join(_HERE, "models", "best_coco_AP_epoch_24.pth")
+_POSE_CONFIG = os.path.join(BACKEND_DIR, "models", "vitpose_base_512_v2.py")
+_POSE_CKPT   = os.path.join(BACKEND_DIR, "models", "best_coco_AP_epoch_24.pth")
 
 
 def _pick_device():
@@ -36,7 +36,7 @@ POSE_SURE_CONF = float(os.environ.get("POSE_SURE_CONF", "0.7"))
 DET_EVERY = int(os.environ.get("POSE_DET_EVERY", "10"))
 # Frames per GPU pass. 1 = the original one-frame-at-a-time path (mmpose inference_topdown).
 POSE_BATCH = int(os.environ.get("POSE_BATCH", "16"))
-# Half precision on the GPU: faster, but check accuracy first (backend/bench_pose.py).
+# Half precision on the GPU: faster, but check accuracy first (backend/tools/bench_pose.py).
 POSE_FP16 = os.environ.get("POSE_FP16", "0") == "1"
 # GPU fast paths (pose_gpu.py); each can be turned off in .env to compare.
 POSE_GPU_DECODE = os.environ.get("POSE_GPU_DECODE", "1") == "1"      # heatmap decoding on the GPU
@@ -91,7 +91,7 @@ def tune_detector(score_thr):
 
 def _setup_gpu_paths():
     global _direct_det
-    import pose_gpu
+    from pose import pose_gpu
     pose_gpu.FLIP_BATCH_ON = POSE_FLIP_BATCH
     if POSE_GPU_DECODE:
         pose_gpu.install_gpu_decoder(_pose_model)
@@ -200,7 +200,7 @@ def _pose_batch(frames, boxes):
     batch = pseudo_collate(data)
     step = _pose_model.test_step
     if _DEVICE.startswith("cuda") and POSE_FLIP_BATCH:
-        import pose_gpu
+        from pose import pose_gpu
         step = lambda b: pose_gpu.fast_test_step(_pose_model, b)
     with torch.no_grad():
         if POSE_FP16 and _DEVICE.startswith("cuda"):
@@ -572,7 +572,7 @@ def heal_and_render(raw_result: dict, video_path: str, output_path: str, heal_kw
     untouched model output stays available for comparison even when the caller edited raw_result
     (stereo swap fixing does)."""
     t_heal = time.perf_counter()
-    from pose_postprocess import heal_and_smooth
+    from pose.pose_postprocess import heal_and_smooth
     kwargs = {"healed_confidence": 0.6}
     if heal_kwargs:
         kwargs.update(heal_kwargs)

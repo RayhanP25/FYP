@@ -10,9 +10,9 @@ import threading
 import time
 from contextlib import contextmanager
 
-import media_cache
-from database import client, database_name
-from minio_client import BUCKET, minio_client
+from video import media_cache
+from core.database import client, database_name
+from core.minio_client import BUCKET, minio_client
 
 
 _busy = 0                     # analyses running now: background uploads wait for them

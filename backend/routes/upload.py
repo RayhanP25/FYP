@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request, Cookie
-from minio_client import BUCKET, minio_client
+from core.minio_client import BUCKET, minio_client
 from datetime import timedelta, datetime
-from database import client, database_name
+from core.database import client, database_name
 from bson import ObjectId
 from pydantic import BaseModel
 import os
@@ -10,15 +10,15 @@ import uuid
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
-import background_upload
-import media_cache
-import progress
-import video_io
+from video import background_upload
+from video import media_cache
+from core import progress
+from video import video_io
 
 MAX_UPLOAD_MB = 100
 from urllib.parse import quote
 from routes.users import get_current_user
-from access import can_access_owner, can_access_video, names, visible_owner_ids
+from core.access import can_access_owner, can_access_video, names, visible_owner_ids
 
 # from database.minio_config import minio_client
 
@@ -411,7 +411,7 @@ def download_full_size(video_id: str, view: str = "left", skeleton: bool = False
                        current_user: dict = Depends(get_current_user)):
     """A camera's video at the size it was recorded (2560 x 1440 for the 2K cameras), with or without the
     skeleton drawn. The analysis page's own videos are smaller (1280 wide) so they load and play quickly."""
-    from pose_estimator import _render_overlay
+    from pose.pose_estimator import _render_overlay
     from routes.edits import apply_to as apply_keypoint_edits
     try:
         video_doc = client[database_name]["videos"].find_one({"_id": ObjectId(video_id)})

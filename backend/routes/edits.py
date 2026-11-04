@@ -15,12 +15,12 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-import calibration_store
-import keypoint_edits
-from access import can_access_analysis
-from database import client, database_name
+from calibration import calibration_store
+from stereo import keypoint_edits
+from core.access import can_access_analysis
+from core.database import client, database_name
 from routes.users import get_current_user
-from triangulate import load_calibration
+from stereo.triangulate import load_calibration
 
 router = APIRouter(prefix="/analysis", tags=["edits"])
 db = client[database_name]
@@ -79,9 +79,9 @@ def apply_to(analysis_doc, result):
     edits = edits_for(analysis_doc["video_id"])
     if not edits or (result or {}).get("mode") != "stereo_3d":
         return result
-    from stereo_process import ANGLE_TRIPLETS
-    from triangulate import angle_3d
-    from pose_estimator import calculate_frame_angles
+    from stereo.stereo_process import ANGLE_TRIPLETS
+    from stereo.triangulate import angle_3d
+    from pose.pose_estimator import calculate_frame_angles
     return keypoint_edits.apply_edits(result, edits, calibration_for(analysis_doc),
                                       ANGLE_TRIPLETS, angle_3d, calculate_frame_angles)
 
@@ -93,7 +93,7 @@ def _sync_videos(video_id, write):
     count = write()
     after = apply_to(full, full.get("result"))
     try:
-        from overlay_sync import sync
+        from video.overlay_sync import sync
         if sync(video_id, before, after):
             db["pose_analysis"].update_one({"video_id": video_id}, {"$set": {"overlay_synced": True}})
     except Exception as ex:                     # the edits are saved; the videos keep their last drawing

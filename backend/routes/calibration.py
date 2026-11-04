@@ -32,8 +32,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-import calibration_store as store
-import stereo_calibrate as sc
+from calibration import calibration_store as store
+from calibration import stereo_calibrate as sc
 from routes.camera import manager, recorder
 from routes.users import get_current_user, require_admin
 

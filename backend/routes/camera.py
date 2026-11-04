@@ -31,13 +31,13 @@ import cv2
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-import background_upload
-import calibration_store
-import media_cache
-import progress
-import video_io
-from database import client, database_name
-from minio_client import BUCKET, minio_client
+from video import background_upload
+from calibration import calibration_store
+from video import media_cache
+from core import progress
+from video import video_io
+from core.database import client, database_name
+from core.minio_client import BUCKET, minio_client
 from pydantic import BaseModel
 
 from routes.users import get_current_user, require_admin
