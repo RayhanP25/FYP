@@ -400,12 +400,16 @@ def run(P, framesL, framesR, calib, errs):
     rig = Rig(calib)
     bones = bone_lengths(P, views, errs)
     before = _spread(P, bones)
-    recovered = recover(P, views, rig, bones)
-    refined = refine(P, views, rig, bones, recovered)
+    # Before/after demos only: POSE_BONE_RECOVER=0 / POSE_BONE_FIT=0 / POSE_BONE_FILL2D=0 switch off one part.
+    use = {k: os.environ.get(f"POSE_BONE_{k}", "1") != "0" for k in ("RECOVER", "FIT", "FILL2D")}
+    if not all(use.values()):
+        print(f"bones: demo settings, parts on: {use}")
+    recovered = recover(P, views, rig, bones) if use["RECOVER"] else {}
+    refined = refine(P, views, rig, bones, recovered) if use["FIT"] else 0
     touched = {t: set(js) for t, js in recovered.items()}
     for t in range(len(P)):                        # healed joints are also re-estimated by the fit
         touched.setdefault(t, set()).update(_healed(framesL, t) | _healed(framesR, t))
-    filled = fill_2d(P, views, rig, touched)
+    filled = fill_2d(P, views, rig, touched) if use["FILL2D"] else 0
     after = _spread(P, bones)
     report = dict(enabled=True, refinement=least_squares is not None,
                   bones={info["name"]: dict(length_mm=round(info["length"], 1), samples=info["samples"],

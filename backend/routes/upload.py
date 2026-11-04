@@ -31,7 +31,11 @@ class NameUpdate(BaseModel):
     original_filename: str
 
 @router.post("/upload-video")
-async def upload_video(video: UploadFile = File(...), job: str = None, current_user: dict = Depends(get_current_user)):
+async def upload_video(video: UploadFile = File(...), job: str = None, two_cameras: bool = False,
+                       current_user: dict = Depends(get_current_user)):
+    """two_cameras: the file shows the left and right camera side by side (e.g. an OBS recording of both
+    cameras). It is split into the two camera views and stored like a system recording (layout "stereo_pair"),
+    so it can be analysed in 3D. Pick the calibration it was filmed with on the analysis page."""
     # Validate file type
     allowed_extensions = {"mp4", "mov", "avi"}
     file_ext = video.filename.split(".")[-1].lower()
@@ -48,7 +52,7 @@ async def upload_video(video: UploadFile = File(...), job: str = None, current_u
     if video.size and video.size > max_size:
         raise too_big
     if job:                                   # the page polls GET /api/progress/<job>
-        progress.start(job, ["Converting the video"])
+        progress.start(job, ["Splitting the two cameras" if two_cameras else "Converting the video"])
     
     # Every upload is stored as a browser-ready H.264 MP4: MOV and AVI files (and MP4s in other codecs,
     # e.g. iPhone HEVC) don't play in Chrome / Edge, so they are converted here first.
@@ -63,6 +67,8 @@ async def upload_video(video: UploadFile = File(...), job: str = None, current_u
                 if received > max_size:
                     raise too_big
                 f.write(chunk)
+        if two_cameras:
+            return await _store_side_by_side(src, video.filename, job, current_user)
         progress.stage("Converting the video", key=job)
         try:
             converted = await run_in_threadpool(video_io.to_browser_mp4, src, dst)
@@ -112,6 +118,63 @@ async def upload_video(video: UploadFile = File(...), job: str = None, current_u
     progress.finish(job)
     
     return {"object_name": object_name, "video_id": str(video_doc["_id"])}
+
+async def _store_side_by_side(src, filename, job, current_user):
+    """Split a side-by-side two-camera video and store it like a camera recording (see routes/camera.py)."""
+    import cv2
+    progress.stage("Splitting the two cameras", key=job)
+    cap = cv2.VideoCapture(src)
+    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    cap.release()
+    if W <= 0 or H <= 0 or W < 1.5 * H:
+        raise HTTPException(status_code=400, detail=(
+            f"This video is {W} x {H}. A two-camera video has the left and right camera side by side, "
+            f"so it is about twice as wide as it is tall. Untick 'Two cameras side by side' to upload it as one camera."))
+    from stereo.stereo_process import _split_ffmpeg
+    split = await run_in_threadpool(_split_ffmpeg, src, 10 ** 6)          # full size, browser-ready H.264
+    if not split:
+        raise HTTPException(status_code=500, detail="Could not split the video into the two camera views.")
+    lp, rp, fps = split
+    base = uuid.uuid4()
+    object_name, object_name_right = f"stereo_{base}_L.mp4", f"stereo_{base}_R.mp4"
+    sizes = [os.path.getsize(lp), os.path.getsize(rp)]
+    cached = [media_cache.put(object_name, lp, move=True), media_cache.put(object_name_right, rp, move=True)]
+    if None in cached:                          # no local copy possible: upload now, before answering
+        try:
+            for name, c, tmp in zip((object_name, object_name_right), cached, (lp, rp)):
+                minio_client.fput_object(BUCKET, name, c or tmp, content_type="video/mp4", part_size=10 * 1024 * 1024)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            for tmp in (lp, rp):
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+    doc = {
+        "user_id": str(current_user["_id"]),
+        "bucket_name": BUCKET,
+        "object_name": object_name,
+        "original_filename": os.path.splitext(filename)[0] + ".mp4",
+        "content_type": "video/mp4",
+        "file_size": sum(sizes),
+        "uploaded_at": datetime.now(),
+        "uploaded_from": filename,
+        "source": "stereo_camera",             # analysed in 3D like a camera recording
+        "layout": "stereo_pair",               # object_name = left camera, object_name_right = right camera
+        "object_name_right": object_name_right,
+        "uploaded_side_by_side": True,          # split from one side-by-side file, not recorded in the system
+        "recorded_by": str(current_user["_id"]),
+        "uploading": None not in cached,
+        "fps": fps,
+        "frames": frames,
+    }
+    result = client[database_name]["videos"].insert_one(doc)
+    if None not in cached:
+        background_upload.send(result.inserted_id, [(object_name, cached[0]), (object_name_right, cached[1])])
+    progress.finish(job)
+    return {"object_name": object_name, "video_id": str(result.inserted_id)}
+
 
 def _people(ids):
     """{user id: (full name, role)}; ids of deleted accounts map to ("Deleted user", None)."""

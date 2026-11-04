@@ -174,6 +174,41 @@ def _split_to_temp(input_path, target_w):
 PARALLEL_VIEWS = os.environ.get("POSE_PARALLEL_VIEWS", "1") == "1"
 
 
+def _stereo_heal_kwargs():
+    """Before/after demos only: POSE_GAP_FILL=0 (no gap filling), POSE_SMOOTH=0 (no smoothing). Default: both on."""
+    kw = {}
+    if os.environ.get("POSE_GAP_FILL", "1") == "0":
+        kw["max_gap"] = 0
+    if os.environ.get("POSE_SMOOTH", "1") == "0":
+        kw["window_length"] = 100001             # every stretch is shorter than this -> left unsmoothed
+    if kw:
+        print(f"stereo: demo settings {kw} (POSE_GAP_FILL / POSE_SMOOTH)")
+    return kw or None
+
+
+def _swap_check():
+    """The left/right swap check to use. POSE_SWAP_CHECK (read on every analysis):
+       anatomical (default) = stereo_refine.fix_swaps, today's check
+       oct22                = the check as it was on 22 Oct (_debug/abl/stereo_refine_22oct.py), for before/after demos
+       off                  = no swap check
+    Falls back to anatomical when the 22 Oct file is not on this computer."""
+    mode = os.environ.get("POSE_SWAP_CHECK", "anatomical").strip().lower()
+    if mode == "off":
+        print("stereo: POSE_SWAP_CHECK=off -- no left/right swap check")
+        return None
+    if mode == "oct22":
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "_debug", "abl", "stereo_refine_22oct.py")
+        if os.path.exists(path):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("stereo_refine_22oct", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            print("stereo: POSE_SWAP_CHECK=oct22 -- using the 22 Oct swap check (demo only)")
+            return mod.fix_swaps
+        print(f"stereo: POSE_SWAP_CHECK=oct22 but {path} is missing -- using the anatomical check")
+    return fix_swaps
+
+
 def _infer_both(lp, rp):
     """The AI on both camera views. By default the two run at the same time (each prepares its frames on the
     CPU while the other uses the GPU); POSE_PARALLEL_VIEWS=0, or any error, runs them one after the other."""
@@ -240,7 +275,9 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
 
         # 2. Cross-check the views: put left/right labels back where one camera mixed them up.
         #    Done on the RAW keypoints so healing/smoothing below runs on consistent tracks.
-        swap_report = fix_swaps(rawL["frames"], rawR["frames"], calib)
+        swap_fn = _swap_check()
+        swap_report = swap_fn(rawL["frames"], rawR["frames"], calib) if swap_fn else \
+            {"per_frame": [dict(left=[], right=[]) for _ in range(min(len(rawL["frames"]), len(rawR["frames"])))]}
         for res in (rawL, rawR):
             for f in res["frames"]:
                 if f.get("keypoints"):
@@ -248,8 +285,9 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
         t_swaps = time.perf_counter()
 
         # 3. Heal each view (fills short occlusions). Overlays are drawn after step 6.
-        resL = heal_and_render(rawL, lp, output_path, raw_keypoints=origL, render=False)
-        resR = heal_and_render(rawR, rp, roTmp, render=False)
+        heal_kw = _stereo_heal_kwargs()
+        resL = heal_and_render(rawL, lp, output_path, heal_kwargs=heal_kw, raw_keypoints=origL, render=False)
+        resR = heal_and_render(rawR, rp, roTmp, heal_kwargs=heal_kw, render=False)
         t_heal_done = time.perf_counter()
 
         framesL = resL.get("frames", [])

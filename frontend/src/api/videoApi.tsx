@@ -62,13 +62,14 @@ export const recordedByText = (v: { recorded_by_name?: string | null; recorded_b
     v.recorded_by_name ? `${v.recorded_by_name}${v.recorded_by_role ? ` (${ROLE_LABEL[v.recorded_by_role] ?? v.recorded_by_role})` : ''}` : 'Unknown';
 
 /** onProgress: 0-1 while the file is being sent. job: progress key for what the server does after that. */
-export const uploadVideo = async (formData: FormData, onProgress?: (fraction: number) => void, job?: string): Promise<VideoUploadResponse> => {
+export const uploadVideo = async (formData: FormData, onProgress?: (fraction: number) => void, job?: string,
+    twoCameras = false): Promise<VideoUploadResponse> => {
     try {
         const response = await api.post('/api/upload-video', formData, {
             headers: {
                 'Content-Type': 'multipart/form-data',
             },
-            params: job ? { job } : undefined,
+            params: { ...(job ? { job } : {}), ...(twoCameras ? { two_cameras: true } : {}) },
             onUploadProgress: (e) => { if (onProgress && e.total) onProgress(e.loaded / e.total); },
         });
         return response.data;

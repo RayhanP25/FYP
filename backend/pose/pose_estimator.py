@@ -51,6 +51,12 @@ POSE_FLIP_TEST = os.environ.get("POSE_FLIP_TEST", "1") == "1"
 # image. We only use the best person above 0.3 (_person_box), and greedy NMS never lets a box below
 # 0.3 suppress one above it, so dropping those first returns the same box much faster. 0 = default.
 DET_SCORE_THR = float(os.environ.get("POSE_DET_SCORE_THR", "0.3"))
+# Before/after demos only (defaults = the normal system):
+#   POSE_MODEL=mediapipe  run the old MediaPipe model instead of ViTPose (needs mediapipe in the venv)
+#   POSE_DETECTOR=0       no person detector: the AI looks at the whole frame
+POSE_MODEL = os.environ.get("POSE_MODEL", "vitpose").strip().lower()
+POSE_DETECTOR = os.environ.get("POSE_DETECTOR", "1") != "0"
+MEDIAPIPE_TASK = os.environ.get("POSE_MEDIAPIPE_TASK", os.path.join(BACKEND_DIR, "models", "pose_landmarker_heavy.task"))
 _direct_det = None
 _pose_model = None
 _detector = None
@@ -105,8 +111,15 @@ def _setup_gpu_paths():
             _direct_det = None
 
 
+def _whole_frame(frame_bgr):
+    h, w = frame_bgr.shape[:2]
+    return np.array([[0, 0, w, h]], dtype=float)
+
+
 def _detect_person(frame_bgr):
     """Return one xyxy person box; fall back to the full frame if none found."""
+    if not POSE_DETECTOR:
+        return _whole_frame(frame_bgr)
     o = _detector(frame_bgr, return_datasamples=True, no_save_vis=True)["predictions"][0].pred_instances
     return _person_box(o, frame_bgr)
 
@@ -114,6 +127,8 @@ def _detect_person(frame_bgr):
 def _detect_people(frames):
     """Batched _detect_person: one detector pass for several frames."""
     global _direct_det
+    if not POSE_DETECTOR:
+        return [_whole_frame(f) for f in frames]
     if _direct_det is not None and POSE_FAST_DET:
         try:
             boxes = [_person_box(p.pred_instances, f) for p, f in zip(_direct_det(frames), frames)]
@@ -346,9 +361,55 @@ def draw_keypoints_on_frame(frame, keypoints, color_line=(0, 255, 0), color_pt=(
     return frame
 
 
+# MediaPipe's 33 landmarks -> our 18 keypoints (neck = midpoint of the shoulders, finger = index, toe = foot index)
+_MP_MAP = {0: 0, 2: 11, 3: 12, 4: 13, 5: 14, 6: 15, 7: 16, 8: 19, 9: 20,
+           10: 23, 11: 24, 12: 25, 13: 26, 14: 27, 15: 28, 16: 31, 17: 32}
+
+
+def _run_mediapipe(video_path: str) -> dict:
+    """POSE_MODEL=mediapipe: the old model, same output structure as _run_inference."""
+    import mediapipe as mp
+    from mediapipe.tasks import python as mpp
+    from mediapipe.tasks.python import vision
+    print(f"pose: POSE_MODEL=mediapipe -- running MediaPipe ({MEDIAPIPE_TASK}) instead of ViTPose (demo only)")
+    lm = vision.PoseLandmarker.create_from_options(vision.PoseLandmarkerOptions(
+        base_options=mpp.BaseOptions(model_asset_path=MEDIAPIPE_TASK),
+        running_mode=vision.RunningMode.VIDEO, num_poses=1))
+    cap = video_io.VideoReader(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open video: {video_path}")
+    fps = _capture_fps(cap)
+    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    progress.add_total(int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0))
+    frames, t0 = [], time.perf_counter()
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        i = len(frames)
+        res = lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB,
+                                           data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)), int(i * 1000 / fps))
+        kp = None
+        if res.pose_landmarks:
+            L = res.pose_landmarks[0]
+            vis = lambda m: float(getattr(L[m], "visibility", 1.0) or 0.0)
+            kp = [None] * 18
+            for j, m in _MP_MAP.items():
+                kp[j] = [float(L[m].x), float(L[m].y), vis(m)]
+            kp[1] = [float(L[11].x + L[12].x) / 2, float(L[11].y + L[12].y) / 2, min(vis(11), vis(12))]
+        frames.append({"frame_index": i, "keypoints": kp, "angles": calculate_frame_angles(kp) if kp else {}})
+        progress.add(1)
+    cap.release()
+    lm.close()
+    return {"fps": fps, "total_frames": len(frames), "video_width": W, "video_height": H, "frames": frames,
+            "timing": {"pose_seconds": round(time.perf_counter() - t0, 2), "model": "mediapipe", "device": "cpu"}}
+
+
 def _run_inference(video_path: str) -> dict:
     """Run ViTPose per frame; returns the SAME structure MediaPipe did:
        18 keypoints as [x, y, conf], x/y normalised 0-1, project keypoint order."""
+    if POSE_MODEL == "mediapipe":
+        return _run_mediapipe(video_path)
     _load_models()
 
     cap = video_io.VideoReader(video_path)

@@ -18,6 +18,7 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
     const [job, setJob] = useState<string | null>(null);
     const serverProgress = useJobProgress(job);
     const [dragging, setDragging] = useState(false);
+    const [twoCameras, setTwoCameras] = useState(false);   // left and right camera side by side in one file
     const fileInputRef = useRef<HTMLInputElement>(null);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -59,7 +60,7 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
         formData.append('video', selectedFile);
 
         try {
-            const response = await uploadVideo(formData, setSent, key);
+            const response = await uploadVideo(formData, setSent, key, twoCameras);
             toast.success('Video uploaded.');
             setSelectedFile(null);
             if (fileInputRef.current) {
@@ -114,13 +115,20 @@ const VideoUpload = ({ onUploadSuccess }: VideoUploadProps) => {
                         </p>
                     </div>
                 )}
+                <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+                    <input type="checkbox" checked={twoCameras} disabled={isUploading}
+                        onChange={(e) => setTwoCameras(e.target.checked)} />
+                    Two cameras side by side (left | right), e.g. an OBS recording of both cameras
+                </label>
             </div>
             {isUploading ? (
                 <div className="w-full">
                     {sent < 1
                         ? <JobProgress title="Uploading the video" job={null} fallbackStage="Sending the file" fraction={sent} />
-                        : <JobProgress title="Uploading the video" job={serverProgress} fallbackStage="Converting the video"
-                            note="MOV and AVI videos are converted to MP4 so every browser can play them." />}
+                        : <JobProgress title="Uploading the video" job={serverProgress}
+                            fallbackStage={twoCameras ? "Splitting the two cameras" : "Converting the video"}
+                            note={twoCameras ? "The video is split into the left and right camera so it can be analysed in 3D."
+                                : "MOV and AVI videos are converted to MP4 so every browser can play them."} />}
                 </div>
             ) : (
                 <Button onClick={handleUpload} disabled={!selectedFile}>Upload Video</Button>
