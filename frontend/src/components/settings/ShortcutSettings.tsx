@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Pencil, RotateCcw, Search } from 'lucide-react';
-import { SHORTCUTS, SHORTCUT_GROUPS, groupOf, type ShortcutId } from '@/shortcuts/registry';
+import { SHORTCUTS, SHORTCUT_GROUPS, allowedFor, groupOf, type ShortcutGroup, type ShortcutId } from '@/shortcuts/registry';
 import { bindingOf, useShortcutSettings } from '@/shortcuts/store';
 import { comboOf, formatBinding, RESERVED } from '@/shortcuts/keys';
+import { useAuth } from '@/hooks/useAuth';
 import Toggle from '@/components/ui/toggle';
 
 const MAX_STEPS = 2;
@@ -10,16 +11,18 @@ const MAX_STEPS = 2;
 const overlaps = (existing: string | null, binding: string) =>
     existing !== null && (existing === binding || existing.startsWith(`${binding} `) || binding.startsWith(`${existing} `));
 
-const conflictOf = (id: ShortcutId, binding: string): string | null => {
+const conflictOf = (id: ShortcutId, binding: string, list: readonly { id: ShortcutId; group: ShortcutGroup; label: string }[]): string | null => {
     if (binding.split(' ').some((step) => RESERVED.has(step))) return 'The browser uses one of these keys.';
     const group = groupOf(id);
-    const other = SHORTCUTS.find((s) => s.id !== id
+    const other = list.find((s) => s.id !== id
         && overlaps(bindingOf(s.id), binding)
         && (s.group === group || s.group === 'Global' || group === 'Global'));
     return other ? `Already used by "${other.label}".` : null;
 };
 
 const ShortcutSettings = () => {
+    const role = useAuth().user?.role;
+    const visible = SHORTCUTS.filter((s) => allowedFor(s.id, role));
     const enabled = useShortcutSettings((s) => s.enabled);
     const custom = useShortcutSettings((s) => s.custom);
     const setEnabled = useShortcutSettings((s) => s.setEnabled);
@@ -53,7 +56,7 @@ const ShortcutSettings = () => {
 
     const save = (id: ShortcutId) => {
         const binding = draft.join(' ');
-        const message = conflictOf(id, binding);
+        const message = conflictOf(id, binding, visible);
         if (message) { setError({ id, message }); return; }
         setBinding(id, binding);
         stopCapture();
@@ -93,7 +96,7 @@ const ShortcutSettings = () => {
 
             <div className={`flex flex-col gap-4 transition-opacity ${enabled ? '' : 'opacity-50'}`}>
                 {SHORTCUT_GROUPS.map((group) => {
-                    const items = SHORTCUTS.filter((s) => s.group === group && matches(s));
+                    const items = visible.filter((s) => s.group === group && matches(s));
                     if (!items.length) return null;
                     return (
                         <div key={group} className="overflow-hidden rounded-xl border border-border bg-background-main">
@@ -154,7 +157,7 @@ const ShortcutSettings = () => {
                         </div>
                     );
                 })}
-                {!SHORTCUTS.some(matches) && <p className="py-10 text-center text-sm text-text-muted">No shortcuts match "{query.trim()}".</p>}
+                {!visible.some(matches) && <p className="py-10 text-center text-sm text-text-muted">No shortcuts match "{query.trim()}".</p>}
             </div>
         </div>
     );
