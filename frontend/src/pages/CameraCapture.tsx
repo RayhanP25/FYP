@@ -5,7 +5,6 @@ import { Camera, VideoOff, Video, StopCircle, Settings2 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import AppLayout from '../layout/AppLayout';
 import { useShortcut } from '@/shortcuts/useShortcut';
-import { useAuth } from '@/hooks/useAuth';
 import CameraSetupDialog from '@/components/camera/CameraSetupDialog';
 import { JobProgressOverlay, newJobKey, useJobProgress } from '@/components/ui/JobProgress';
 
@@ -20,7 +19,6 @@ export default function CameraCapture() {
     const [camerasOpen, setCamerasOpen] = useState(false);
     const [saveJob, setSaveJob] = useState<string | null>(null);   // set while a recording is being saved
     const saveProgress = useJobProgress(saveJob);
-    const { user } = useAuth();
 
     const backendUrl = api.defaults.baseURL || 'http://localhost:8000';
 
@@ -142,15 +140,13 @@ export default function CameraCapture() {
                     </div>
 
                     <div className="flex gap-3">
-                        {user?.role === 'admin' && (
-                            <button
+                        <button
                                 onClick={() => setCamerasOpen(true)}
                                 title="Choose which camera is left and which is right"
                                 className="flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all h-fit whitespace-nowrap text-sm font-medium border border-border bg-background-main text-text hover:bg-background"
                             >
                                 <Settings2 className="w-4 h-4" /> Cameras
-                            </button>
-                        )}
+                        </button>
                         {isStreaming && (
                             <button
                                 onClick={isRecording ? handleStopRecording : handleStartRecording}

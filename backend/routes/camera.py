@@ -40,7 +40,7 @@ from core.database import client, database_name
 from core.minio_client import BUCKET, minio_client
 from pydantic import BaseModel
 
-from routes.users import get_current_user, require_admin
+from routes.users import get_current_user
 
 router = APIRouter(prefix="/camera", tags=["camera"])
 
@@ -416,7 +416,7 @@ def get_settings(current_user: dict = Depends(get_current_user)):
 
 
 @router.put("/settings")
-def put_settings(body: CameraSettings, current_user: dict = Depends(require_admin)):
+def put_settings(body: CameraSettings, current_user: dict = Depends(get_current_user)):
     global LEFT_INDEX, RIGHT_INDEX
     if body.left == body.right:
         raise HTTPException(status_code=422, detail="Left and right must be different cameras.")
@@ -434,7 +434,7 @@ _scan_lock = threading.Lock()
 
 
 @router.post("/devices/scan")
-def scan_devices(current_user: dict = Depends(require_admin)):
+def scan_devices(current_user: dict = Depends(get_current_user)):
     """Open every camera index once: what size it really delivers, and a small snapshot to tell them apart."""
     if not _scan_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="A scan is already running.")
@@ -584,4 +584,4 @@ def stop_recording(job: str = None, current_user: dict = Depends(get_current_use
     return {"status": "saved", "video_id": str(result.inserted_id),
             "object_name": object_name, "frames": frames,
             "dup_frames": dup_frames, "real_fps": real_fps,
-            "dropped_frames": recorder.dropped, "encoder": recorder.encoder}
+            "dropped_frames": recorder.dropped, "encoder": recorder.encoder}
