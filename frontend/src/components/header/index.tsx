@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Settings, Menu } from 'lucide-react';
+import { BookOpen, Settings, Menu } from 'lucide-react';
 
 const Header = () => {
   const location = useLocation();
@@ -15,6 +15,7 @@ const Header = () => {
     '/groups': 'Groups',
     '/calibration': 'Calibration',
     '/settings': 'Settings',
+    '/user-manual': 'User manual',
   };
 
   const getBreadcrumb = () => BREADCRUMB_MAP[Object.keys(BREADCRUMB_MAP).find((p) => location.pathname === p || location.pathname.startsWith(p + '/')) ?? ''] || 'Dashboard';
@@ -32,6 +33,10 @@ const Header = () => {
         </div>
 
         <div className="flex items-center gap-4">
+          <button className="inline-flex items-center gap-2 px-3 py-2 text-sm text-text-muted hover:text-text hover:bg-background rounded-lg transition-colors" onClick={() => navigate('/user-manual')} title="User manual">
+            <BookOpen className="w-5 h-5" />
+            User manual
+          </button>
           <button className="p-2 text-text-muted hover:text-text hover:bg-background rounded-lg transition-colors" onClick={() => navigate('/settings')} title="Settings">
             <Settings className="w-5 h-5" />
           </button>
