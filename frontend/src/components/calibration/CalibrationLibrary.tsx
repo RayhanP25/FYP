@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
-import { Check, Filter, Pencil, Search, Trash2, X } from 'lucide-react';
+import { Check, Pencil, Search, Trash2, X } from 'lucide-react';
 import {
     activateCalibration,
     deleteCalibration,
@@ -129,16 +129,14 @@ const Row = ({ entry, disabled }: { entry: CalibrationEntry; disabled: boolean }
 const CalibrationLibrary = ({ disabled, action }: CalibrationLibraryProps) => {
     const { data, isLoading, isError } = useQuery({ queryKey: ['calibration-library'], queryFn: getCalibrationLibrary });
     const [search, setSearch] = useState('');
-    const [setupFilter, setSetupFilter] = useState('all');
 
     const entries = useMemo(() => {
         const q = search.trim().toLowerCase();
         return (data?.entries ?? [])
-            .filter((e) => setupFilter === 'all' || e.setup === setupFilter)
             .filter((e) => !q || e.setup.toLowerCase().includes(q) || formatDate(e).toLowerCase().includes(q))
             // The one in use first, then newest first (as the backend sends them).
             .sort((a, b) => Number(b.active) - Number(a.active));
-    }, [data, search, setupFilter]);
+    }, [data, search]);
 
     return (
         <section className="h-full min-h-0 flex flex-col rounded-xl border border-border bg-background p-5">
@@ -154,17 +152,6 @@ const CalibrationLibrary = ({ disabled, action }: CalibrationLibraryProps) => {
                             onChange={(e) => setSearch(e.target.value)}
                             className="w-56 pl-10 pr-4 py-2 border border-border rounded-lg bg-background-main text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                         />
-                    </div>
-                    <div className="relative">
-                        <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
-                        <select
-                            value={setupFilter}
-                            onChange={(e) => setSetupFilter(e.target.value)}
-                            className="pl-10 pr-8 py-2 border border-border rounded-lg bg-background-main text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 appearance-none"
-                        >
-                            <option value="all">All setups</option>
-                            {data?.setups.map((s) => <option key={s} value={s}>{s}</option>)}
-                        </select>
                     </div>
                 </div>
             </div>
