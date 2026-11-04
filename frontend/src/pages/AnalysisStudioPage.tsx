@@ -122,8 +122,6 @@ const AnalysisStudioPage = () => {
         if (name && name !== baseName(meta?.original_filename || '')) rename.mutate(name);
     };
     const downloadVideo = async (view: DownloadView, variant: DownloadVariant) => {
-        // Camera recordings: at the size they were recorded (the page's own videos are smaller so they play
-        // smoothly). Uploads are already stored at their own size.
         if (meta?.source === 'stereo_camera' || hasRight) {
             const key = newJobKey('download');
             setDownloadSent(null);
@@ -164,7 +162,7 @@ const AnalysisStudioPage = () => {
     });
     const query = assignSearch.trim().toLowerCase();
     const assignees = (user?.role === 'admin'
-        ? [...(groups?.coaches ?? []), ...athletesInGroups(groups), ...(groups?.unassigned ?? [])]
+        ? [...(groups?.admins ?? []), ...(groups?.coaches ?? []), ...athletesInGroups(groups), ...(groups?.unassigned ?? [])]
         : athletesInGroups(groups)
     ).filter((p) => `${p.full_name} ${p.email}`.toLowerCase().includes(query));
     const pendingCount = Object.keys(pending).length;

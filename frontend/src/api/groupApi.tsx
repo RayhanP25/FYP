@@ -34,6 +34,7 @@ export interface GroupsResponse {
     coaches: CoachGroups[];
     unassigned: GroupAthlete[];
     candidates: GroupAthlete[];
+    admins: GroupAthlete[];
 }
 
 async function call<T>(request: Promise<AxiosResponse<T>>, fallback: string): Promise<T> {

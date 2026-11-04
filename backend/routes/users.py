@@ -232,7 +232,8 @@ def get_groups(current_user: dict = Depends(get_current_user)):
     return dict(
         coaches=[dict(id=str(c["_id"]), full_name=c.get("full_name"), email=c.get("email"),
                       groups=by_coach.get(str(c["_id"]), [])) for c in coaches],
-        unassigned=unassigned, candidates=candidates)
+        unassigned=unassigned, candidates=candidates,
+        admins=[_athlete_row(a) for a in db["users"].find({"role": "admin"}).sort("full_name", 1)] if current_user.get("role") == "admin" else [])
 
 @router.post("/groups")
 def create_group(body: GroupIn, current_user: dict = Depends(get_current_user)):
