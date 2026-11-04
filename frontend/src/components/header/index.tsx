@@ -18,6 +18,19 @@ const Header = () => {
     '/user-manual': 'User manual',
   };
 
+  // the User manual button opens the manual at the section for the page you are on
+  const MANUAL_SECTION: Record<string, string> = {
+    '/home': 'start-here',
+    '/video-test': 'videos',
+    '/camera-capture': 'camera',
+    '/kinematic-analysis': 'analysis',
+    '/analysis': 'analysis',
+    '/groups': 'groups',
+    '/calibration': 'calibration',
+    '/settings': 'getting-around',
+  };
+  const manualSection = MANUAL_SECTION[Object.keys(MANUAL_SECTION).find((p) => location.pathname === p || location.pathname.startsWith(p + '/')) ?? ''];
+
   const getBreadcrumb = () => BREADCRUMB_MAP[Object.keys(BREADCRUMB_MAP).find((p) => location.pathname === p || location.pathname.startsWith(p + '/')) ?? ''] || 'Dashboard';
 
   return (
@@ -33,7 +46,7 @@ const Header = () => {
         </div>
 
         <div className="flex items-center gap-4">
-          <button className="inline-flex items-center gap-2 px-3 py-2 text-sm text-text-muted hover:text-text hover:bg-background rounded-lg transition-colors" onClick={() => navigate('/user-manual')} title="User manual">
+          <button className="inline-flex items-center gap-2 px-3 py-2 text-sm text-text-muted hover:text-text hover:bg-background rounded-lg transition-colors" onClick={() => navigate(manualSection ? `/user-manual#${manualSection}` : '/user-manual')} title="Help for this page">
             <BookOpen className="w-5 h-5" />
             User manual
           </button>

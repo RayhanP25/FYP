@@ -1,11 +1,11 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronDown } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { ChevronDown, ChevronLeft, ChevronRight, Maximize2, Search, X } from 'lucide-react';
 import AppLayout from '@/layout/AppLayout';
 import { useAuth } from '@/hooks/useAuth';
 
 type Role = 'admin' | 'coach' | 'athlete';
-type Block = { title: string; text: string; gif: string; steps?: string[]; link?: { label: string; to: string }; roles?: Role[] };
+type Block = { title: string; text: string; gif: string; clip?: string; steps?: string[]; link?: { label: string; to: string }; roles?: Role[] };
 type Page = { id: string; title: string; intro: string; introByRole?: Partial<Record<Role, string>>; blocks: Block[]; roles?: Role[] };
 
 const ADMIN: Role[] = ['admin'];
@@ -22,7 +22,7 @@ const PAGES: Page[] = [
             {
                 title: 'Plug in and check both cameras',
                 text: 'Recording in 3D needs both USB cameras. Check that both are working before you record.',
-                gif: 'Opening Camera, clicking Start Live Feed, and both pictures appearing.',
+                clip: 'camera/starting-the-live-feed', gif: 'Opening Camera, clicking Start Live Feed, and both pictures appearing.',
                 steps: ['Plug both USB cameras into the computer.', 'Open Camera in the menu.', 'Admins only: click Cameras and choose which camera is the left one and which is the right one. You only need to do this once.', 'Click Start Live Feed. A picture from both cameras should appear.', 'If a picture is missing, close any other program that is using the cameras, then click Start Live Feed again.'],
             },
             {
@@ -36,7 +36,7 @@ const PAGES: Page[] = [
                 title: 'Calibrate the cameras',
                 roles: ADMIN,
                 text: 'Calibration tells SportPose how the two cameras are placed. Do this once per camera setup, in a clear, well-lit space where the athlete will stand.',
-                gif: 'Holding the board in both views, pressing Capture, and the pair count going up.',
+                clip: 'calibration/capturing-pairs', gif: 'Holding the board in both views, pressing Capture, and the pair count going up.',
                 steps: [
                     'Open Calibration in the menu.',
                     'Type a setup name in the box, for example the room or the rig name, then click New calibration. The camera preview opens.',
@@ -54,13 +54,13 @@ const PAGES: Page[] = [
             {
                 title: 'Record a movement',
                 text: 'Only record once the cameras have been calibrated.',
-                gif: 'Clicking Record Video, the athlete moving, then clicking Stop & Save.',
+                clip: 'camera/recording', gif: 'Clicking Record Video, the athlete moving, then clicking Stop & Save.',
                 steps: ['Open Camera and click Start Live Feed.', 'Ask the athlete to stand where both cameras can see them.', 'Click Record Video. The athlete starts the movement.', 'Click Stop & Save when the movement is finished. Wait for Saving the recording to finish. The recording then opens in Analysis.'],
             },
             {
                 title: 'Analyse the recording',
                 text: 'Analysis finds the body in every frame and builds the results: the skeleton on the video, the 3D view and the graphs.',
-                gif: 'Opening the recording, clicking Analyse video, and the results appearing.',
+                clip: 'analysis/starting-an-analysis', gif: 'Opening the recording, clicking Analyse video, and the results appearing.',
                 steps: ['Open Analysis in the menu and click your recording.', 'Click Analyse video and wait for the progress bar to finish.', 'Read the results. The Analysis section of this guide explains each part.'],
             },
             {
@@ -149,21 +149,183 @@ const PAGES: Page[] = [
     },
 ];
 
+// Clip for each item: public/manual/<page id>/<title in lower case, words joined by ->.mp4,
+// or the path in `clip` when an item reuses another item's clip. No file yet -> the placeholder.
+const clipSrc = (pageId: string, b: Block) =>
+    `${import.meta.env.BASE_URL}manual/${b.clip ?? `${pageId}/${b.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`}.mp4`;
+
+const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+// A clip on the page. It only plays while it is on screen (and not while another clip is enlarged),
+// keeps the shape of the recording, and opens the enlarged view when clicked.
+const ManualClip = ({ src, show, active, onOpen, onMissing }: { src: string; show: string; active: boolean; onOpen: () => void; onMissing: () => void }) => {
+    const ref = useRef<HTMLVideoElement>(null);
+    const [missing, setMissing] = useState(false);
+    const [visible, setVisible] = useState(false);
+    useEffect(() => {
+        const v = ref.current;
+        if (!v) return;
+        const io = new IntersectionObserver(([e]) => setVisible(e.isIntersecting), { threshold: 0.25 });
+        io.observe(v);
+        return () => io.disconnect();
+    }, [missing]);
+    useEffect(() => {
+        const v = ref.current;
+        if (!v) return;
+        if (visible && active && !reducedMotion()) v.play().catch(() => {});
+        else v.pause();
+    }, [visible, active]);
+    if (missing) return <GifPlaceholder show={show} />;
+    return (
+        <button
+            type="button"
+            onClick={onOpen}
+            title="Click to enlarge"
+            className="group relative block w-full cursor-zoom-in overflow-hidden rounded-lg border border-border bg-background-main text-left"
+        >
+            <video
+                ref={ref}
+                src={src}
+                loop
+                muted
+                playsInline
+                preload="metadata"
+                aria-label={show}
+                onError={() => { setMissing(true); onMissing(); }}
+                className="block h-auto w-full"
+            />
+            <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md bg-black/60 px-2 py-1 text-xs text-white opacity-80 transition-opacity group-hover:opacity-100">
+                <Maximize2 size={12} /> Enlarge
+            </span>
+        </button>
+    );
+};
+
+// The guidance text for an item, on the page and next to the enlarged clip.
+const BlockText = ({ b }: { b: Block }) => (
+    <div>
+        <p className="text-[15px] leading-relaxed text-text-secondary">{b.text}</p>
+        {b.steps && (
+            <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-[15px] leading-relaxed text-text-secondary">
+                {b.steps.map((s) => <li key={s}>{s}</li>)}
+            </ol>
+        )}
+        {b.link && (
+            <Link to={b.link.to} className="mt-3 inline-flex h-9 items-center rounded-lg border border-border bg-background-main px-3 text-sm text-text transition-colors hover:bg-background">
+                {b.link.label}
+            </Link>
+        )}
+    </div>
+);
+
+const StepBadge = ({ step }: { step?: { n: number; of: number } }) =>
+    step ? <span className="mb-1 block text-xs font-medium uppercase tracking-[0.14em] text-primary">Step {step.n} of {step.of}</span> : null;
+
+type Item = { src: string; b: Block; section: string; step?: { n: number; of: number } };
+
+// Enlarged clip with its guidance text. Previous / Next (or the arrow keys) go through the clips in order.
+// Closes with Esc, the cross, or a click outside.
+const ClipViewer = ({ items, index, onIndex, onClose }: { items: Item[]; index: number; onIndex: (i: number) => void; onClose: () => void }) => {
+    const it = items[index];
+    const prev = index > 0 ? () => onIndex(index - 1) : undefined;
+    const next = index < items.length - 1 ? () => onIndex(index + 1) : undefined;
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') onClose();
+            else if (e.key === 'ArrowLeft' && index > 0) onIndex(index - 1);
+            else if (e.key === 'ArrowRight' && index < items.length - 1) onIndex(index + 1);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose, onIndex, index, items.length]);
+    if (!it) return null;
+    const nav = 'inline-flex h-9 items-center gap-1 rounded-lg border border-border bg-background-main px-3 text-sm text-text transition-colors hover:bg-background disabled:cursor-default disabled:opacity-40';
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 sm:p-8" onClick={onClose} role="dialog" aria-modal="true" aria-label={it.b.title}>
+            <div className="relative flex max-h-full w-full max-w-7xl flex-col gap-4 overflow-auto rounded-xl border border-border bg-background p-4 sm:p-6 xl:flex-row" onClick={(e) => e.stopPropagation()}>
+                <video key={it.src} src={it.src} autoPlay loop muted playsInline controls aria-label={it.b.gif} className="w-full min-w-0 self-start rounded-lg bg-black object-contain xl:max-h-[80vh] xl:flex-[3]" />
+                <div className="flex min-w-0 flex-col gap-4 xl:flex-1 xl:pt-8">
+                    <div>
+                        <p className="mb-1 text-xs text-text-muted">{it.section} · {index + 1} of {items.length}</p>
+                        <StepBadge step={it.step} />
+                        <h3 className="text-lg font-semibold text-text">{it.b.title}</h3>
+                    </div>
+                    <BlockText b={it.b} />
+                    <div className="mt-auto flex gap-2 pt-2">
+                        <button type="button" className={nav} onClick={prev} disabled={!prev}><ChevronLeft size={16} /> Previous</button>
+                        <button type="button" className={nav} onClick={next} disabled={!next}>Next <ChevronRight size={16} /></button>
+                    </div>
+                </div>
+                <button type="button" onClick={onClose} aria-label="Close" className="absolute right-3 top-3 rounded-md p-1.5 text-text-secondary transition-colors hover:bg-background-main hover:text-text">
+                    <X size={18} />
+                </button>
+            </div>
+        </div>
+    );
+};
+
 const GifPlaceholder = ({ show }: { show: string }) => (
-    <div className="flex aspect-video w-full max-w-xl flex-col justify-between rounded-lg border border-dashed border-border bg-background-main p-4">
+    <div className="flex aspect-video w-full flex-col justify-between rounded-lg border border-dashed border-border bg-background-main p-4">
         <span className="text-[10px] uppercase tracking-[0.16em] text-text-muted">Placeholder</span>
         <p className="text-sm leading-relaxed text-text-secondary">Shows: {show}</p>
     </div>
 );
 
+const matches = (b: Block, q: string) => [b.title, b.text, ...(b.steps ?? [])].join(' ').toLowerCase().includes(q);
+
 const UserManualPage = () => {
     const [open, setOpen] = useState<string | null>(null);
+    const [zoom, setZoom] = useState<number | null>(null);
+    const [query, setQuery] = useState('');
+    const [current, setCurrent] = useState<string | null>(null);
+    const [missing, setMissing] = useState<Set<string>>(() => new Set());
+    const location = useLocation();
     const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     const { user } = useAuth();
     const can = (roles?: Role[]) => !roles || (!!user?.role && roles.includes(user.role as Role));
+    const q = query.trim().toLowerCase();
     const pages = PAGES.filter((p) => can(p.roles))
-        .map((p) => ({ ...p, intro: p.introByRole?.[user?.role as Role] ?? p.intro, blocks: p.blocks.filter((b) => can(b.roles)) }))
+        .map((p) => {
+            const blocks = p.blocks.filter((b) => can(b.roles));
+            return {
+                ...p,
+                intro: p.introByRole?.[user?.role as Role] ?? p.intro,
+                // "Start here" is numbered in order (Step 1 of 6 ...); the numbers stay the same while searching
+                blocks: blocks
+                    .map((b, i) => ({ b, i, step: p.id === 'start-here' ? { n: i + 1, of: blocks.length } : undefined }))
+                    .filter(({ b }) => !q || matches(b, q) || p.title.toLowerCase().includes(q)),
+            };
+        })
         .filter((p) => p.blocks.length > 0);
+
+    // every clip that exists, in page order, for Previous / Next in the enlarged view
+    const items: Item[] = pages.flatMap((p) =>
+        p.blocks.map(({ b, step }) => ({ src: clipSrc(p.id, b), b, section: p.title, step })).filter((it) => !missing.has(it.src)),
+    );
+    const markMissing = (src: string) => setMissing((m) => (m.has(src) ? m : new Set(m).add(src)));
+
+    // the header's User manual button links to the section for the page you came from (#analysis, ...)
+    useEffect(() => {
+        const id = location.hash.slice(1);
+        if (!id) return;
+        const t = window.setTimeout(() => { setOpen(id); jump(id); }, 50);
+        return () => window.clearTimeout(t);
+    }, [location.hash]);
+
+    // highlight the section being read in "On this page"
+    useEffect(() => {
+        const els = pages.map((p) => document.getElementById(p.id)).filter((e): e is HTMLElement => !!e);
+        const io = new IntersectionObserver(
+            (entries) => {
+                const top = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+                if (top) setCurrent(top.target.id);
+            },
+            { rootMargin: '-15% 0px -70% 0px' },
+        );
+        els.forEach((e) => io.observe(e));
+        return () => io.disconnect();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pages.map((p) => p.id).join(',')]);
 
     return (
         <AppLayout>
@@ -172,12 +334,11 @@ const UserManualPage = () => {
                     <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-text-muted">On this page</p>
                     {pages.map((p) => {
                         const expanded = open === p.id;
-                        const subs = [
-                            ...p.blocks.map((b, i) => ({ label: b.title, target: `${p.id}-${i}` })),
-                        ];
+                        const here = current === p.id;
+                        const subs = p.blocks.map(({ b, i }) => ({ label: b.title, target: `${p.id}-${i}` }));
                         return (
                             <div key={p.id}>
-                                <div className={`flex items-center rounded-md transition-colors ${expanded ? 'font-medium text-text' : 'text-text-secondary hover:bg-background-main hover:text-text'}`}>
+                                <div className={`flex items-center rounded-md border-l-2 transition-colors ${here ? 'border-primary bg-background font-medium text-text' : 'border-[transparent]'} ${expanded ? 'font-medium text-text' : here ? '' : 'text-text-secondary hover:bg-background-main hover:text-text'}`}>
                                     <button onClick={() => jump(p.id)} className="flex-1 px-3 py-2 text-left text-sm">
                                         {p.title}
                                     </button>
@@ -200,37 +361,61 @@ const UserManualPage = () => {
                 </nav>
 
                 <div className="flex min-w-0 flex-col gap-6">
+                    <div className="relative">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+                        <input
+                            type="search"
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            placeholder="Search the manual, e.g. download, floor, rename"
+                            aria-label="Search the manual"
+                            className="h-11 w-full rounded-xl border border-border bg-background pl-10 pr-10 text-[15px] text-text placeholder:text-text-muted focus:border-primary focus:outline-none"
+                        />
+                        {query && (
+                            <button type="button" onClick={() => setQuery('')} aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-text-muted hover:text-text">
+                                <X size={16} />
+                            </button>
+                        )}
+                    </div>
+                    {q && pages.length === 0 && (
+                        <p className="rounded-xl border border-border bg-background p-6 text-[15px] text-text-secondary">Nothing in the manual matches “{query.trim()}”. Try a shorter word.</p>
+                    )}
+
                     {pages.map((p) => (
                         <section key={p.id} id={p.id} className="scroll-mt-6 rounded-xl border border-border bg-background p-6">
                             <h2 className="text-xl font-semibold text-text">{p.title}</h2>
                             <p className="mb-6 mt-1 text-[15px] leading-relaxed text-text-secondary">{p.intro}</p>
 
-                            <div className="flex flex-col gap-10">
-                                {p.blocks.map((b, i) => (
-                                    <article key={b.title} id={`${p.id}-${i}`} className="scroll-mt-6 flex min-w-0 flex-col gap-3">
-                                        <GifPlaceholder show={b.gif} />
-                                        <div>
-                                            <h3 className="text-base font-semibold text-text">{b.title}</h3>
-                                            <p className="mt-1 text-[15px] leading-relaxed text-text-secondary">{b.text}</p>
-                                            {b.steps && (
-                                                <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-[15px] leading-relaxed text-text-secondary">
-                                                    {b.steps.map((s) => <li key={s}>{s}</li>)}
-                                                </ol>
-                                            )}
-                                            {b.link && (
-                                                <Link to={b.link.to} className="mt-3 inline-flex h-9 items-center rounded-lg border border-border bg-background-main px-3 text-sm text-text transition-colors hover:bg-background">
-                                                    {b.link.label}
-                                                </Link>
-                                            )}
-                                        </div>
-                                    </article>
-                                ))}
+                            <div className="flex flex-col gap-12">
+                                {p.blocks.map(({ b, i, step }) => {
+                                    const src = clipSrc(p.id, b);
+                                    return (
+                                        <article key={b.title} id={`${p.id}-${i}`} className="scroll-mt-6 flex min-w-0 flex-col gap-3">
+                                            <div>
+                                                <StepBadge step={step} />
+                                                <h3 className="text-base font-semibold text-text">{b.title}</h3>
+                                            </div>
+                                            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                                                <div className="min-w-0 xl:order-1"><BlockText b={b} /></div>
+                                                <div className="min-w-0 xl:order-2">
+                                                    <ManualClip
+                                                        src={src}
+                                                        show={b.gif}
+                                                        active={zoom === null}
+                                                        onMissing={() => markMissing(src)}
+                                                        onOpen={() => setZoom(Math.max(0, items.findIndex((it) => it.src === src && it.b === b)))}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </article>
+                                    );
+                                })}
                             </div>
-
                         </section>
                     ))}
                 </div>
             </div>
+            {zoom !== null && <ClipViewer items={items} index={zoom} onIndex={setZoom} onClose={() => setZoom(null)} />}
         </AppLayout>
     );
 };
