@@ -28,9 +28,9 @@ const PAGES: Page[] = [
             {
                 title: 'Get the checkerboard ready',
                 roles: ADMIN,
-                text: 'Calibration needs a printed checkerboard. SportPose uses a board with 9 by 6 inside corners, which is 10 by 7 squares, and each square is 80 mm (8 cm) wide. If your board is different, change the board settings in the backend .env file (CALIB_COLS, CALIB_ROWS and CALIB_SQUARE_MM) before calibrating.',
+                text: 'Calibration needs a printed checkerboard. SportPose uses a board with 9 by 6 inside corners, which is 10 by 7 squares, and each square is 80 mm (8 cm) wide. If your board is different, click Board on the Calibration page and enter its inside corners and square size before calibrating. You can also enter the distance between the two cameras, measured with a tape, so the calibration report checks it.',
                 gif: 'Measuring one square of the printed board with a ruler.',
-                steps: ['Print the checkerboard, or use the printed one you have, with 10 squares across and 7 squares down.', 'Measure one square with a ruler. Each square must be 80 mm (8 cm) wide.', 'Keep the board flat and stiff. A bent or wobbly board gives a poor calibration.', 'Check the whole board is visible in both cameras before you start.'],
+                steps: ['Print the checkerboard, or use the printed one you have, with 10 squares across and 7 squares down.', 'Measure one square with a ruler. If it is not 80 mm (8 cm), enter the size under Board on the Calibration page.', 'Keep the board flat and stiff. A bent or wobbly board gives a poor calibration.', 'Check the whole board is visible in both cameras before you start.'],
             },
             {
                 title: 'Calibrate the cameras',

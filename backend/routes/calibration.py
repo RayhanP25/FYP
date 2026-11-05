@@ -250,6 +250,42 @@ class SessionStart(BaseModel):
     setup: str = ""
 
 
+class BoardSettings(BaseModel):
+    cols: int
+    rows: int
+    square_mm: float
+    expected_baseline_mm: float = 0.0
+
+
+def _write_board(folder):
+    """Each session keeps the board it was captured with, so resuming it later uses the same board."""
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "board.json"), "w", encoding="utf-8") as f:
+            json.dump(sc.board_settings(), f, indent=2)
+    except Exception as ex:
+        print(f"calibration: could not save the board with the session ({ex!r})")
+
+
+@router.get("/board")
+def get_board(current_user: dict = Depends(require_admin)):
+    """The checkerboard and the expected camera distance; locked while a session is open (its photos use them)."""
+    return dict(**sc.board_settings(), locked=state.session is not None, limits=sc.LIMITS)
+
+
+@router.put("/board")
+def put_board(body: BoardSettings, current_user: dict = Depends(require_admin)):
+    with _locked():
+        if state.session is not None:
+            raise HTTPException(status_code=409, detail="End the calibration session first: its photos were "
+                                                        "taken with the current board.")
+        try:
+            d = sc.save_board_settings(body.dict())
+        except ValueError as ex:
+            raise HTTPException(status_code=400, detail=str(ex))
+    return dict(**d, locked=False, limits=sc.LIMITS)
+
+
 @router.post("/session/start")
 def start_session(body: SessionStart = SessionStart(), current_user: dict = Depends(require_admin)):
     with _locked():
@@ -268,9 +304,11 @@ def start_session(body: SessionStart = SessionStart(), current_user: dict = Depe
                 f"calibration -- set CAMERA_WIDTH/CAMERA_HEIGHT in backend/.env to a size both cameras "
                 f"support (e.g. 1280x720 or 640x480) and restart the backend."))
         folder = os.path.join(SESSIONS_DIR, datetime.now().strftime("%Y-%m-%d_%H%M%S"))
+        sc.load_board_settings()                 # the board set on the page
         state.session = sc.CalibrationSession(folder, (w, h), (wr, hr), out=CALIB_PATH, meta=dict(
             date=datetime.now().isoformat(timespec="seconds"), session=folder,
             board=list(sc.CHECKERBOARD), square_mm=sc.SQUARE_MM, source="web"))
+        _write_board(folder)
         state.grab = _frame_source()
         state.setup = body.setup.strip() or store.UNASSIGNED
         state.entry_id = None
@@ -284,6 +322,7 @@ def stop_session(current_user: dict = Depends(require_admin)):
         if state.job:
             raise HTTPException(status_code=409, detail=f"Wait for '{state.job}' to finish.")
         state.session, state.grab = None, None
+        sc.load_board_settings()                 # a resumed session may have used its own board
         if not recorder.active:
             manager.stop()
     return {"status": "idle"}
@@ -456,6 +495,15 @@ def resume_session(name: str, body: SessionStart = SessionStart(), current_user:
             _next_pair(timeout=5)
         except Exception as ex:
             print(f"calibration resume: cameras not started ({ex!r}); calibrating from the photos still works")
+        try:                                     # the board this session was captured with, if it saved it
+            with open(os.path.join(folder, "board.json"), encoding="utf-8") as f:
+                b = sc.check_board(json.load(f))
+            sc.set_board(b["cols"], b["rows"], b["square_mm"])
+        except FileNotFoundError:
+            sc.load_board_settings()             # older sessions: the current board
+        except Exception as ex:
+            print(f"calibration resume: board.json not used ({ex}); using the current board")
+            sc.load_board_settings()
         s = sc.CalibrationSession(folder, tuple(size), tuple(size), out=CALIB_PATH, meta=dict(
             date=datetime.now().isoformat(timespec="seconds"), session=folder,
             board=list(sc.CHECKERBOARD), square_mm=sc.SQUARE_MM, source="web-resume", resumed=name))

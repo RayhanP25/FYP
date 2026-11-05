@@ -82,6 +82,22 @@ export const getCalibrationStatus = async (): Promise<CalibrationStatus> => {
     return response.data;
 };
 
+/** The printed checkerboard and the tape-measured camera distance (GET/PUT /api/calibration/board). */
+export interface BoardSettings {
+    cols: number;
+    rows: number;
+    square_mm: number;
+    /** 0 = the calibration report does not check the camera distance. */
+    expected_baseline_mm: number;
+    /** A session is open: its photos use the current board, so it can't be changed. */
+    locked?: boolean;
+}
+
+export const getBoardSettings = async (): Promise<BoardSettings> => (await api.get('/api/calibration/board')).data;
+
+export const saveBoardSettings = async (b: BoardSettings): Promise<BoardSettings> =>
+    (await api.put('/api/calibration/board', b)).data;
+
 export const startCalibrationSession = async (setup: string): Promise<void> => {
     await api.post('/api/calibration/session/start', { setup }, { timeout: 60000 });
 };

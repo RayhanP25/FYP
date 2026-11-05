@@ -54,6 +54,75 @@ OBJP = np.zeros((CHECKERBOARD[0] * CHECKERBOARD[1], 3), np.float32)
 OBJP[:, :2] = np.mgrid[0:CHECKERBOARD[0], 0:CHECKERBOARD[1]].T.reshape(-1, 2)
 OBJP *= SQUARE_MM
 
+# The board and the expected camera distance can be set on the Calibration page; they are kept per PC in
+# calibration_settings.json (not in git) and override the .env values (CALIB_COLS, CALIB_ROWS, CALIB_SQUARE_MM,
+# EXPECTED_BASELINE_MM), which stay the defaults.
+try:
+    from core.paths import BACKEND_DIR as _BACKEND_DIR
+except Exception:
+    _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SETTINGS_PATH = os.path.join(_BACKEND_DIR, "calibration_settings.json")
+LIMITS = dict(cols=(3, 30), rows=(3, 30), square_mm=(5.0, 500.0), expected_baseline_mm=(0.0, 20000.0))
+
+
+def board_settings():
+    return dict(cols=CHECKERBOARD[0], rows=CHECKERBOARD[1], square_mm=SQUARE_MM,
+                expected_baseline_mm=EXPECTED_BASELINE_MM)
+
+
+def check_board(d):
+    """The settings as numbers, or ValueError with a message for the page."""
+    names = dict(cols="Inner corners across", rows="Inner corners down", square_mm="Square size",
+                 expected_baseline_mm="Expected camera distance")
+    out = {}
+    for k, (lo, hi) in LIMITS.items():
+        v = d.get(k, board_settings()[k])
+        try:
+            v = int(v) if k in ("cols", "rows") else float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"{names[k]} must be a number.")
+        if not lo <= v <= hi:
+            raise ValueError(f"{names[k]} must be between {lo:g} and {hi:g}.")
+        out[k] = v
+    if out["cols"] == out["rows"]:
+        raise ValueError("Use a board with a different number of inner corners across and down "
+                         "(for example 9 x 6), so the board's direction can be told apart.")
+    return out
+
+
+def set_board(cols, rows, square_mm, expected_baseline_mm=None):
+    """Use this board from now on (in this backend process). Not saved: see save_board_settings."""
+    global CHECKERBOARD, SQUARE_MM, OBJP, EXPECTED_BASELINE_MM
+    CHECKERBOARD = (int(cols), int(rows))
+    SQUARE_MM = float(square_mm)
+    objp = np.zeros((CHECKERBOARD[0] * CHECKERBOARD[1], 3), np.float32)
+    objp[:, :2] = np.mgrid[0:CHECKERBOARD[0], 0:CHECKERBOARD[1]].T.reshape(-1, 2)
+    OBJP = objp * SQUARE_MM
+    if expected_baseline_mm is not None:
+        EXPECTED_BASELINE_MM = float(expected_baseline_mm)
+
+
+def save_board_settings(d):
+    d = check_board(d)
+    set_board(**d)
+    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2)
+    return d
+
+
+def load_board_settings():
+    """The saved settings (calibration_settings.json), else the .env ones."""
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            set_board(**check_board(json.load(f)))
+    except FileNotFoundError:
+        pass
+    except Exception as ex:
+        print(f"calibration: ignoring {SETTINGS_PATH} ({ex}); using the .env board settings")
+
+
+load_board_settings()
+
 
 def open_cam(idx, attempts=6, delay=1.0):
     api = cv2.CAP_DSHOW if CAMERA_API == "dshow" else (cv2.CAP_MSMF if os.name == "nt" else cv2.CAP_ANY)
