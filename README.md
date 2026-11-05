@@ -125,7 +125,7 @@ secrets from the team **privately**: never put them in git, chats or screenshots
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | R2 API token keys |
 | `MINIO_BUCKET` | Video bucket, default `sport-pose-videos` |
 | `CAMERA_LEFT_INDEX` / `CAMERA_RIGHT_INDEX` | Which cameras are left and right, usually `1` and `2` (see step 7) |
-| `CAMERA_WIDTH` / `CAMERA_HEIGHT` | Capture size: `2560` x `1440` for the 2K cameras |
+| `CAMERA_WIDTH` / `CAMERA_HEIGHT` | Capture size: `2560` * `1440` for the 2K cameras |
 | `CAMERA_FPS` | `30` |
 | `CAMERA_OPEN_TIMEOUT_SEC` | `120`: 2K cameras can take a while to open |
 | `POSE_DET_EVERY` | `10`: how often the person detector re-runs (every N frames) |
