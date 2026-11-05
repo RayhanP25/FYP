@@ -246,9 +246,11 @@ const ClipViewer = ({ items, index, onIndex, onClose }: { items: Item[]; index: 
                 <video key={it.src} src={it.src} autoPlay loop muted playsInline controls aria-label={it.b.gif} className="w-full min-w-0 self-start rounded-lg bg-black object-contain xl:max-h-[80vh] xl:flex-[3]" />
                 <div className="flex min-w-0 flex-col gap-4 xl:flex-1 xl:pt-8">
                     <div>
-                        <p className="mb-1 text-xs text-text-muted">{it.section} · {index + 1} of {items.length}</p>
-                        <StepBadge step={it.step} />
-                        <h3 className="text-lg font-semibold text-text">{it.b.title}</h3>
+                        <p className="mb-1 text-xs font-medium text-primary">{it.section} · {index + 1} of {items.length}</p>
+                        <div className="border-l-2 border-primary pl-3">
+                            <StepBadge step={it.step} />
+                            <h3 className="text-xl font-semibold text-text">{it.b.title}</h3>
+                        </div>
                     </div>
                     <BlockText b={it.b} />
                     <div className="mt-auto flex gap-2 pt-2">
@@ -383,7 +385,7 @@ const UserManualPage = () => {
 
                     {pages.map((p) => (
                         <section key={p.id} id={p.id} className="scroll-mt-6 rounded-xl border border-border bg-background p-6">
-                            <h2 className="text-xl font-semibold text-text">{p.title}</h2>
+                            <h2 className="text-2xl font-semibold text-primary">{p.title}</h2>
                             <p className="mb-6 mt-1 text-[15px] leading-relaxed text-text-secondary">{p.intro}</p>
 
                             <div className="flex flex-col gap-12">
@@ -391,9 +393,9 @@ const UserManualPage = () => {
                                     const src = clipSrc(p.id, b);
                                     return (
                                         <article key={b.title} id={`${p.id}-${i}`} className="scroll-mt-6 flex min-w-0 flex-col gap-3">
-                                            <div>
+                                            <div className="border-l-2 border-primary pl-3">
                                                 <StepBadge step={step} />
-                                                <h3 className="text-base font-semibold text-text">{b.title}</h3>
+                                                <h3 className="text-lg font-semibold text-text">{b.title}</h3>
                                             </div>
                                             <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
                                                 <div className="min-w-0 xl:order-1"><BlockText b={b} /></div>
