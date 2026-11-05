@@ -431,6 +431,7 @@ class Recorder:
         self.small_paths = None
         self.live_ai = None
         self.last_live_ai = None
+        self.t_start = 0.0
 
     def start(self):
         if self.active:
@@ -454,6 +455,7 @@ class Recorder:
             self.live = _LiveEncoder(self.size[0], self.size[1], self.ANALYSIS_W)
         self.live_ai = self._start_live_ai()
         self.last_live_ai = None
+        self.t_start = time.time()           # for the recording timer on the page
         self.active = True
         self.thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.thread.start()
@@ -811,6 +813,7 @@ def stop_feed(current_user: dict = Depends(get_current_user)):
 @router.get("/status")
 def status(current_user: dict = Depends(get_current_user)):
     return {"live": manager.running, "recording": recorder.active,
+            "recording_seconds": round(time.time() - recorder.t_start, 1) if recorder.active else None,
             "mode": "USB", "fps": CAP_FPS}
 
 

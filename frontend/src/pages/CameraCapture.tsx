@@ -6,7 +6,7 @@ import { toast } from 'react-toastify';
 import AppLayout from '../layout/AppLayout';
 import { useShortcut } from '@/shortcuts/useShortcut';
 import CameraSetupDialog from '@/components/camera/CameraSetupDialog';
-import { JobProgressOverlay, newJobKey, useJobProgress } from '@/components/ui/JobProgress';
+import { JobProgressOverlay, clock, newJobKey, useJobProgress } from '@/components/ui/JobProgress';
 
 export default function CameraCapture() {
     const navigate = useNavigate();
@@ -18,6 +18,13 @@ export default function CameraCapture() {
     const [lastVideoId, setLastVideoId] = useState<string | null>(null);
     const [camerasOpen, setCamerasOpen] = useState(false);
     const [saveJob, setSaveJob] = useState<string | null>(null);   // set while a recording is being saved
+    const [recStart, setRecStart] = useState<number | null>(null);  // when recording started (for the timer)
+    const [, setTick] = useState(0);
+    useEffect(() => {                                                // the timer ticks while recording
+        if (!isRecording || recStart === null) return;
+        const t = window.setInterval(() => setTick((n) => n + 1), 250);
+        return () => window.clearInterval(t);
+    }, [isRecording, recStart]);
     const saveProgress = useJobProgress(saveJob);
 
     const backendUrl = api.defaults.baseURL || 'http://localhost:8000';
@@ -27,6 +34,7 @@ export default function CameraCapture() {
             .then(({ data }) => {
                 setIsStreaming(!!data.live);
                 setIsRecording(!!data.recording);
+                if (data.recording && data.recording_seconds != null) setRecStart(Date.now() - data.recording_seconds * 1000);
                 setMode(data.mode || 'IDLE');
                 if (data.live) setStreamKey((k) => k + 1);
             })
@@ -76,6 +84,7 @@ export default function CameraCapture() {
     const handleStartRecording = async () => {
         try {
             await api.post('/api/camera/start-recording');
+            setRecStart(Date.now());
             setIsRecording(true);
             setLastVideoId(null);
             toast.info('Recording. The athlete can start the movement.');
@@ -92,6 +101,7 @@ export default function CameraCapture() {
         try {
             const { data } = await api.post('/api/camera/stop-recording', null, { params: { job }, timeout: 0 });
             setIsRecording(false);
+            setRecStart(null);
             setLastVideoId(data.video_id);
             toast.success('Recording saved. Opening it now...', { autoClose: 2000 });
             // Automatically navigate to analysis page
@@ -136,6 +146,15 @@ export default function CameraCapture() {
                                 <span className={`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-text-muted'}`}></span>
                                 MODE: {isStreaming ? mode : 'IDLE'}
                             </p>
+                            {isRecording && recStart !== null && (
+                                <p
+                                    className="flex items-center gap-1.5 font-mono text-xs font-bold tabular-nums px-2 py-1 rounded border border-red-500/40 bg-red-500/10 text-red-500"
+                                    title="Time recorded so far"
+                                >
+                                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
+                                    REC {clock(Math.max(0, (Date.now() - recStart) / 1000))}
+                                </p>
+                            )}
                         </div>
                     </div>
 
