@@ -411,6 +411,13 @@ class Recorder:
     LIVE = os.getenv("RECORD_LIVE_ENCODE", "1") == "1"
     LIVE_BACKLOG = int(os.getenv("RECORD_LIVE_BACKLOG", "30"))  # frames waiting for it (1 s) before it is dropped
     ANALYSIS_W = 1280                                          # the analysis copy's width (stereo_process target_w)
+    # The AI during recording (pose_estimator.LiveAI): frames go through the AI while recording, so the analysis
+    # only does the rest. OFF by default: on the RTX 4050 laptop it only reached 20-28 fps during recording (both
+    # cameras; 51 when idle), because the recording's threads and the AI share Python's one-thread-at-a-time lock,
+    # and it slowed saving (tools/bench_record.py tests G-I, 5 Nov). RECORD_LIVE_AI=1 turns it on.
+    # RECORD_LIVE_AI_FRAMES: frames it may hold waiting (memory).
+    LIVE_AI = os.getenv("RECORD_LIVE_AI", "0") == "1"
+    LIVE_AI_FRAMES = int(os.getenv("RECORD_LIVE_AI_FRAMES", "480"))  # 480 at 1280x720 (4:2:0) = about 660 MB
 
     def __init__(self):
         self.active = False
@@ -422,6 +429,8 @@ class Recorder:
         self.real_fps = 0.0
         self.live = None
         self.small_paths = None
+        self.live_ai = None
+        self.last_live_ai = None
 
     def start(self):
         if self.active:
@@ -439,14 +448,27 @@ class Recorder:
         self.encoder = None
         self.live = None
         self.small_paths = None
-        self.size = None
+        fL = manager.get_latest()[0]
+        self.size = (fL.shape[1], fL.shape[0])
         if self.LIVE:                       # start FFmpeg / the GPU encoder now, before the first frame
-            fL = manager.get_latest()[0]
-            self.size = (fL.shape[1], fL.shape[0])
             self.live = _LiveEncoder(self.size[0], self.size[1], self.ANALYSIS_W)
+        self.live_ai = self._start_live_ai()
+        self.last_live_ai = None
         self.active = True
         self.thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.thread.start()
+
+    def _start_live_ai(self):
+        if not self.LIVE_AI:
+            return None
+        try:
+            from pose import pose_estimator as pe
+            if pe.POSE_MODEL == "mediapipe" or not pe._DEVICE.startswith("cuda"):
+                return None
+            return pe.LiveAI(self.size[0], self.size[1], self.ANALYSIS_W, 1.0 / CAP_FPS, self.LIVE_AI_FRAMES)
+        except Exception as ex:                     # never stop a recording over this
+            print(f"recording: AI during recording not started ({ex!r})")
+            return None
 
     def _save_pair(self, k, fL, fR):
         """Both stills as JPEG: written to disk (the fallback) and returned for the live encoder."""
@@ -467,7 +489,8 @@ class Recorder:
         q = queue.Queue()                              # (capture time, still being saved), in capture order
         feeder = threading.Thread(target=self._feed, args=(q,), daemon=True)
         feeder.start()
-        live_q = queue.Queue() if self.LIVE else None  # (capture time, left, right) for the live encoder
+        # (capture time, left, right) for the live encoder and the AI during recording
+        live_q = queue.Queue() if (self.LIVE or self.live_ai is not None) else None
         live_thread = None
         if live_q is not None:
             live_thread = threading.Thread(target=self._live_feed, args=(live_q,), daemon=True)
@@ -515,25 +538,32 @@ class Recorder:
         self.stills = stills
 
     def _live_feed(self, q):
-        """Hands each new frame pair to the live encoder, on its own thread so it never waits for the stills.
-        If its queue grows past LIVE_BACKLOG the encoder cannot keep up: it is dropped (the stills remain)."""
+        """Hands each new frame pair to the live encoder and to the AI during recording, on its own thread so it
+        never waits for the stills. If its queue grows past LIVE_BACKLOG the encoder cannot keep up: it is
+        dropped (the stills remain)."""
         while True:
             item = q.get()
             if item is None:
                 break
             ts, fL, fR = item
-            if self.live is None and self.size:
-                self.live = _LiveEncoder(self.size[0], self.size[1], self.ANALYSIS_W)
-            if self.live is None or not self.live.ok:
-                continue                                # dropped: just empty the queue
-            limit = self.LIVE_BACKLOG if self.live.started() else 2 * self.LIVE_BACKLOG   # more room while starting
-            if q.qsize() > limit:
-                print(f"recording: live video encoder fell behind after {self.live.written} frames, "
-                      f"{q.qsize()} waiting "
-                      f"({self.live.stats()}); the video is made after recording")
-                self.live.abort()
-                continue
-            self.live.add(ts, fL, fR)
+            if self.LIVE:
+                self._encoder_add(q, ts, fL, fR)
+            if self.live_ai is not None:
+                self.live_ai.add(ts, fL, fR)
+
+    def _encoder_add(self, q, ts, fL, fR):
+        if self.live is None and self.size:
+            self.live = _LiveEncoder(self.size[0], self.size[1], self.ANALYSIS_W)
+        if self.live is None or not self.live.ok:
+            return                                      # dropped
+        limit = self.LIVE_BACKLOG if self.live.started() else 2 * self.LIVE_BACKLOG   # more room while starting
+        if q.qsize() > limit:
+            print(f"recording: live video encoder fell behind after {self.live.written} frames, "
+                  f"{q.qsize()} waiting "
+                  f"({self.live.stats()}); the video is made after recording")
+            self.live.abort()
+            return
+        self.live.add(ts, fL, fR)
 
     def _encode(self):
         """Write the stills into two MP4s, one per camera, at full size. Each is at most 2560 wide, so the GPU
@@ -663,6 +693,9 @@ class Recorder:
         self.active = False
         if self.thread:
             self.thread.join()
+        self.last_live_ai, self.live_ai = self.live_ai, None
+        if self.last_live_ai is not None:
+            self.last_live_ai.finish()              # it carries on with the frames it has, in the background
         live, self.live = self.live, None
         if live is not None and live.ok and self.stills and live.finish():
             self.path, self.path_right = live.paths
@@ -836,6 +869,10 @@ def stop_recording(job: str = None, current_user: dict = Depends(get_current_use
     for name, small in zip((object_name, object_name_right), recorder.small_paths or ()):
         if not media_cache.put(media_cache.small_name(name), small, move=True) and os.path.exists(small):
             os.unlink(small)
+    if recorder.last_live_ai is not None and recorder.small_paths:   # the AI's work during recording, for the analysis
+        from pose.pose_estimator import keep_live
+        keep_live(object_name, recorder.last_live_ai)
+        recorder.last_live_ai = None
     sizes = []
     for c, tmp in zip(cached, (path, path_right)):
         sizes.append(os.path.getsize(c or tmp) if os.path.exists(c or tmp) else 0)

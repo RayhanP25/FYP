@@ -157,12 +157,17 @@ def process_video(
             if video_doc.get("object_name_right"):
                 small = (media_cache.get(media_cache.small_name(video_doc["object_name"])),
                          media_cache.get(media_cache.small_name(video_doc["object_name_right"])))
+            live = None                        # what the AI already did during the recording (camera.py)
+            if small and all(small):           # only with the copies it was done on
+                from pose.pose_estimator import take_live
+                live = take_live(video_doc["object_name"])
             result = process_stereo_video(temp_input_path, temp_output_path,
                                           calib_path=calib_path,
                                           output_path_right=temp_output_right_path,
                                           plain_paths=plain_paths,
                                           input_path_right=temp_input_right_path,
-                                          scaled_paths=small)
+                                          scaled_paths=small,
+                                          live=live)
         else:
             # If it's stereo but calibration is missing, fall back to 2D so it
             # still works (analyses the left half is not split here -- whole frame).

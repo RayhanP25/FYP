@@ -212,7 +212,7 @@ def _swap_check():
     return fix_swaps
 
 
-def _infer_both(lp, rp):
+def _infer_both(lp, rp, live=None):
     """The AI on both camera views. By default the two run at the same time (each prepares its frames on the
     CPU while the other uses the GPU); POSE_PARALLEL_VIEWS=0, or any error, runs them one after the other."""
     if PARALLEL_VIEWS:
@@ -225,7 +225,7 @@ def _infer_both(lp, rp):
 
         def run(side, path):
             try:
-                out[side] = _run_inference(path)
+                out[side] = _run_inference(path, resume=(live or {}).get(side))
             except Exception as ex:
                 errors.append(ex)
         threads = [threading.Thread(target=progress.wrap(run), args=(s, p)) for s, p in (("L", lp), ("R", rp))]
@@ -237,9 +237,9 @@ def _infer_both(lp, rp):
             return out["L"], out["R"]
         print(f"pose: running both cameras at once failed ({errors[0]!r}); running them one after the other")
     progress.stage("Finding body points: left camera")
-    rawL = _run_inference(lp)
+    rawL = _run_inference(lp, resume=(live or {}).get("L"))
     progress.stage("Finding body points: right camera")
-    rawR = _run_inference(rp)
+    rawR = _run_inference(rp, resume=(live or {}).get("R"))
     return rawL, rawR
 
 
@@ -271,7 +271,7 @@ def _ready_copies(full_left, scaled_paths, target_w):
 
 def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
                          target_w=1280, output_path_right=None, plain_paths=None, input_path_right=None,
-                         scaled_paths=None):
+                         scaled_paths=None, live=None):
     """
     input_path        : the side-by-side recording, or the LEFT camera's video when input_path_right is given
     input_path_right  : the RIGHT camera's video (recordings saved as two files, layout "stereo_pair")
@@ -298,7 +298,21 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
     roTmp = output_path_right or tempfile.mktemp(suffix="_Ro.mp4")
     try:
         # 1. Raw 2D detections in each view (no healing yet).
-        rawL, rawR = _infer_both(lp, rp)
+        rawL, rawR = _infer_both(lp, rp, live)
+        if os.environ.get("POSE_DUMP_RAW") == "1":   # for checking: the raw keypoints of this analysis
+            try:
+                import json
+                from core.paths import BACKEND_DIR
+                d = os.path.join(BACKEND_DIR, "_debug", "raw_dumps")
+                os.makedirs(d, exist_ok=True)
+                tag = "live" if live else "full"
+                name = os.path.splitext(os.path.basename(input_path))[0]
+                with open(os.path.join(d, f"{name}_{tag}_{time.strftime('%H%M%S')}.json"), "w") as f:
+                    json.dump({"live_frames": len(live["L"].frames) if live else 0,
+                               "L": [fr.get("keypoints") for fr in rawL["frames"]],
+                               "R": [fr.get("keypoints") for fr in rawR["frames"]]}, f)
+            except Exception as ex:
+                print(f"raw dump failed: {ex!r}")
         progress.stage("Building the 3D skeleton")
         origL = [copy.deepcopy(f.get("keypoints")) for f in rawL["frames"]]
         origR = [copy.deepcopy(f.get("keypoints")) for f in rawR["frames"]]

@@ -13,6 +13,9 @@ processor cores the backend process used, and how long each step took per frame.
     D  GPU encoder only, dummy frames       (4 FFmpeg h264_nvenc, raw YUV from a pipe: its capacity alone)
     E  B + live encoding, no JPEG backups   (OpenCV -> YUV + small copy -> 4 FFmpeg)
     F  C + live encoding                    (what the 5 Nov attempt did)
+    G  B + the AI during recording           (pose_estimator.LiveAI; 60 fps = keeps up with both cameras)
+    H  B + live encoding + the AI, no JPEG backups
+    I  C + live encoding + the AI           (everything, as the system ran on 5 Nov 11:00)
 """
 import argparse
 import json
@@ -133,7 +136,7 @@ class Encoders:
         return errs
 
 
-def run(name, readers, seconds, preview=False, jpeg=False, live=False):
+def run(name, readers, seconds, preview=False, jpeg=False, live=False, ai=False):
     stop = threading.Event()
     stats = {"pairs": 0, "jpeg_ms": [], "conv_ms": [], "write_ms": [], "dropped": 0, "preview": 0}
     threads = []
@@ -159,6 +162,12 @@ def run(name, readers, seconds, preview=False, jpeg=False, live=False):
     pool = ThreadPoolExecutor(4) if jpeg else None
     enc = Encoders(*readers[0].frame.shape[1::-1]) if live else None
     live_q = queue.Queue()
+    lai = None
+    if ai:
+        from pose import pose_estimator as pe
+        h_, w_ = readers[0].frame.shape[:2]
+        lai = pe.LiveAI(w_, h_, 1280, 1.0 / FPS, max_frames=10 ** 9)   # no limit here: measure its own speed
+        time.sleep(3)                                                  # it warms up before recording, as in the system
 
     def save(k, fL, fR):
         t = time.perf_counter()
@@ -177,15 +186,18 @@ def run(name, readers, seconds, preview=False, jpeg=False, live=False):
                 stats["dropped"] += 1
                 continue
             fL, fR = item
-            t0 = time.perf_counter()
-            a, b = enc.convert(fL)
-            c, d = enc.convert(fR)
-            t1 = time.perf_counter()
-            enc.write([a, c, b, d])
-            stats["conv_ms"].append(1000 * (t1 - t0))
-            stats["write_ms"].append(1000 * (time.perf_counter() - t1))
+            if enc is not None:
+                t0 = time.perf_counter()
+                a, b = enc.convert(fL)
+                c, d = enc.convert(fR)
+                t1 = time.perf_counter()
+                enc.write([a, c, b, d])
+                stats["conv_ms"].append(1000 * (t1 - t0))
+                stats["write_ms"].append(1000 * (time.perf_counter() - t1))
+            if lai is not None:
+                lai.add(time.time(), fL, fR)
 
-    if live:
+    if live or ai:
         threads.append(threading.Thread(target=live_loop, daemon=True))
 
     def capture():
@@ -205,11 +217,12 @@ def run(name, readers, seconds, preview=False, jpeg=False, live=False):
                 else:
                     pending.append(pool.submit(save, k, fL, fR))
                     k += 1
-            if live:
+            if live or ai:
                 live_q.put((fL, fR))
-    if jpeg or live:
+    if jpeg or live or ai:
         threads.append(threading.Thread(target=capture, daemon=True))
 
+    done0 = len(lai.tracks["L"].frames) if lai else 0
     cpu0, t0 = time.process_time(), time.perf_counter()
     for t in threads:
         t.start()
@@ -217,6 +230,8 @@ def run(name, readers, seconds, preview=False, jpeg=False, live=False):
     stop.set()
     wall = time.perf_counter() - t0
     cpu = time.process_time() - cpu0
+    ai_done = (len(lai.tracks["L"].frames) - done0) * 2 if lai else 0
+    ai_taken = lai.written * 2 if lai else 0
     live_q.put(None)
     for t in threads:
         t.join(timeout=10)
@@ -224,6 +239,9 @@ def run(name, readers, seconds, preview=False, jpeg=False, live=False):
         pool.shutdown(wait=True)
         shutil.rmtree(tmp, ignore_errors=True)
     errs = enc.close() if enc else []
+    if lai is not None:
+        lai.finish()
+        lai.result(timeout=120)                         # let it finish before the next test
 
     cam_fps = [(r.seq - s0) / wall for r, s0 in zip(readers, seq0)]
     med = lambda v: f"{np.median(v):.1f}" if v else "-"
@@ -237,7 +255,9 @@ def run(name, readers, seconds, preview=False, jpeg=False, live=False):
         done = len(stats["conv_ms"])
         line += (f" | live {done / wall:4.1f} fps (convert {med(stats['conv_ms'])} ms, to FFmpeg "
                  f"{med(stats['write_ms'])} ms)")
-    if jpeg or live:
+    if ai:
+        line += f" | AI {ai_done / wall:4.1f} fps (both cameras; 60 = keeping up), {ai_taken - ai_done} frames waiting at the end"
+    if jpeg or live or ai:
         line += f" | dropped {stats['dropped']}"
     print(line, flush=True)
     for e in errs:
@@ -290,6 +310,15 @@ def main():
     time.sleep(1)
     run("E  + preview + live encoding, no JPEG", readers, a.seconds, preview=True, live=True)
     run("F  + preview + JPEG + live encoding", readers, a.seconds, preview=True, jpeg=True, live=True)
+    try:
+        from pose import pose_estimator as pe
+        pe._load_models()
+        print("\n(AI loaded)")
+        run("G  + preview + AI during recording", readers, a.seconds, preview=True, ai=True)
+        run("H  + preview + live encoding + AI, no JPEG", readers, a.seconds, preview=True, live=True, ai=True)
+        run("I  + preview + JPEG + live encoding + AI", readers, a.seconds, preview=True, jpeg=True, live=True, ai=True)
+    except Exception as ex:
+        print(f"AI tests skipped: {ex!r}")
     for r in readers:
         r.on = False
     time.sleep(0.3)

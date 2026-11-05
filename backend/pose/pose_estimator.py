@@ -462,9 +462,75 @@ def _run_mediapipe(video_path: str) -> dict:
             "timing": {"pose_seconds": round(time.perf_counter() - t0, 2), "model": "mediapipe", "device": "cpu"}}
 
 
-def _run_inference(video_path: str) -> dict:
+class _PoseTrack:
+    """The AI over ONE camera's frames, POSE_BATCH frames at a time, in order. The person box carries over from
+    one batch to the next, so batches must come in order: the analysis (_run_inference) and the AI during
+    recording (LiveAI) use this same class, and an analysis can carry on where the live AI stopped."""
+
+    def __init__(self, width, height):
+        self.w, self.h = int(width), int(height)
+        self.frames = []
+        self.last_box = None
+        self.det_time = self.pose_time = 0.0
+        self.det_runs = 0
+
+    def _to_18(self, r):
+        kp = r.keypoints[0]                          # (18, 2) pixels
+        sc = r.keypoint_scores[0]                    # (18,)
+        return [[float(kp[i, 0]) / self.w, float(kp[i, 1]) / self.h, float(sc[i])] for i in range(18)]
+
+    def run(self, chunk):
+        """One batch of frames (BGR, this camera's size), the next ones in order."""
+        start = len(self.frames)
+        batch = max(1, POSE_BATCH)
+        # person boxes: detector every DET_EVERY frames (batched), box reused in between
+        det_k = [k for k in range(len(chunk)) if (self.last_box is None and k == 0) or (start + k) % DET_EVERY == 0]
+        found = {}
+        if det_k:
+            t_det = time.perf_counter()
+            with _lock:
+                try:
+                    found = dict(zip(det_k, _detect_people([chunk[k] for k in det_k])))
+                except Exception:
+                    found = {k: _detect_person(chunk[k]) for k in det_k}
+            self.det_time += time.perf_counter() - t_det
+            self.det_runs += len(det_k)
+        boxes = []
+        for k in range(len(chunk)):
+            if k in found:
+                self.last_box = found[k]
+            boxes.append(self.last_box)
+
+        # pose
+        t_pose = time.perf_counter()
+        results = [None] * len(chunk)
+        if batch > 1:
+            try:
+                results = [self._to_18(r.pred_instances) for r in _pose_batch(chunk, boxes)]
+            except Exception as e:
+                print(f"pose: batched inference failed ({e!r}); using one frame at a time for this chunk")
+                results = [None] * len(chunk)
+        for k in range(len(chunk)):
+            if results[k] is None:
+                try:
+                    r = inference_topdown(_pose_model, chunk[k], boxes[k], bbox_format="xyxy")[0]
+                    results[k] = self._to_18(r.pred_instances)
+                except Exception:
+                    results[k] = None
+        self.pose_time += time.perf_counter() - t_pose
+
+        for k, custom_18 in enumerate(results):
+            self.frames.append({
+                "frame_index": start + k,
+                "keypoints": custom_18,
+                "angles": calculate_frame_angles(custom_18) if custom_18 else {}
+            })
+
+
+def _run_inference(video_path: str, resume: "_PoseTrack" = None) -> dict:
     """Run ViTPose per frame; returns the SAME structure MediaPipe did:
-       18 keypoints as [x, y, conf], x/y normalised 0-1, project keypoint order."""
+       18 keypoints as [x, y, conf], x/y normalised 0-1, project keypoint order.
+    resume: the frames the AI already did during recording (LiveAI); the analysis carries on after them."""
     if POSE_MODEL == "mediapipe":
         return _run_mediapipe(video_path)
     _load_models()
@@ -477,19 +543,26 @@ def _run_inference(video_path: str) -> dict:
     fps = _capture_fps(cap)
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    frame_data = []
-    progress.add_total(int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0))   # both cameras can run at once
-    last_box = None
-    det_time = 0.0
-    det_runs = 0
-    pose_time = 0.0
+    n_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    progress.add_total(n_video)   # both cameras can run at once
     batch = max(1, POSE_BATCH)
-
-    def to_18(r):
-        kp = r.keypoints[0]                          # (18, 2) pixels
-        sc = r.keypoint_scores[0]                    # (18,)
-        return [[float(kp[i, 0]) / video_width, float(kp[i, 1]) / video_height, float(sc[i])]
-                for i in range(18)]
+    track = _PoseTrack(video_width, video_height)
+    if resume is not None:
+        done = len(resume.frames)
+        if (resume.w, resume.h) != (video_width, video_height) or done % batch or (n_video and done > n_video):
+            print(f"pose: the AI's results from the recording don't fit this video "
+                  f"({resume.w}x{resume.h}, {done} frames); analysing it all")
+        elif done:
+            skipped = 0
+            while skipped < done and cap.read()[0]:     # skip the frames already done (the reader reads in order)
+                skipped += 1
+            if skipped == done:
+                track = resume
+                progress.add(done)
+                print(f"pose: {done} frames done during recording, {max(0, n_video - done)} left")
+            else:                                       # the video is shorter than expected: start again
+                cap.release()
+                cap = video_io.VideoReader(video_path)
 
     def read_chunk():
         chunk = []
@@ -519,53 +592,11 @@ def _run_inference(video_path: str) -> dict:
         chunk = next_chunk()
         if not chunk:
             break
-        start = len(frame_data)
-
-        # person boxes: detector every DET_EVERY frames (batched), box reused in between
-        det_k = [k for k in range(len(chunk)) if (last_box is None and k == 0) or (start + k) % DET_EVERY == 0]
-        found = {}
-        if det_k:
-            t_det = time.perf_counter()
-            with _lock:
-                try:
-                    found = dict(zip(det_k, _detect_people([chunk[k] for k in det_k])))
-                except Exception:
-                    found = {k: _detect_person(chunk[k]) for k in det_k}
-            det_time += time.perf_counter() - t_det
-            det_runs += len(det_k)
-        boxes = []
-        for k in range(len(chunk)):
-            if k in found:
-                last_box = found[k]
-            boxes.append(last_box)
-
-        # pose
-        t_pose = time.perf_counter()
-        results = [None] * len(chunk)
-        if batch > 1:
-            try:
-                results = [to_18(r.pred_instances) for r in _pose_batch(chunk, boxes)]
-            except Exception as e:
-                print(f"pose: batched inference failed ({e!r}); using one frame at a time for this chunk")
-                results = [None] * len(chunk)
-        for k in range(len(chunk)):
-            if results[k] is None:
-                try:
-                    r = inference_topdown(_pose_model, chunk[k], boxes[k], bbox_format="xyxy")[0]
-                    results[k] = to_18(r.pred_instances)
-                except Exception:
-                    results[k] = None
-        pose_time += time.perf_counter() - t_pose
-
-        for k, custom_18 in enumerate(results):
-            frame_data.append({
-                "frame_index": start + k,
-                "keypoints": custom_18,
-                "angles": calculate_frame_angles(custom_18) if custom_18 else {}
-            })
+        track.run(chunk)
         progress.add(len(chunk))
         if len(chunk) < batch:
             break
+    frame_data = track.frames
     frame_idx = len(frame_data)
 
     cap.release()
@@ -576,17 +607,158 @@ def _run_inference(video_path: str) -> dict:
         "video_height": video_height,
         "frames": frame_data,
         "timing": {
-            "detection_seconds": round(det_time, 2),
-            "pose_seconds": round(pose_time, 2),
-            "detections_run": det_runs,
+            "detection_seconds": round(track.det_time, 2),
+            "pose_seconds": round(track.pose_time, 2),
+            "detections_run": track.det_runs,
             "det_every": DET_EVERY,
             "batch": max(1, POSE_BATCH),
             "fp16": bool(POSE_FP16 and _DEVICE.startswith("cuda")),
             "device": _DEVICE,
             "flip_test": POSE_FLIP_MODE,
+            **({"frames_done_during_recording": len(resume.frames)} if resume is not None and track is resume else {}),
             **_flip_share(),
         },
     }
+
+
+class LiveAI:
+    """The AI during recording (RECORD_LIVE_AI=1). Each new frame pair is shrunk to the analysis size, the way the
+    analysis copy is made (area resize, then through the video's own 4:2:0 colour format), and both cameras go
+    through _PoseTrack in batches, in order, on one background thread (left, then right). It keeps up with as
+    much as the GPU can: if the frames waiting pass max_frames (memory), it stops taking new ones and finishes
+    those it has. The analysis then carries on from there (_run_inference resume=...). Gaps are filled by the
+    previous frame again, the same rule as the recording itself, so frame numbers match the saved video."""
+
+    def __init__(self, full_w, full_h, small_w, period, max_frames=480):
+        W, H = full_w - full_w % 2, full_h - full_h % 2
+        sw = min(small_w, W)
+        sh = int(round(H * sw / W))
+        self.full, self.small = (W, H), (sw - sw % 2, sh - sh % 2)
+        self.tracks = {"L": _PoseTrack(*self.small), "R": _PoseTrack(*self.small)}
+        self.pending = {"L": [], "R": []}
+        self.period, self.start_ts, self.written = period, None, 0
+        self.max_frames = max_frames
+        self.taking = True
+        self.waiting = 0                               # frames shrunk but not yet through the AI
+        self.wait_lock = threading.Lock()
+        self.q = __import__("queue").Queue()
+        self.done = threading.Event()
+        self.t_first = None
+        self.error = None
+        threading.Thread(target=self._work, daemon=True).start()
+
+    def _small(self, frame):
+        """Shrunk, in the video's own 4:2:0 colour format: what the analysis copy holds, at half the memory of
+        BGR (1280x720: 1.4 MB). Turned back into BGR just before the AI."""
+        W, H = self.full
+        f = cv2.resize(frame[:H, :W], self.small, interpolation=cv2.INTER_AREA)
+        return cv2.cvtColor(f, cv2.COLOR_BGR2YUV_I420)
+
+    def add(self, ts, frame_left, frame_right):
+        """One new frame pair (the recording's thread). Returns quickly."""
+        if not self.taking or self.error:
+            return
+        if self.start_ts is None:
+            self.start_ts = ts
+            self.t_first = time.time()
+        target = int(round((ts - self.start_ts) / self.period)) + 1
+        n = max(1, target - self.written) if target - self.written > 1.5 else 1
+        with self.wait_lock:
+            if self.waiting + 2 * n > self.max_frames:
+                self.taking = False                    # the GPU can't keep up: the analysis does the rest
+                print(f"recording: AI during recording stops taking frames after {self.written} per camera "
+                      f"({len(self.tracks['L'].frames)} done, {self.waiting} waiting); the analysis does the rest")
+                return
+            self.waiting += 2 * n
+        sL, sR = self._small(frame_left), self._small(frame_right)
+        self.written += n
+        for _ in range(n):
+            self.pending["L"].append(sL)
+            self.pending["R"].append(sR)
+        if len(self.pending["L"]) >= max(1, POSE_BATCH):
+            b = max(1, POSE_BATCH)
+            for side in ("L", "R"):
+                chunk, self.pending[side] = self.pending[side][:b], self.pending[side][b:]
+                self.q.put((side, chunk))
+
+    def _rate(self):
+        done = len(self.tracks["L"].frames)
+        return 100.0 * done / max(1, self.written)
+
+    def _warm(self):
+        """Ready before the first frames: this thread's TensorRT context, cuDNN, the crop pipeline."""
+        _load_models()
+        _pose_pipeline()
+        if _DEVICE.startswith("cuda"):
+            import torch
+            w, h = _pose_model.cfg.codec["input_size"]
+            n = max(1, POSE_BATCH) * (2 if POSE_FLIP_TEST and POSE_FLIP_BATCH else 1)
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16, enabled=POSE_FP16):
+                _pose_model.extract_feat(torch.zeros(n, 3, h, w, device=_DEVICE))
+            torch.cuda.synchronize()
+
+    def _work(self):
+        try:
+            self._warm()
+            while True:
+                item = self.q.get()
+                if item is None:
+                    break
+                side, chunk = item
+                self.tracks[side].run([cv2.cvtColor(y, cv2.COLOR_YUV2BGR_I420) for y in chunk])
+                with self.wait_lock:
+                    self.waiting -= len(chunk)
+        except Exception as ex:                         # never stop a recording over this
+            self.error = ex
+            print(f"recording: AI during recording stopped ({ex!r}); the analysis does it all")
+        finally:
+            self.done.set()
+
+    def finish(self):
+        """Recording stopped: take no more frames; the thread finishes the batches it has (the last partial
+        batch is left to the analysis, so batches line up with the saved video)."""
+        print(f"recording: AI during recording took {self.written} frames per camera, "
+              f"{len(self.tracks['L'].frames)} already done at Stop; it finishes the rest of its batches now")
+        self.taking = False
+        self.pending = {"L": [], "R": []}
+        self.q.put(None)
+
+    def result(self, timeout=None):
+        """{'L': _PoseTrack, 'R': _PoseTrack} once the thread is done, or None (error / not finished in time)."""
+        if not self.done.wait(timeout):
+            return None
+        if self.error:
+            return None
+        L, R = self.tracks["L"], self.tracks["R"]
+        if len(L.frames) != len(R.frames):
+            return None
+        return {"L": L, "R": R}
+
+
+# Results of the AI during recording, by the left camera's stored name, until the analysis takes them.
+_live_results = {}
+_live_lock = threading.Lock()
+
+
+def keep_live(object_name, live):
+    with _live_lock:
+        _live_results[object_name] = live
+        while len(_live_results) > 5:                   # recordings never analysed: keep the last few only
+            _live_results.pop(next(iter(_live_results)))
+
+
+def take_live(object_name, timeout=120):
+    """The AI's results from the recording of this video, waiting for it to finish (None if there are none)."""
+    with _live_lock:
+        live = _live_results.pop(object_name, None)
+    if live is None:
+        return None
+    t = time.time()
+    res = live.result(timeout)
+    if res is not None:
+        print(f"pose: AI during recording: {len(res['L'].frames)} frames per camera ready "
+              f"(waited {time.time() - t:.1f}s for it to finish)")
+    return res
 
 
 def _flip_share():
