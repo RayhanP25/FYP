@@ -240,8 +240,35 @@ def _infer_both(lp, rp):
     return rawL, rawR
 
 
+def _ready_copies(full_left, scaled_paths, target_w):
+    """The smaller copies made while recording (camera.py), copied to temp files, when they are there and the
+    right size; otherwise None and the views are made here as before."""
+    import shutil
+    if not all(p and os.path.exists(p) for p in scaled_paths):
+        return None
+    cap = cv2.VideoCapture(full_left)
+    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    n_full = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    want = tuple(v - v % 2 for v in _out_size(W, H, target_w))
+    for p in scaled_paths:
+        c = cv2.VideoCapture(p)
+        got = (int(c.get(cv2.CAP_PROP_FRAME_WIDTH)), int(c.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        n, fps = int(c.get(cv2.CAP_PROP_FRAME_COUNT)), c.get(cv2.CAP_PROP_FPS) or 30.0
+        c.release()
+        if got != want or abs(n - n_full) > 1:
+            print(f"views: the analysis copy made when saving is {got}, {n} frames (want {want}, {n_full}); making new ones")
+            return None
+    outs = [tempfile.mktemp(suffix="_L.mp4"), tempfile.mktemp(suffix="_R.mp4")]
+    for src, dst in zip(scaled_paths, outs):
+        shutil.copyfile(src, dst)
+    print("views: using the analysis copies made when the recording was saved")
+    return outs[0], outs[1], fps
+
+
 def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
-                         target_w=1280, output_path_right=None, plain_paths=None, input_path_right=None):
+                         target_w=1280, output_path_right=None, plain_paths=None, input_path_right=None,
+                         scaled_paths=None):
     """
     input_path        : the side-by-side recording, or the LEFT camera's video when input_path_right is given
     input_path_right  : the RIGHT camera's video (recordings saved as two files, layout "stereo_pair")
@@ -260,8 +287,9 @@ def process_stereo_video(input_path, output_path, calib_path="calibration.npz",
     calib = load_calibration(calib_path)
 
     progress.stage("Preparing the camera views")
-    lp, rp, fps = (_scale_pair(input_path, input_path_right, target_w) if input_path_right
-                   else _split_to_temp(input_path, target_w))
+    ready = _ready_copies(input_path, scaled_paths, target_w) if input_path_right and scaled_paths else None
+    lp, rp, fps = ready or (_scale_pair(input_path, input_path_right, target_w) if input_path_right
+                            else _split_to_temp(input_path, target_w))
     t_split = time.perf_counter() - t_start
     keep_right = output_path_right is not None
     roTmp = output_path_right or tempfile.mktemp(suffix="_Ro.mp4")

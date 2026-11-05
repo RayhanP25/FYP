@@ -52,3 +52,6 @@ def _report_video_backend():
     # Videos whose upload to cloud storage was cut off (server stopped) are sent again.
     from video import background_upload
     threading.Thread(target=background_upload.resume_pending, daemon=True).start()
+    # Load the pose model now, so the first analysis does not wait for it.
+    from pose import pose_estimator
+    threading.Thread(target=pose_estimator.warm_up, daemon=True).start()

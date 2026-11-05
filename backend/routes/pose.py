@@ -153,11 +153,16 @@ def process_video(
             from stereo.stereo_process import process_stereo_video
             temp_output_right_path = tempfile.mktemp(suffix="_processed_right.mp4")
             plain_paths = (tempfile.mktemp(suffix="_plain_L.mp4"), tempfile.mktemp(suffix="_plain_R.mp4"))
+            small = None                       # the analysis copies made while recording, if this PC has them
+            if video_doc.get("object_name_right"):
+                small = (media_cache.get(media_cache.small_name(video_doc["object_name"])),
+                         media_cache.get(media_cache.small_name(video_doc["object_name_right"])))
             result = process_stereo_video(temp_input_path, temp_output_path,
                                           calib_path=calib_path,
                                           output_path_right=temp_output_right_path,
                                           plain_paths=plain_paths,
-                                          input_path_right=temp_input_right_path)
+                                          input_path_right=temp_input_right_path,
+                                          scaled_paths=small)
         else:
             # If it's stereo but calibration is missing, fall back to 2D so it
             # still works (analyses the left half is not split here -- whole frame).
@@ -255,6 +260,7 @@ def process_video(
         if calib_doc:
             analysis_doc["calibration_id"] = str(calib_doc["_id"])
             analysis_doc["calibration_setup"] = calib_doc.get("setup")
+    analysis_doc["processing"] = progress.timings()      # how long this analysis took, shown in the studio
     existing_analysis = analysis_collection.find_one({"video_id": video_id})
     if existing_analysis:
         analysis_collection.update_one({"_id": existing_analysis["_id"]}, {"$set": analysis_doc})

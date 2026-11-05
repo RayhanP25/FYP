@@ -18,6 +18,11 @@ def path_for(object_name):
     return os.path.join(DIR, os.path.basename(object_name))
 
 
+def small_name(object_name):
+    """The cache name of a recording's smaller copy for the analysis (made while recording, kept on this PC)."""
+    return f"small_{os.path.basename(object_name)}"
+
+
 def get(object_name):
     """Local path of this stored video, or None if it is not on this PC."""
     p = path_for(object_name) if object_name else None

@@ -10,7 +10,34 @@ export interface JobState {
     total: number;
     finished: boolean;
     error: string | null;
+    /** Seconds since the job started (stops when it finishes). */
+    elapsed?: number;
 }
+
+/** 42 -> "0:42", 116 -> "1:56". */
+export const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+/** "9 s", "1 min 56 s": how long something took. */
+export const took = (s: number) => (s < 60 ? `${s < 10 ? s.toFixed(1) : Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
+
+/** A running clock: the server's elapsed time when it has one (so it is right after leaving and coming back),
+ *  otherwise the time since this was first shown. */
+const useElapsed = (job: JobState | null) => {
+    const [mounted] = useState(() => Date.now());
+    const [base, setBase] = useState<{ server: number; at: number } | null>(null);
+    const [, setTick] = useState(0);
+    useEffect(() => {
+        if (job?.elapsed != null) setBase({ server: job.elapsed, at: Date.now() });
+    }, [job?.elapsed]);
+    const running = !job?.finished;
+    useEffect(() => {
+        if (!running) return;
+        const t = window.setInterval(() => setTick((n) => n + 1), 250);
+        return () => window.clearInterval(t);
+    }, [running]);
+    if (base) return base.server + (running ? (Date.now() - base.at) / 1000 : 0);
+    return (Date.now() - mounted) / 1000;
+};
 
 /** A new key for one job; the page sends it with the request and polls it while it waits. */
 export const newJobKey = (kind: string) => `${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -61,6 +88,7 @@ interface JobProgressProps {
 
 /** The title, the current step ("Step 2 of 5: Finding body points"), a bar and how far it is. */
 export const JobProgress = ({ title, job, fallbackStage = 'Starting', fraction, note }: JobProgressProps) => {
+    const elapsed = useElapsed(job);
     const stage = job?.stage && job.stage !== 'Starting' ? job.stage : fallbackStage;
     const steps = job?.stages ?? [];
     const stepNo = steps.findIndex((s) => stage.startsWith(s)) + 1;
@@ -74,6 +102,7 @@ export const JobProgress = ({ title, job, fallbackStage = 'Starting', fraction, 
             <div className="flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />
                 <span className="font-semibold text-text">{title}</span>
+                <span className="ml-auto text-sm text-text-muted tabular-nums" title="Time so far">{clock(elapsed)}</span>
             </div>
             <div className="flex items-baseline justify-between gap-3 text-sm">
                 <span className="text-text-secondary">

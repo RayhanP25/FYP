@@ -91,7 +91,7 @@ def finish(key=None, error=None):
         j = _jobs.get(key)
         if j:
             now = time.time()
-            j.update(finished=True, error=error, updated=now)
+            j.update(finished=True, error=error, updated=now, ended=now)
             # How long each step took, in the server window: shows where the time goes.
             log = j["log"] + [("end", now)]
             steps = " | ".join(f"{name} {t1 - t0:.1f}s" for (name, t0), (_, t1) in zip(log, log[1:]) if t1 - t0 >= 0.05)
@@ -103,7 +103,25 @@ def finish(key=None, error=None):
 def get(key):
     with _lock:
         j = _jobs.get(key)
-        return {k: v for k, v in j.items() if k != "log"} if j else None
+        if not j:
+            return None
+        out = {k: v for k, v in j.items() if k != "log"}
+        out["elapsed"] = round((j.get("ended") or time.time()) - j["started"], 1)   # for the timer on the page
+        return out
+
+
+def timings(key=None):
+    """How long the job has taken so far, in total and per step, to store with the result."""
+    key = key or current()
+    with _lock:
+        j = _jobs.get(key) if key else None
+        if not j:
+            return None
+        now = j.get("ended") or time.time()
+        log = j["log"] + [("end", now)]
+        steps = [{"name": name, "seconds": round(t1 - t0, 1)}
+                 for (name, t0), (_, t1) in zip(log, log[1:]) if t1 - t0 >= 0.05]
+        return {"total_seconds": round(now - j["started"], 1), "steps": steps}
 
 
 def wrap(fn):

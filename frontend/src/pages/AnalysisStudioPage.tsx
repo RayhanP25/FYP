@@ -8,7 +8,7 @@ import AppLayout from '@/layout/AppLayout';
 import Button from '@/components/ui/button';
 import { api } from '@/api/axiosInstance';
 import { downloadFullSize, getVideoUrl, moveVideo, recordedByText, renameVideo } from '@/api/videoApi';
-import { JobProgress, JobProgressOverlay, newJobKey, useJobProgress } from '@/components/ui/JobProgress';
+import { JobProgress, JobProgressOverlay, newJobKey, took, useJobProgress } from '@/components/ui/JobProgress';
 import { athletesInGroups, getGroups } from '@/api/groupApi';
 import { useAuth } from '@/hooks/useAuth';
 import { getEdits, revertEdits, saveEdits } from '@/api/editsApi';
@@ -103,7 +103,8 @@ const AnalysisStudioPage = () => {
         queryFn: async () => {
             const doc = (await api.get(`/api/get-analysis/${videoId}`)).data;
             // Which saved calibration the analysis used, for the Re-analyze picker.
-            return { ...doc.result, calibration_id: doc.calibration_id ?? null, calibration_setup: doc.calibration_setup ?? null };
+            return { ...doc.result, calibration_id: doc.calibration_id ?? null, calibration_setup: doc.calibration_setup ?? null,
+                processing: (doc.processing ?? null) as { total_seconds: number; steps: { name: string; seconds: number }[] } | null };
         },
         retry: false,
     });
@@ -508,6 +509,19 @@ const AnalysisStudioPage = () => {
                                     </span>
                                 )}
                                 {stats.map((s) => <span key={s}>{s}</span>)}
+                                {meta?.save_seconds != null && (
+                                    <span className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium" title="From Stop & Save until the recording was saved">
+                                        Saved in {took(meta.save_seconds)}
+                                    </span>
+                                )}
+                                {analysis.processing?.total_seconds != null && (
+                                    <span
+                                        className="px-2 py-0.5 rounded border border-border text-text-secondary text-xs font-medium cursor-help"
+                                        title={['Time for each step:', ...analysis.processing.steps.map((s: { name: string; seconds: number }) => `${s.name}: ${took(s.seconds)}`)].join('\n')}
+                                    >
+                                        Analysed in {took(analysis.processing.total_seconds)}
+                                    </span>
+                                )}
                             </div>
                         )}
                     </div>

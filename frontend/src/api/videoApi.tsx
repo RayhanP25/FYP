@@ -44,6 +44,8 @@ export interface VideoUrlResponse {
     /** False for videos added before this was stored: recorded_by_* is then the owner. */
     recorded_by_known?: boolean;
     source?: string;
+    /** Seconds from Stop & Save until the recording was saved (camera recordings only). */
+    save_seconds?: number | null;
     /** Still being copied to cloud storage (just recorded on this PC). */
     uploading?: boolean;
 }

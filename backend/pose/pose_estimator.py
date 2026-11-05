@@ -46,7 +46,10 @@ POSE_PREFETCH = os.environ.get("POSE_PREFETCH", "1") == "1"          # read vide
 POSE_CHANNELS_LAST = os.environ.get("POSE_CHANNELS_LAST", "0") == "1"  # no measured gain
 # Flip test = run every crop twice (mirrored too) and average: ~1.4x slower, but turning it off moved
 # keypoints by 0.6 px median / 6 px max in bench_speed.py, so it stays on unless you choose speed.
-POSE_FLIP_TEST = os.environ.get("POSE_FLIP_TEST", "1") == "1"
+# POSE_FLIP_TEST=auto: the mirrored pass only for crops with an unsure arm/leg joint (pose_gpu.FLIP_AUTO).
+POSE_FLIP_MODE = os.environ.get("POSE_FLIP_TEST", "1").strip().lower()
+POSE_FLIP_TEST = POSE_FLIP_MODE in ("1", "auto")
+POSE_FLIP_AUTO_THR = float(os.environ.get("POSE_FLIP_AUTO_THR", "0.6"))
 # RTMDet keeps every box above 0.001 (thousands, 80 classes) and runs NMS on all of them: ~75 ms per
 # image. We only use the best person above 0.3 (_person_box), and greedy NMS never lets a box below
 # 0.3 suppress one above it, so dropping those first returns the same box much faster. 0 = default.
@@ -62,10 +65,20 @@ _pose_model = None
 _detector = None
 _pipeline = None
 _lock = threading.Lock()          # the detector and one-time setup are not thread-safe
+_load_lock = threading.Lock()     # loading at start-up and a first analysis must not load twice
 
 
 def _load_models():
     """Load ViTPose + person detector once (heavy); reused across requests."""
+    global _pose_model, _detector
+    if _pose_model is not None:
+        return
+    with _load_lock:
+        if _pose_model is None:
+            _load_models_now()
+
+
+def _load_models_now():
     global _pose_model, _detector
     if _pose_model is None:
         if _DEVICE.startswith("cuda"):
@@ -81,6 +94,38 @@ def _load_models():
         tune_detector(DET_SCORE_THR)
         if _DEVICE.startswith("cuda"):
             _setup_gpu_paths()
+
+
+def warm_up():
+    """Load the models when the server starts and run them once on a blank picture, so the first analysis
+    does not wait for loading and the GPU has already picked its fastest settings. POSE_WARMUP=0 turns it off."""
+    if os.environ.get("POSE_WARMUP", "1") == "0" or os.environ.get("POSE_MODEL", "") == "mediapipe":
+        return
+    import time
+    import numpy as np
+    t0 = time.perf_counter()
+    try:
+        _load_models()
+        blank = np.zeros((720, 1280, 3), np.uint8)
+        with _lock:
+            checked = getattr(_direct_det, "checked", None)
+            for k in (1, 2):
+                _detect_people([blank] * k)
+            if _direct_det is not None and checked is not None:
+                _direct_det.checked = checked   # the self-check still runs on the first real frames
+        if _DEVICE.startswith("cuda"):          # the pose network itself (not the decoder, which checks itself
+            import torch                        # on the first real batch): full batch, with the flip copy
+            w, h = _pose_model.cfg.codec["input_size"]
+            n = max(1, POSE_BATCH) * (2 if POSE_FLIP_TEST and POSE_FLIP_BATCH else 1)
+            x = torch.zeros(n, 3, h, w, device=_DEVICE)
+            if POSE_CHANNELS_LAST:
+                x = x.contiguous(memory_format=torch.channels_last)
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16, enabled=POSE_FP16):
+                _pose_model.extract_feat(x)
+            torch.cuda.synchronize()
+        print(f"pose: model loaded and warmed up in {time.perf_counter() - t0:.1f}s")
+    except Exception as ex:                 # never stop the server over this; the first analysis loads it instead
+        print(f"pose: warm-up skipped ({ex!r})")
 
 
 def tune_detector(score_thr):
@@ -99,6 +144,10 @@ def _setup_gpu_paths():
     global _direct_det
     from pose import pose_gpu
     pose_gpu.FLIP_BATCH_ON = POSE_FLIP_BATCH
+    pose_gpu.FLIP_AUTO = POSE_FLIP_MODE == "auto"
+    pose_gpu.FLIP_AUTO_THR = POSE_FLIP_AUTO_THR
+    if pose_gpu.FLIP_AUTO:
+        print(f"pose: flip test only where an arm or leg joint scores below {POSE_FLIP_AUTO_THR}")
     if POSE_GPU_DECODE:
         pose_gpu.install_gpu_decoder(_pose_model)
     if POSE_CHANNELS_LAST:
@@ -526,8 +575,19 @@ def _run_inference(video_path: str) -> dict:
             "batch": max(1, POSE_BATCH),
             "fp16": bool(POSE_FP16 and _DEVICE.startswith("cuda")),
             "device": _DEVICE,
+            "flip_test": POSE_FLIP_MODE,
+            **_flip_share(),
         },
     }
+
+
+def _flip_share():
+    """With POSE_FLIP_TEST=auto: the share of crops (so far, both cameras) that also got the mirrored pass."""
+    if POSE_FLIP_MODE != "auto":
+        return {}
+    from pose import pose_gpu
+    st = pose_gpu.FLIP_STATS
+    return {"flipped_crops": st["flipped"], "crops": st["crops"]}
 
 
 def _overlay_confidences(frames):

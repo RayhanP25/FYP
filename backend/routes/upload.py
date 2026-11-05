@@ -269,6 +269,7 @@ async def get_video(request: Request, video_id: str, view: str = "left", variant
         "owner_name": names([video_doc["user_id"]]).get(video_doc["user_id"]),
         **_recorded_by(video_doc),
         "uploading": bool(video_doc.get("uploading")),
+        "save_seconds": video_doc.get("save_seconds"),
         "source": video_doc.get("source", "upload"),
         "is_processed": bool(video_doc.get("processed_object_name")),
         "view": "right" if (view == "right" and right_object_name) else "left",
@@ -402,6 +403,8 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
             raise HTTPException(status_code=500, detail=f"Failed to delete video from storage: {str(e)}")
     for key in _MEDIA_KEYS:                     # this PC's copies too
         media_cache.remove(video_doc.get(key))
+        if video_doc.get(key):
+            media_cache.remove(media_cache.small_name(video_doc[key]))
     if video_doc.get("object_name_right"):
         try:
             minio_client.remove_object(bucket_name=video_doc["bucket_name"], object_name=video_doc["object_name_right"])

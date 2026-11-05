@@ -24,10 +24,12 @@ import threading
 import tempfile
 import shutil
 import uuid
+import queue
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import cv2
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -226,6 +228,169 @@ class StereoManager:
 manager = StereoManager()
 
 
+class _LiveEncoder:
+    """Makes the videos WHILE recording, so Stop only has to wait for the last frames.
+
+    Each camera frame is converted here by OpenCV to the video's own pixel format (YUV 4:2:0, the same numbers
+    FFmpeg's converter gives, within 1-2 levels of 255) and, shrunk, for the analysis copy. Four FFmpeg
+    processes (left / right, full size / analysis copy) only pass those frames to the GPU encoder: no JPEG to
+    decode and no conversion in FFmpeg, which were both too slow at 2560x1440 on the processor. FFmpeg's input
+    queue is kept short, so if it cannot keep up the backlog shows at once and the recording falls back to the
+    stills (made after recording, as before). Gaps are filled by writing the previous frame again, exactly as
+    _encode does."""
+
+    def __init__(self, w, h, small_w):
+        import subprocess
+        self.ok = False
+        self.procs, self.readers = [], []
+        self.counts = [0, 0, 0, 0]
+        self.written = 0
+        self.start_ts = None
+        self.period = 1.0 / CAP_FPS
+        self.size = (w, h)
+        self.t_convert = self.t_write = 0.0             # seconds spent after start-up, for the log
+        self.pairs = 0
+        self.t_first = None                            # when the first frame was handed over
+        W, H = w - w % 2, h - h % 2
+        sw = min(small_w, W)
+        sh = int(round(H * sw / W))
+        sw, sh = sw - sw % 2, sh - sh % 2
+        self.full, self.small = (W, H), (sw, sh)
+        exe = video_io.ffmpeg_exe()
+        enc_full, enc_small = video_io.pick_encoder(W, H), video_io.pick_encoder(sw, sh)
+        if not exe or enc_full != "h264_nvenc" or enc_small != "h264_nvenc":
+            print("recording: no GPU video encoder, the video is made after recording")
+            return
+        self.encoder = enc_full
+        self.paths = [tempfile.mktemp(suffix="_L.mp4"), tempfile.mktemp(suffix="_R.mp4")]
+        self.small_paths = [tempfile.mktemp(suffix="_L_small.mp4"), tempfile.mktemp(suffix="_R_small.mp4")]
+        args = video_io._ENCODERS[enc_full]
+        try:
+            for k, ((cw, ch), out) in enumerate([(self.full, self.paths[0]), (self.full, self.paths[1]),
+                                                 (self.small, self.small_paths[0]), (self.small, self.small_paths[1])]):
+                cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-thread_queue_size", "4",
+                       "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{cw}x{ch}", "-framerate", str(CAP_FPS),
+                       "-i", "pipe:0", "-c:v", enc_full, *args, "-r", str(CAP_FPS),
+                       "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", out]
+                p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                self.procs.append(p)
+                t = threading.Thread(target=self._read_progress, args=(k, p), daemon=True)
+                t.start()
+                self.readers.append(t)
+            self.ok = True
+        except Exception as ex:
+            print(f"recording: could not start the live video encoder ({ex!r}); the video is made after recording")
+            self.abort()
+
+    def _read_progress(self, k, p):
+        for line in p.stdout:
+            line = line.decode("ascii", "ignore")
+            if line.startswith("frame="):
+                try:
+                    self.counts[k] = int(line.split("=", 1)[1])
+                except ValueError:
+                    pass
+
+    def _convert(self, frame):
+        W, H = self.full
+        f = frame[:H, :W]
+        small = cv2.resize(f, self.small, interpolation=cv2.INTER_AREA)
+        return cv2.cvtColor(f, cv2.COLOR_BGR2YUV_I420), cv2.cvtColor(small, cv2.COLOR_BGR2YUV_I420)
+
+    def add(self, ts, frame_left, frame_right):
+        """One new frame pair, captured at ts. Same gap rule as _encode."""
+        if not self.ok:
+            return
+        if (frame_left.shape[1], frame_left.shape[0]) != self.size or frame_right.shape[:2] != frame_left.shape[:2]:
+            print("recording: a camera changed size; the video is made after recording")
+            self.abort()
+            return
+        if self.start_ts is None:
+            self.start_ts = ts
+        target = int(round((ts - self.start_ts) / self.period)) + 1
+        n = max(1, target - self.written) if target - self.written > 1.5 else 1
+        if self.t_first is None:
+            self.t_first = time.time()
+        try:
+            t0 = time.perf_counter()
+            fullL, smallL = self._convert(frame_left)
+            fullR, smallR = self._convert(frame_right)
+            t1 = time.perf_counter()
+            bufs = [memoryview(fullL), memoryview(fullR), memoryview(smallL), memoryview(smallR)]
+            for _ in range(n):
+                for p, b in zip(self.procs, bufs):
+                    p.stdin.write(b)
+            if self.started():                         # steady speed, after FFmpeg / the GPU encoder started
+                self.t_convert += t1 - t0
+                self.t_write += time.perf_counter() - t1
+                self.pairs += 1
+            self.written += n
+        except Exception as ex:
+            print(f"recording: live video encoder stopped ({ex!r}); the video is made after recording")
+            self.abort()
+
+    STARTUP_S = 2.0          # FFmpeg and the GPU encoder start when the first frame arrives
+
+    def started(self):
+        return self.t_first is not None and time.time() - self.t_first > self.STARTUP_S
+
+    def stats(self):
+        k = max(1, self.pairs)
+        return (f"per frame pair: converting {1000 * self.t_convert / k:.1f} ms, handing to FFmpeg "
+                f"{1000 * self.t_write / k:.1f} ms; real time needs under {1000 * self.period:.0f} ms in total")
+
+    def finish(self):
+        """Wait for the last frames. True when both videos (and both small copies) were written."""
+        if not self.ok:
+            return False
+        t0 = time.time()
+        progress.stage("Preparing the video", total=2 * self.written)
+        for p in self.procs:
+            try:
+                p.stdin.close()
+            except Exception:
+                pass
+        while any(p.poll() is None for p in self.procs):
+            progress.step(self.counts[0] + self.counts[1])
+            time.sleep(0.1)
+        for t in self.readers:
+            t.join(timeout=1)
+        errs = [p.stderr.read().decode("utf-8", "ignore")[-300:] for p in self.procs]
+        good = (all(p.returncode == 0 for p in self.procs)
+                and all(os.path.exists(f) and os.path.getsize(f) > 0 for f in self.paths + self.small_paths))
+        if not good:
+            print(f"recording: live video encoder failed ({errs}); making the video from the stills instead")
+            self.cleanup()
+        else:
+            print(f"recording: video made while recording ({self.written} frames), finished {time.time() - t0:.1f}s "
+                  f"after Stop ({self.stats()})")
+        self.ok = good
+        return good
+
+    def abort(self):
+        self.ok = False
+        for p in self.procs:
+            try:
+                p.kill()
+            except Exception:
+                pass
+        for p in self.procs:
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                pass
+        self.cleanup()
+
+    def cleanup(self):
+        for f in getattr(self, "paths", []) + getattr(self, "small_paths", []):
+            try:
+                if os.path.exists(f):
+                    os.unlink(f)
+            except OSError:
+                pass
+
+
 class Recorder:
     """Records in two stages so 2K stereo keeps up with the cameras.
 
@@ -240,6 +405,12 @@ class Recorder:
     is paid once after recording, and stop-recording takes a little longer instead."""
 
     MAX_PENDING = int(os.getenv("RECORD_MAX_PENDING", "90"))   # stills waiting to be written
+    # Make the videos while recording (_LiveEncoder). Needs the PC at full speed: on the RTX 4050 laptop it keeps
+    # up (30 fps, 0 dropped, tools/bench_record.py) when plugged in on Best performance, and falls behind on a
+    # power-saving mode -- it then falls back to making the video after recording. RECORD_LIVE_ENCODE=0 = off.
+    LIVE = os.getenv("RECORD_LIVE_ENCODE", "1") == "1"
+    LIVE_BACKLOG = int(os.getenv("RECORD_LIVE_BACKLOG", "30"))  # frames waiting for it (1 s) before it is dropped
+    ANALYSIS_W = 1280                                          # the analysis copy's width (stereo_process target_w)
 
     def __init__(self):
         self.active = False
@@ -249,6 +420,8 @@ class Recorder:
         self.dup_frames = 0
         self.dropped = 0
         self.real_fps = 0.0
+        self.live = None
+        self.small_paths = None
 
     def start(self):
         if self.active:
@@ -264,19 +437,43 @@ class Recorder:
         self.frames = self.dup_frames = self.dropped = 0
         self.real_fps = 0.0
         self.encoder = None
+        self.live = None
+        self.small_paths = None
+        self.size = None
+        if self.LIVE:                       # start FFmpeg / the GPU encoder now, before the first frame
+            fL = manager.get_latest()[0]
+            self.size = (fL.shape[1], fL.shape[0])
+            self.live = _LiveEncoder(self.size[0], self.size[1], self.ANALYSIS_W)
         self.active = True
         self.thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.thread.start()
 
     def _save_pair(self, k, fL, fR):
+        """Both stills as JPEG: written to disk (the fallback) and returned for the live encoder."""
         pL, pR = os.path.join(self.dir, f"{k:06d}_L.jpg"), os.path.join(self.dir, f"{k:06d}_R.jpg")
-        cv2.imwrite(pL, fL, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        cv2.imwrite(pR, fR, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        return pL, pR
+        out = []
+        for frame, path in ((fL, pL), (fR, pR)):
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            if not ok:
+                raise RuntimeError("could not compress a still")
+            data = buf.tobytes()
+            with open(path, "wb") as f:
+                f.write(data)
+            out.append(data)
+        return pL, pR, out[0], out[1]
 
     def _capture_loop(self):
         pool = ThreadPoolExecutor(max_workers=int(os.getenv("RECORD_WORKERS", "4")))
-        jobs = []
+        q = queue.Queue()                              # (capture time, still being saved), in capture order
+        feeder = threading.Thread(target=self._feed, args=(q,), daemon=True)
+        feeder.start()
+        live_q = queue.Queue() if self.LIVE else None  # (capture time, left, right) for the live encoder
+        live_thread = None
+        if live_q is not None:
+            live_thread = threading.Thread(target=self._live_feed, args=(live_q,), daemon=True)
+            live_thread.start()
+        pending = []
+        k = 0
         last_seq = manager.get_latest()[3] - 1
         while self.active:
             pair = manager.get_latest()
@@ -285,12 +482,58 @@ class Recorder:
                 continue
             fL, fR, ts, seq = pair
             last_seq = seq
-            if sum(not j.done() for _, j in jobs[-self.MAX_PENDING - 1:]) >= self.MAX_PENDING:
+            pending = [j for j in pending if not j.done()]
+            if len(pending) >= self.MAX_PENDING:
                 self.dropped += 1                     # disk can't keep up: skip, gap gets filled later
                 continue
-            jobs.append((ts, pool.submit(self._save_pair, len(jobs), fL, fR)))
+            if self.size is None:
+                self.size = (fL.shape[1], fL.shape[0])
+            job = pool.submit(self._save_pair, k, fL, fR)
+            k += 1
+            pending.append(job)
+            q.put((ts, job))
+            if live_q is not None:
+                live_q.put((ts, fL, fR))
+        if live_q is not None:
+            live_q.put(None)
         pool.shutdown(wait=True)
-        self.stills = [(ts, *j.result()) for ts, j in jobs]
+        q.put(None)
+        feeder.join()
+        if live_thread is not None:
+            live_thread.join()
+
+    def _feed(self, q):
+        """Collects the saved stills in capture order (the fallback, and what the gap rule is computed from)."""
+        stills = []
+        while True:
+            item = q.get()
+            if item is None:
+                break
+            ts, job = item
+            pL, pR = job.result()[:2]
+            stills.append((ts, pL, pR))
+        self.stills = stills
+
+    def _live_feed(self, q):
+        """Hands each new frame pair to the live encoder, on its own thread so it never waits for the stills.
+        If its queue grows past LIVE_BACKLOG the encoder cannot keep up: it is dropped (the stills remain)."""
+        while True:
+            item = q.get()
+            if item is None:
+                break
+            ts, fL, fR = item
+            if self.live is None and self.size:
+                self.live = _LiveEncoder(self.size[0], self.size[1], self.ANALYSIS_W)
+            if self.live is None or not self.live.ok:
+                continue                                # dropped: just empty the queue
+            limit = self.LIVE_BACKLOG if self.live.started() else 2 * self.LIVE_BACKLOG   # more room while starting
+            if q.qsize() > limit:
+                print(f"recording: live video encoder fell behind after {self.live.written} frames, "
+                      f"{q.qsize()} waiting "
+                      f"({self.live.stats()}); the video is made after recording")
+                self.live.abort()
+                continue
+            self.live.add(ts, fL, fR)
 
     def _encode(self):
         """Write the stills into two MP4s, one per camera, at full size. Each is at most 2560 wide, so the GPU
@@ -312,9 +555,12 @@ class Recorder:
         progress.stage("Preparing the video", total=2 * written)
         errors = []
 
-        def ffmpeg_side(col, path):
+        small_out = {}
+
+        def ffmpeg_side(col, path, with_small=True):
             """FFmpeg reads the stills itself (a concat list with each still's duration, so gaps repeat the
-            previous one) and encodes on the GPU: no frame passes through Python."""
+            previous one) and encodes on the GPU: no frame passes through Python. In the same pass it writes the
+            smaller copy the analysis uses (ANALYSIS_W wide), so the analysis does not have to make it."""
             import subprocess
             exe = video_io.ffmpeg_exe()
             first = cv2.imread(self.stills[0][col])
@@ -327,10 +573,25 @@ class Recorder:
                 for still, n in zip(self.stills, repeats):
                     f.write(f"file '{still[col].replace(chr(92), '/')}'\nduration {n * period:.6f}\n")
                 f.write(f"file '{self.stills[-1][col].replace(chr(92), '/')}'\n")   # concat needs the last one twice
-            cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
-                   "-fps_mode", "cfr", "-r", str(CAP_FPS), "-frames:v", str(written),
-                   "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", enc, *video_io._ENCODERS[enc],
-                   "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", path]
+            W, H = w + w % 2, h + h % 2
+            sw = min(self.ANALYSIS_W, W)
+            sh = int(round(H * sw / W))
+            sw, sh = sw - sw % 2, sh - sh % 2
+            enc_small = video_io.pick_encoder(sw, sh) if with_small else None
+            small_path = tempfile.mktemp(suffix=f"_{col}_small.mp4") if enc_small else None
+            out_args = ["-fps_mode", "cfr", "-r", str(CAP_FPS), "-frames:v", str(written)]
+            if small_path:
+                cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
+                       "-filter_complex", f"[0:v]pad=ceil(iw/2)*2:ceil(ih/2)*2,split=2[full][s0];[s0]scale={sw}:{sh}[small]",
+                       "-map", "[full]", *out_args, "-c:v", enc, *video_io._ENCODERS[enc],
+                       "-pix_fmt", "yuv420p", "-movflags", "+faststart", path,
+                       "-map", "[small]", *out_args, "-c:v", enc_small, *video_io._ENCODERS[enc_small],
+                       "-pix_fmt", "yuv420p", "-movflags", "+faststart", small_path,
+                       "-progress", "pipe:1", "-nostats"]
+            else:
+                cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
+                       *out_args, "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", enc, *video_io._ENCODERS[enc],
+                       "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", path]
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             last = 0
@@ -344,11 +605,19 @@ class Recorder:
                         pass
             err = proc.stderr.read()
             if proc.wait() != 0 or not os.path.exists(path):
-                print(f"recording: ffmpeg could not write the video ({err[-300:]}); using the slower way")
                 progress.add(-last)
+                if small_path:                    # try once more without the analysis copy
+                    if os.path.exists(small_path):
+                        os.unlink(small_path)
+                    print(f"recording: ffmpeg could not write the video and its analysis copy ({err[-300:]}); "
+                          f"trying without the copy")
+                    return ffmpeg_side(col, path, with_small=False)
+                print(f"recording: ffmpeg could not write the video ({err[-300:]}); using the slower way")
                 return False
             progress.add(written - last)
             self.encoder = enc
+            if small_path and os.path.exists(small_path) and os.path.getsize(small_path) > 0:
+                small_out[col] = small_path
             return True
 
         def write_side(col, path):
@@ -380,6 +649,12 @@ class Recorder:
         shutil.rmtree(self.dir, ignore_errors=True)
         if errors:
             raise HTTPException(status_code=500, detail=f"Could not save the recording: {errors[0]}")
+        if 1 in small_out and 2 in small_out:   # both analysis copies made (else the analysis makes its own)
+            self.small_paths = [small_out[1], small_out[2]]
+        else:
+            for f in small_out.values():
+                if os.path.exists(f):
+                    os.unlink(f)
         self.real_fps = len(self.stills) / max(1e-6, self.frames / CAP_FPS)
 
     def stop(self):
@@ -388,7 +663,19 @@ class Recorder:
         self.active = False
         if self.thread:
             self.thread.join()
-        self._encode()
+        live, self.live = self.live, None
+        if live is not None and live.ok and self.stills and live.finish():
+            self.path, self.path_right = live.paths
+            self.small_paths = live.small_paths     # the analysis copies, so the analysis need not make them
+            self.frames, self.dup_frames = live.written, live.written - len(self.stills)
+            self.encoder = live.encoder
+            self.real_fps = len(self.stills) / max(1e-6, self.frames / CAP_FPS)
+            shutil.rmtree(self.dir, ignore_errors=True)
+        else:
+            if live is not None:
+                live.abort()
+            self.small_paths = None
+            self._encode()
         return self.path, self.path_right, self.frames
 
 
@@ -533,6 +820,7 @@ def start_recording(current_user: dict = Depends(get_current_user)):
 
 @router.post("/stop-recording")
 def stop_recording(job: str = None, current_user: dict = Depends(get_current_user)):
+    t_stop = time.time()
     if job:
         progress.start(job, ["Preparing the video"])
     try:
@@ -544,6 +832,10 @@ def stop_recording(job: str = None, current_user: dict = Depends(get_current_use
     base = uuid.uuid4()
     object_name, object_name_right = f"stereo_{base}_L.mp4", f"stereo_{base}_R.mp4"
     cached = [media_cache.put(object_name, path, move=True), media_cache.put(object_name_right, path_right, move=True)]
+    # The smaller copies made while recording, kept on this PC for the analysis (never uploaded).
+    for name, small in zip((object_name, object_name_right), recorder.small_paths or ()):
+        if not media_cache.put(media_cache.small_name(name), small, move=True) and os.path.exists(small):
+            os.unlink(small)
     sizes = []
     for c, tmp in zip(cached, (path, path_right)):
         sizes.append(os.path.getsize(c or tmp) if os.path.exists(c or tmp) else 0)
@@ -570,6 +862,7 @@ def stop_recording(job: str = None, current_user: dict = Depends(get_current_use
         "dup_frames": dup_frames,      # frames repeated to fill real camera gaps
         "real_fps": real_fps,          # new images per second actually captured
         "dropped_frames": recorder.dropped,  # camera frames skipped because saving fell behind
+        "save_seconds": round(time.time() - t_stop, 1),   # from Stop & Save until saved, shown in the studio
     }
     try:                                   # which calibration this was filmed with (see calibration_store.py)
         cal = calibration_store.active()
