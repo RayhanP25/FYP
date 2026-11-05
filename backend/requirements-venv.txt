@@ -7,6 +7,12 @@
 #   .venv\Scripts\activate
 #   uv pip install -r requirements-venv.txt --index-strategy unsafe-best-match
 #   uv pip install --no-deps mmpose==1.3.2
+#   uv pip install --no-deps tensorrt-cu12==11.4.0.106 tensorrt-cu12-libs==11.4.0.106 tensorrt-cu12-bindings==11.4.0.106 onnx==1.16.2
+#   python tools\trt_build.py      (once per PC, about a minute: the TensorRT engine for this graphics card)
+#
+# TensorRT (POSE_TRT=1 in .env) runs the pose model's backbone about 2x faster with the same keypoints
+# (within 0.1 px). --no-deps keeps it from changing numpy/protobuf; onnx 1.16.2 because newer onnx needs
+# protobuf 5+ and MediaPipe needs protobuf 4. Without the engine the backend uses PyTorch as before.
 #
 # mmpose goes in with --no-deps because it asks for chumpy, which fails to build and is
 # never used. mmcv is mmcv-lite (no compiled ops); backend/core/mmcv_ext_shim.py supplies the

@@ -50,6 +50,8 @@ POSE_CHANNELS_LAST = os.environ.get("POSE_CHANNELS_LAST", "0") == "1"  # no meas
 POSE_FLIP_MODE = os.environ.get("POSE_FLIP_TEST", "1").strip().lower()
 POSE_FLIP_TEST = POSE_FLIP_MODE in ("1", "auto")
 POSE_FLIP_AUTO_THR = float(os.environ.get("POSE_FLIP_AUTO_THR", "0.6"))
+# POSE_TRT=1: the backbone run by TensorRT (pose_trt.py; test environment .venv-trt only, off by default)
+POSE_TRT = os.environ.get("POSE_TRT", "0") == "1"
 # RTMDet keeps every box above 0.001 (thousands, 80 classes) and runs NMS on all of them: ~75 ms per
 # image. We only use the best person above 0.3 (_person_box), and greedy NMS never lets a box below
 # 0.3 suppress one above it, so dropping those first returns the same box much faster. 0 = default.
@@ -89,6 +91,12 @@ def _load_models_now():
             print("pose: WARNING running on CPU -- PyTorch in this environment cannot see CUDA")
         _pose_model = init_model(_POSE_CONFIG, _POSE_CKPT, device=_DEVICE)
         _pose_model.test_cfg["flip_test"] = POSE_FLIP_TEST
+        if POSE_TRT and _DEVICE.startswith("cuda"):
+            try:
+                from pose import pose_trt
+                print(f"pose: backbone run by TensorRT ({pose_trt.install(_pose_model)})")
+            except Exception as ex:             # never stop over this: PyTorch as before
+                print(f"pose: TensorRT not used ({ex}); running the backbone in PyTorch")
         _detector = DetInferencer(model="rtmdet_tiny_8xb32-300e_coco",
                                   device=_DEVICE, show_progress=False)
         tune_detector(DET_SCORE_THR)

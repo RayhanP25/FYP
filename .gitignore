@@ -50,6 +50,9 @@ wheels/
 .installed.cfg
 *.egg
 .venv/
+.venv-trt/
+backend/models/*.engine
+backend/models/*.onnx
 venv/
 
 # Model weights (too large for git; copy backend/models/*.pth in manually)
