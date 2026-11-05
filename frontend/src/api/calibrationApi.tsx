@@ -91,7 +91,12 @@ export interface BoardSettings {
     expected_baseline_mm: number;
     /** A session is open: its photos use the current board, so it can't be changed. */
     locked?: boolean;
+    /** The values the page offers as "Recommended". */
+    recommended?: Omit<BoardSettings, 'locked' | 'recommended'>;
 }
+
+/** The project's printed board and the client rig's camera distance, used if the backend does not send its own. */
+export const RECOMMENDED_BOARD = { cols: 9, rows: 6, square_mm: 80, expected_baseline_mm: 4000 };
 
 export const getBoardSettings = async (): Promise<BoardSettings> => (await api.get('/api/calibration/board')).data;
 

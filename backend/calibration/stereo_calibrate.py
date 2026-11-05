@@ -121,6 +121,11 @@ def load_board_settings():
         print(f"calibration: ignoring {SETTINGS_PATH} ({ex}); using the .env board settings")
 
 
+# What the Calibration page offers as "Recommended": the project's printed board (9 x 6 inner corners, 80 mm squares)
+# and the client rig's tape-measured camera distance (4.00 m), unless the .env sets other values.
+RECOMMENDED = dict(cols=CHECKERBOARD[0], rows=CHECKERBOARD[1], square_mm=SQUARE_MM,
+                   expected_baseline_mm=EXPECTED_BASELINE_MM or 4000.0)
+
 load_board_settings()
 
 

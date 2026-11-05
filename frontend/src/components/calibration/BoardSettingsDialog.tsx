@@ -3,7 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-toastify';
 import Button from '@/components/ui/button';
-import { errorDetail, getBoardSettings, saveBoardSettings, type BoardSettings } from '@/api/calibrationApi';
+import { errorDetail, getBoardSettings, RECOMMENDED_BOARD, saveBoardSettings, type BoardSettings } from '@/api/calibrationApi';
 
 interface BoardSettingsDialogProps {
     open: boolean;
@@ -12,7 +12,7 @@ interface BoardSettingsDialogProps {
 
 type Draft = { cols: string; rows: string; square_mm: string; expected_baseline_mm: string };
 
-const toDraft = (b: BoardSettings): Draft => ({
+const toDraft = (b: Omit<BoardSettings, 'locked' | 'recommended'>): Draft => ({
     cols: String(b.cols),
     rows: String(b.rows),
     square_mm: String(b.square_mm),
@@ -22,12 +22,15 @@ const toDraft = (b: BoardSettings): Draft => ({
 /** The printed checkerboard (inner corners, square size) and the tape-measured distance between the cameras. */
 const BoardSettingsDialog = ({ open, onOpenChange }: BoardSettingsDialogProps) => {
     const queryClient = useQueryClient();
-    const { data: board } = useQuery({ queryKey: ['calibration-board'], queryFn: getBoardSettings, enabled: open });
+    const { data: board, isError } = useQuery({ queryKey: ['calibration-board'], queryFn: getBoardSettings, enabled: open, retry: 1 });
+    const rec = board?.recommended ?? RECOMMENDED_BOARD;
     const [draft, setDraft] = useState<Draft | null>(null);
     useEffect(() => {
+        // the saved settings; if they can't be loaded, start from the recommended ones
         if (open && board) setDraft(toDraft(board));
+        else if (open && isError) setDraft(toDraft(RECOMMENDED_BOARD));
         if (!open) setDraft(null);
-    }, [open, board]);
+    }, [open, board, isError]);
 
     const save = useMutation({
         mutationFn: () => saveBoardSettings({
@@ -45,7 +48,8 @@ const BoardSettingsDialog = ({ open, onOpenChange }: BoardSettingsDialogProps) =
     });
 
     const locked = !!board?.locked;
-    const changed = !!board && !!draft && JSON.stringify(toDraft(board)) !== JSON.stringify(draft);
+    const changed = !!draft && (!board || JSON.stringify(toDraft(board)) !== JSON.stringify(draft));
+    const isRecommended = !!draft && JSON.stringify(toDraft(rec)) === JSON.stringify(draft);
     const cols = Number(draft?.cols), rows = Number(draft?.rows);
     const squares = draft && cols > 0 && rows > 0 ? `${cols + 1} x ${rows + 1} squares` : '';
 
@@ -65,7 +69,10 @@ const BoardSettingsDialog = ({ open, onOpenChange }: BoardSettingsDialogProps) =
                 />
                 {unit && <span className="text-sm text-text-muted">{unit}</span>}
             </span>
-            <span className="text-xs text-text-muted">{help}</span>
+            <span className="text-xs text-text-muted">
+                {help}{' '}
+                <span className="text-text-secondary">Recommended: {rec[key] || 0}{unit ? ` ${unit}` : ''}.</span>
+            </span>
         </label>
     );
 
@@ -82,6 +89,9 @@ const BoardSettingsDialog = ({ open, onOpenChange }: BoardSettingsDialogProps) =
                     </div>
 
                     <div className="min-h-0 overflow-y-auto p-5 flex flex-col gap-4">
+                        {isError && (
+                            <p className="text-xs text-amber-500">Could not load the saved settings, so the recommended ones are shown. If this keeps happening, restart the backend.</p>
+                        )}
                         {locked && (
                             <p className="text-xs text-amber-500">A calibration session is open. End it to change the board (its photos were taken with this one).</p>
                         )}
@@ -94,7 +104,15 @@ const BoardSettingsDialog = ({ open, onOpenChange }: BoardSettingsDialogProps) =
                         {field('expected_baseline_mm', 'Expected distance between the cameras', 'Optional: tape-measured from lens to lens. The calibration report checks against it. 0 = no check.', 'mm', '1')}
                     </div>
 
-                    <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
+                    <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+                        <button
+                            type="button"
+                            disabled={locked || !draft || isRecommended}
+                            onClick={() => setDraft(toDraft(rec))}
+                            className="mr-auto h-9 px-3 text-sm rounded-lg text-text-secondary hover:text-text disabled:opacity-40 disabled:hover:text-text-secondary"
+                        >
+                            {isRecommended ? 'Using recommended' : 'Use recommended'}
+                        </button>
                         <Dialog.Close asChild>
                             <button className="h-9 px-3 text-sm rounded-lg border border-border text-text-secondary hover:text-text">Close</button>
                         </Dialog.Close>

@@ -270,7 +270,8 @@ def _write_board(folder):
 @router.get("/board")
 def get_board(current_user: dict = Depends(require_admin)):
     """The checkerboard and the expected camera distance; locked while a session is open (its photos use them)."""
-    return dict(**sc.board_settings(), locked=state.session is not None, limits=sc.LIMITS)
+    return dict(**sc.board_settings(), locked=state.session is not None, limits=sc.LIMITS,
+                recommended=sc.RECOMMENDED)
 
 
 @router.put("/board")
@@ -283,7 +284,7 @@ def put_board(body: BoardSettings, current_user: dict = Depends(require_admin)):
             d = sc.save_board_settings(body.dict())
         except ValueError as ex:
             raise HTTPException(status_code=400, detail=str(ex))
-    return dict(**d, locked=False, limits=sc.LIMITS)
+    return dict(**d, locked=False, limits=sc.LIMITS, recommended=sc.RECOMMENDED)
 
 
 @router.post("/session/start")
