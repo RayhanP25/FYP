@@ -130,7 +130,7 @@ const PAGES: Page[] = [
             { title: 'Removing an athlete', roles: STAFF, text: 'Click the cross next to an athlete’s name in the group. This removes them from that group only. They stay in their other groups.', gif: 'Clicking the cross next to an athlete’s name.' },
             { title: 'Members visible', roles: STAFF, text: 'Turn on Members visible to let athletes in the group see who else is in it. Turn it off to keep the list private from athletes.', gif: 'Turning Members visible on, then the athlete seeing the list.' },
             { title: 'Renaming, moving and deleting', roles: STAFF, text: 'The pencil renames a group. Admins can use the move icon to give the group to another coach. The bin icon deletes the group. Deleting does not delete the videos, and the athletes stay in SportPose.', gif: 'Renaming a group, then clicking the bin icon and confirming.' },
-            { title: 'My group (athletes)', roles: ATHLETE, text: 'Athletes open Groups to see each of their groups, the coach, and the other members if the coach has turned on Members visible.', gif: 'An athlete opening Groups and reading the coach name.' },
+            { title: 'My group (athletes)', roles: ATHLETE, clip: 'groups/my-group-athletes.png', text: 'Athletes open Groups to see each of their groups, the coach, and the other members if the coach has turned on Members visible.', gif: 'The My group page an athlete sees, with the coach and the other members.' },
         ],
     },
     {
@@ -150,9 +150,13 @@ const PAGES: Page[] = [
 ];
 
 // Clip for each item: public/manual/<page id>/<title in lower case, words joined by ->.mp4,
-// or the path in `clip` when an item reuses another item's clip. No file yet -> the placeholder.
-const clipSrc = (pageId: string, b: Block) =>
-    `${import.meta.env.BASE_URL}manual/${b.clip ?? `${pageId}/${b.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`}.mp4`;
+// or the path in `clip` when an item reuses another item's clip. A `clip` ending in .png / .jpg / .webp
+// is shown as a still picture instead of a video. No file yet -> the placeholder.
+const isImage = (src: string) => /\.(png|jpe?g|webp)$/i.test(src);
+const clipSrc = (pageId: string, b: Block) => {
+    const path = b.clip ?? `${pageId}/${b.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+    return `${import.meta.env.BASE_URL}manual/${isImage(path) ? path : `${path}.mp4`}`;
+};
 
 const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
@@ -176,6 +180,17 @@ const ManualClip = ({ src, show, active, onOpen, onMissing }: { src: string; sho
         else v.pause();
     }, [visible, active]);
     if (missing) return <GifPlaceholder show={show} />;
+    const enlarge = (
+        <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md bg-black/60 px-2 py-1 text-xs text-white opacity-80 transition-opacity group-hover:opacity-100">
+            <Maximize2 size={12} /> Enlarge
+        </span>
+    );
+    if (isImage(src)) return (
+        <button type="button" onClick={onOpen} title="Click to enlarge" className="group relative block w-full cursor-zoom-in overflow-hidden rounded-lg border border-border bg-background-main text-left">
+            <img src={src} alt={show} loading="lazy" onError={() => { setMissing(true); onMissing(); }} className="block h-auto w-full" />
+            {enlarge}
+        </button>
+    );
     return (
         <button
             type="button"
@@ -243,7 +258,9 @@ const ClipViewer = ({ items, index, onIndex, onClose }: { items: Item[]; index: 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 sm:p-8" onClick={onClose} role="dialog" aria-modal="true" aria-label={it.b.title}>
             <div className="relative flex max-h-full w-full max-w-7xl flex-col gap-4 overflow-auto rounded-xl border border-border bg-background p-4 sm:p-6 xl:flex-row" onClick={(e) => e.stopPropagation()}>
-                <video key={it.src} src={it.src} autoPlay loop muted playsInline controls aria-label={it.b.gif} className="w-full min-w-0 self-start rounded-lg bg-black object-contain xl:max-h-[80vh] xl:flex-[3]" />
+                {isImage(it.src)
+                    ? <img key={it.src} src={it.src} alt={it.b.gif} className="w-full min-w-0 self-start rounded-lg bg-black object-contain xl:max-h-[80vh] xl:flex-[3]" />
+                    : <video key={it.src} src={it.src} autoPlay loop muted playsInline controls aria-label={it.b.gif} className="w-full min-w-0 self-start rounded-lg bg-black object-contain xl:max-h-[80vh] xl:flex-[3]" />}
                 <div className="flex min-w-0 flex-col gap-4 xl:flex-1 xl:pt-8">
                     <div>
                         <p className="mb-1 text-xs font-medium text-primary">{it.section} · {index + 1} of {items.length}</p>
