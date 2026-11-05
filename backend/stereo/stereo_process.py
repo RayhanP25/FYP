@@ -171,7 +171,10 @@ def _split_to_temp(input_path, target_w):
     return lp, rp, fps
 
 
-PARALLEL_VIEWS = os.environ.get("POSE_PARALLEL_VIEWS", "1") == "1"
+# Both cameras through the AI at the same time (one prepares frames while the other uses the GPU). With
+# TensorRT (POSE_TRT=1) the GPU is busy almost all the time, so one after the other is faster (5 Nov: 51 fps per
+# camera alone, 42 fps for both at once) and is the default then. POSE_PARALLEL_VIEWS=0/1 overrides it.
+PARALLEL_VIEWS = os.environ.get("POSE_PARALLEL_VIEWS", "0" if os.environ.get("POSE_TRT", "0") == "1" else "1") == "1"
 
 
 def _stereo_heal_kwargs():
