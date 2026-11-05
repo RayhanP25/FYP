@@ -1,9 +1,12 @@
 r"""
-trt_build.py -- builds the TensorRT engine for the ViTPose backbone on THIS graphics card (5 Nov test).
+trt_build.py -- builds the TensorRT engine for the ViTPose backbone on THIS graphics card.
 
-In the separate test environment only (it needs the tensorrt and onnx packages), with the backend stopped:
-    cd D:\DK\latest\FYP\backend
-    .venv-trt\Scripts\python.exe tools\trt_build.py
+Run it once per PC, in the backend's .venv after installing the TensorRT packages (see requirements-venv.txt),
+with the backend stopped:
+    cd backend
+    .venv\Scripts\activate
+    python tools\trt_build.py
+Then set POSE_TRT=1 in .env and start the backend.
 
 1. exports the backbone of models/vitpose_base_512_v2.py + best_coco_AP_epoch_24.pth to ONNX
 2. builds a TensorRT engine from it (half precision, batches of 1 to 32 crops of 512x384), a few minutes
