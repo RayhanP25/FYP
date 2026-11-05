@@ -30,18 +30,34 @@ STAGES = ["Getting the video", "Preparing the camera views", "Finding body point
 
 
 def _local_copy(bucket, object_name):
-    """(path, is_temp): the local copy of a stored video, downloaded from cloud storage if this PC has none."""
+    """(path, is_temp): the local copy of a stored video, downloaded from cloud storage if this PC has none.
+    A downloaded video is kept in the local copies (media_cache), so analysing it again skips the download."""
     cached = media_cache.get(object_name)
     if cached:
         return cached, False
     response = minio_client.get_object(bucket, object_name)
     total = int(response.headers.get("Content-Length") or 0)
     progress.stage("Getting the video", total=total)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
-        for chunk in response.stream(amt=1024 * 1024):
-            tmp_file.write(chunk)
-            progress.add(len(chunk))
-    return tmp_file.name, True
+    os.makedirs(media_cache.DIR, exist_ok=True)
+    dst = media_cache.path_for(object_name)
+    part = dst + ".part"
+    try:
+        with open(part, "wb") as f:
+            for chunk in response.stream(amt=1024 * 1024):
+                f.write(chunk)
+                progress.add(len(chunk))
+        os.replace(part, dst)
+    except Exception:
+        try:
+            os.unlink(part)
+        except OSError:
+            pass
+        raise
+    finally:
+        response.close()
+        response.release_conn()
+    media_cache.prune(keep=dst)
+    return dst, False
 
 
 def _upload_results(files):

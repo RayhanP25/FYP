@@ -8,6 +8,14 @@ from routes import users, ping, upload, pose, camera, calibration, dashboard, ed
  cd ../..
  uvicorn app:app --host 0.0.0.0 --port 8000 --reload'''
 
+# Temporary files (analysis outputs, uploads being converted, ...) go to backend/_tmp next to the code,
+# not to the Windows temp folder on C:. Files left over from a previous run are removed at start-up.
+import os as _os, shutil as _shutil, tempfile as _tempfile
+_TMP = _os.getenv("SPORTPOSE_TMP") or _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "_tmp")
+_shutil.rmtree(_TMP, ignore_errors=True)
+_os.makedirs(_TMP, exist_ok=True)
+_tempfile.tempdir = _TMP
+
 app = FastAPI()
 
 db = client[database_name]

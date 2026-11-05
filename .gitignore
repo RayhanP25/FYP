@@ -72,5 +72,7 @@ backend/camera_settings.json
 
 # Local copies of recorded / uploaded videos (backend/video/media_cache.py)
 backend/_media_cache/
+# Temporary files of the backend (app.py)
+backend/_tmp/
 backend/models/*.task
 backend/calibration_settings.json

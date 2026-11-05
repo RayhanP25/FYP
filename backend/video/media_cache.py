@@ -3,7 +3,8 @@ media_cache.py -- a copy on this PC of the videos it recorded or received.
 
 The analysis then reads the local copy instead of downloading the same large file from cloud storage
 again, and a recording can be sent to storage in the background while it is already being analysed.
-Oldest files are removed when the cache grows past MEDIA_CACHE_GB (default 20).
+Videos downloaded for an analysis are kept here too. Oldest files are removed when the cache grows past
+MEDIA_CACHE_GB (default 10). It lives in backend/_media_cache, next to the code (not on C:).
 """
 import os
 import shutil
@@ -11,7 +12,7 @@ import shutil
 from core.paths import BACKEND_DIR
 
 DIR = os.getenv("MEDIA_CACHE_DIR") or os.path.join(BACKEND_DIR, "_media_cache")
-MAX_BYTES = float(os.getenv("MEDIA_CACHE_GB", "20")) * 1024 ** 3
+MAX_BYTES = float(os.getenv("MEDIA_CACHE_GB", "10")) * 1024 ** 3
 
 
 def path_for(object_name):
@@ -43,7 +44,7 @@ def put(object_name, src, move=False):
         tmp = dst + ".part"
         (shutil.move if move else shutil.copyfile)(src, tmp)
         os.replace(tmp, dst)
-        _prune(keep=dst)
+        prune(keep=dst)
         return dst
     except Exception as ex:
         print(f"media cache: could not keep {object_name} ({ex!r})")
@@ -59,7 +60,8 @@ def remove(object_name):
             pass
 
 
-def _prune(keep=None):
+def prune(keep=None):
+    """Remove the least recently used files until the cache is within MAX_BYTES (never `keep`)."""
     try:
         files = [os.path.join(DIR, f) for f in os.listdir(DIR) if not f.endswith(".part")]
         files.sort(key=lambda p: os.path.getmtime(p))
