@@ -58,23 +58,33 @@ class TrtBackbone(torch.nn.Module):
         self._local = threading.local()
 
     def _context(self):
+        """This thread's execution context and its own CUDA stream. The two cameras run on two threads; on the
+        default stream TensorRT waits for the whole GPU after each call, so one camera's batch waited for the
+        other's. With a stream each, they can overlap."""
         ctx = getattr(self._local, "ctx", None)
         if ctx is None:
             ctx = self._local.ctx = self.engine.create_execution_context()
-        return ctx
+            self._local.stream = torch.cuda.Stream()
+        return ctx, self._local.stream
 
     @torch.no_grad()
     def forward(self, x):
         if x.shape[0] > self.max_batch:                  # larger than the engine was built for: in parts
             return (torch.cat([self.forward(p)[0] for p in torch.split(x, self.max_batch)], 0),)
         x = x.to(self.in_dtype).contiguous()
-        ctx = self._context()
-        ctx.set_input_shape(self.inp, tuple(x.shape))
-        out = torch.empty(tuple(ctx.get_tensor_shape(self.out)), dtype=self.out_dtype, device=x.device)
-        ctx.set_tensor_address(self.inp, x.data_ptr())
-        ctx.set_tensor_address(self.out, out.data_ptr())
-        if not ctx.execute_async_v3(torch.cuda.current_stream().cuda_stream):
-            raise RuntimeError("TensorRT could not run the backbone")
+        ctx, stream = self._context()
+        caller = torch.cuda.current_stream()
+        stream.wait_stream(caller)                       # the input is ready before TensorRT reads it
+        with torch.cuda.stream(stream):
+            ctx.set_input_shape(self.inp, tuple(x.shape))
+            out = torch.empty(tuple(ctx.get_tensor_shape(self.out)), dtype=self.out_dtype, device=x.device)
+            ctx.set_tensor_address(self.inp, x.data_ptr())
+            ctx.set_tensor_address(self.out, out.data_ptr())
+            if not ctx.execute_async_v3(stream.cuda_stream):
+                raise RuntimeError("TensorRT could not run the backbone")
+        caller.wait_stream(stream)                       # the rest of the model waits for the result
+        x.record_stream(stream)                          # keep the input's memory until TensorRT is done
+        out.record_stream(caller)
         return (out.float(),)
 
 
