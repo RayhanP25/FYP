@@ -39,7 +39,7 @@ const AdminRoute = ({ element }: { element: JSX.Element }) => {
 const PublicRoute = ({ element }: { element: JSX.Element }) => {
   const { isAuthenticated, loading } = useAuth();
   if (loading) return <AuthLoading />;
-  return isAuthenticated() ? <Navigate to="/video-test" /> : element;
+  return isAuthenticated() ? <Navigate to="/home" replace /> : element;
 };
 
 // The old analysis page's links (/kinematic-analysis/...) now open the analysis studio.
